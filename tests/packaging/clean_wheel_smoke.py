@@ -10,6 +10,12 @@ import pricing_pipeline
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
 from pricing_pipeline.resources import migration_root, offline_sqlite_root
 
+
+def _is_outside_checkout(entry: str, checkout: Path) -> bool:
+    resolved = Path(entry).resolve()
+    return resolved != checkout and checkout not in resolved.parents
+
+
 checkout = Path(os.environ["FORBIDDEN_CHECKOUT"]).resolve()
 package_file = Path(pricing_pipeline.__file__).resolve()
 assert checkout not in package_file.parents
@@ -31,7 +37,7 @@ if direct_url is not None:
     direct_url_payload = json.loads(direct_url)
     assert direct_url_payload.get("dir_info", {}).get("editable") is not True
     assert str(checkout) not in direct_url
-assert all(checkout not in Path(entry).resolve().parents for entry in sys.path if entry)
+assert all(_is_outside_checkout(entry, checkout) for entry in sys.path if entry)
 
 root = Path(os.environ["SMOKE_DATABASE_ROOT"])
 engine, _paths = open_offline_sqlite(root)
