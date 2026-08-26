@@ -181,6 +181,44 @@ def test_installed_scaffold_reuses_the_exact_six_notebook_workflow(tmp_path: Pat
     assert capsys.readouterr().out.splitlines() == [str(path.resolve()) for path in expected]
 
 
+def test_installed_scaffold_reports_a_managed_parent_file_as_a_user_precondition(
+    tmp_path: Path, capsys
+):
+    root = tmp_path / "model-repo"
+    _project(root)
+    assert cli.main(["init", "--root", str(root)]) == 0
+    capsys.readouterr()
+    managed_parent = root / "pricing_models"
+    sentinel = b"do not replace this file\n"
+    managed_parent.write_bytes(sentinel)
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "CLAIM_FREQUENCY",
+                "--target-name",
+                "claim_count",
+                "--root",
+                str(root),
+            ]
+        )
+        == 2
+    )
+
+    error = capsys.readouterr().err
+    assert "pricing_models" in error
+    assert "directory" in error
+    assert "failed unexpectedly" not in error
+    assert managed_parent.read_bytes() == sentinel
+    assert {path.name for path in root.iterdir()} == {
+        "pricing_models",
+        "pricing_scaffold.toml",
+        "pyproject.toml",
+    }
+
+
 def test_init_does_not_import_optional_runtime_stacks(tmp_path: Path, monkeypatch):
     root = tmp_path / "model-repo"
     _project(root)

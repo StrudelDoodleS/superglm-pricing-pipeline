@@ -147,6 +147,12 @@ def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
     options = _scaffold_options(namespace, root, config)
     try:
         result = legacy.scaffold_pricing_model(options)
+    except (FileExistsError, NotADirectoryError) as exc:
+        managed_root = root / "pricing_models"
+        raise UserCommandError(
+            f"cannot create scaffold output under {managed_root}: "
+            "each managed path must be a directory"
+        ) from exc
     except (TypeError, ValueError) as exc:
         raise UserCommandError(str(exc)) from exc
     return tuple(str(path.resolve()) for path in result.created_files)
