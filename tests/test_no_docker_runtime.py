@@ -59,10 +59,22 @@ def test_settings_can_skip_database_creation_for_hosted_targets():
 def test_apply_schema_script_starts_without_pythonpath(tmp_path):
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
-    env["PRICING_SCHEMA_DIR"] = str(tmp_path)
+    script_path = Path("scripts/apply_schema.py").resolve()
+    code = (
+        "from contextlib import nullcontext\n"
+        "from pathlib import Path\n"
+        "from unittest.mock import patch\n"
+        "import runpy\n"
+        f"schema_dir = Path({str(tmp_path)!r})\n"
+        "with patch(\n"
+        "    'pricing_pipeline.resources.materialized_migration_dir',\n"
+        "    return_value=nullcontext(schema_dir),\n"
+        "):\n"
+        f"    runpy.run_path({str(script_path)!r}, run_name='__main__')\n"
+    )
 
     result = subprocess.run(
-        [sys.executable, "scripts/apply_schema.py"],
+        [sys.executable, "-c", code],
         check=False,
         capture_output=True,
         env=env,
