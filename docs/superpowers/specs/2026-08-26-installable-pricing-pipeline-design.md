@@ -204,7 +204,7 @@ pricing-pipeline scaffold ...
 pricing-pipeline scaffold --upgrade --dry-run ...
 pricing-pipeline environment verify --locked ...
 pricing-pipeline notebook kernel-install ...
-pricing-pipeline notebook execute --role data_ingestion ...
+pricing-pipeline notebook execute --role data_ingestion|model_training ...
 pricing-pipeline schema status ...
 pricing-pipeline schema apply ...
 pricing-pipeline schema reset ...
@@ -228,14 +228,51 @@ lock prefix. The scaffold README uses `uv sync --locked` followed by this comman
 and tells analysts to select that kernel. Kernel selection is still independently
 rechecked at remote-write time; a friendly display name is not evidence.
 
-`notebook execute --role data_ingestion` is the publication-grade ingestion
-runner. It snapshots the execution-clean committed notebook/config/source bytes,
-starts a fresh verified project-kernel subprocess, executes the saved notebook in
-cell order with typed parameters, captures the exact source/transcript identity,
-and verifies the source snapshot is unchanged before atomically installing the
-frame envelope. Notebook 01 exposes a helper that launches this runner and
-streams status, but the child never consumes mutable objects from the caller's
-interactive kernel.
+`notebook execute` is the publication-grade governed runner for ingestion and
+training. It materializes a read-only `GovernedProjectSnapshot` from the exact
+CI-attested Git blobs—not mutable working-tree files—containing only the selected
+role notebook, config, SQL, `model_spec.py`, declared support files, and packaged
+launcher metadata. It starts a fresh verified child kernel with isolated Python,
+empty IPython/Jupyter profile directories, user site and `PYTHONPATH` disabled,
+fixed `sys.path`, an allowlisted environment, and cwd/root set to that snapshot.
+A Python audit hook and post-run origin ledger reject code/import/file execution
+from the original project, ignored/untracked files, user startup hooks, undeclared
+helpers, or any path outside the snapshot and verified installed-distribution
+payloads (apart from explicit artifact output and runtime-provider channels).
+
+The runner executes saved cells in order with canonical typed parameters,
+captures exact source/transcript/runtime identities, and verifies snapshot and
+installed payloads again before atomically installing the frame or publishing
+the build. Notebooks 01 and 03 expose orchestration-only launcher cells that
+stream status; those cells have a stable `launcher_only` role, are omitted by the
+child, and contain a child-mode recursion guard. A launcher is orchestration
+only: it may parameterize and start the child but cannot perform ingestion,
+fitting, publication, or invoke another launcher when child mode is set.
+
+The child never consumes frame, model, grouping, split, or capability objects
+from the caller's interactive kernel. For a remote training run it reconstructs
+all of them from the verified frame envelope, canonical config/model factory,
+grouping TOML, and validation spec. The lowest remote publication boundary
+accepts only a runner-created `GovernedTrainingRequest` whose digest binds those
+freshly verified artifacts and identities; the existing convenient Python APIs
+that accept a mutable `frame` or `superglm_model` remain local/compatibility APIs
+and cannot accept or obtain a remote capability. A one-use child-bound
+`RemoteWriteCapability` is minted after the normal prompt and passed through a
+protected inherited OS channel rather than serialized.
+
+The isolation contract is tested and versioned: the child uses the verified
+project interpreter with Python's `-I` isolation (including the equivalent
+isolated ipykernel launch), has no user site, `PYTHONPATH`, IPython or Jupyter
+startup/config path, and exposes on `sys.path` only the read-only snapshot plus
+authenticated installed-distribution roots. The snapshot is
+constructed from attested Git blob objects, not by copying a clean-looking
+worktree, and contains every permitted local import as an explicitly declared,
+hashed support file. Attempts to import or execute from the original checkout,
+an ignored/untracked path, an undeclared tracked helper, cwd, or a user startup
+location fail closed. File/network access needed for the query, verified input
+artifact, artifact output, and registered runtime provider uses distinct
+allowlisted channels and is recorded in the execution ledger; those channels do
+not add arbitrary code roots.
 
 For one compatibility release, existing public `scripts/*.py` commands become
 thin wrappers around packaged CLI functions. Demos, portable-source generation,
@@ -513,18 +550,46 @@ Its discriminated dependency proof must equal the installed
 
 Define a separate `RuntimeEnvironmentIdentity` covering the committed lock SHA,
 selected platform/marker resolution, Python implementation/version/ABI,
-installed distribution names/versions, PEP 610 source URLs/commits, wheel/archive
-identities where applicable, and canonical hashes of installed files from
-dist-info `RECORD`. Verification first makes `uv` validate every selected
-archive/source hash from the lock, then independently hashes the installed
-payload, so a matching version string alone is insufficient. The supported
-launch path performs `uv sync --locked` and
-starts/registers the project `.venv` kernel; remote preflight independently
-recomputes the environment identity and rejects a stale/different Jupyter
-kernel, missing locked package, version/source mismatch, shadowing extra package,
-or altered installed file. The complete runtime identity is persisted with run
-evidence; recording a lock SHA without proving the active interpreter is
-insufficient.
+installed distribution names/versions, PEP 610 source URLs/commits, exact
+selected build-output identities, and canonical hashes of installed files. It is
+execution evidence cross-linked to, but not a field of, the static
+`ModelProjectBuildIdentity`.
+
+For every governed dependency other than the separately attested framework, the
+normal trusted input is the exact platform wheel named and hashed by `uv.lock`.
+Verification obtains that wheel from the verified cache or configured company
+index, checks the archive SHA-256 before opening it, validates the wheel members
+against the `RECORD` extracted from that archive, and constructs the canonical
+expected installed-payload manifest from those authenticated archive bytes. It
+then hashes the active environment's installed files and compares them with that
+expected manifest. The installed environment's own `dist-info/RECORD` is never
+the trust authority and altering a package file plus its installed `RECORD`
+cannot preserve identity. Installer-generated bytecode, cache files, timestamps,
+and explicitly versioned installer metadata transformations are excluded; code,
+resources, native libraries, entry points, and prediction/schema authority are
+included.
+
+An sdist or VCS dependency is prohibited in governed remote execution unless
+company CI publishes a signed `DependencyBuildOutputAttestation` binding the
+normalized source identity and full revision, source/archive hash, PEP 517
+backend and all build inputs, resulting wheel archive SHA-256, supported
+Python/ABI/platform, and expected installed-payload manifest. Verification then
+treats that attested wheel exactly like a lock-hashed wheel. The framework's
+existing `FrameworkReleaseAttestation` is its specialized equivalent and remains
+the authority for the initial full-commit Git framework dependency. An
+unattested source/editable dependency, a locally rebuilt wheel, or a different
+build from the same source revision yields `LOCAL_UNBOUND`; it may be used for
+exploration but not remote execution.
+
+The supported launch path performs `uv sync --locked` and starts/registers the
+project `.venv` kernel. `environment verify --locked` independently resolves the
+selected lock artifacts and attestations, verifies their authenticated expected
+payloads, and hashes the active interpreter environment. Remote preflight repeats
+that proof and rejects a stale/different Jupyter kernel, missing locked package,
+version/source/build-output mismatch, shadowing extra package, or altered
+installed file. The complete runtime identity is persisted with run evidence;
+recording a lock SHA or trusting installed metadata without proving the active
+payload is insufficient.
 
 Source-dirty, unattested, non-Git, locally forked, or runtime-mismatched projects
 may ingest, explore, and fit into `.local/`, with an explicit `LOCAL_UNBOUND`
@@ -709,7 +774,12 @@ It never publishes or deploys a model.
 The first governed model-publication step. It fits the untouched RAW model and,
 when approved groupings exist, the ROUTINE_EDIT model on the same manifest and
 validation evidence. Missing or empty grouping configuration skips
-ROUTINE_EDIT explicitly.
+ROUTINE_EDIT explicitly. Interactive cells may build and inspect local models,
+but their caller-supplied frame and fitted-model objects are `LOCAL_UNBOUND` and
+cannot reach a remote mutation API. The final launcher invokes
+`notebook execute --role model_training`; only that fresh runner may reconstruct
+the verified frame, model, groupings, and validation realization and receive the
+child-bound `RemoteWriteCapability` used to publish.
 
 ### 04 — Model editor
 
@@ -944,8 +1014,13 @@ original `ModelProjectBuildIdentity`, which remains the authority for fitted
 semantics, and a versioned `ActionProjectIdentity`. The action identity uses the
 same repository ID, signed protected-revision attestation, commit, committed
 pyproject/lock, governed path/blob manifest, execution-clean normalization,
-framework dependency proof, and `RuntimeEnvironmentIdentity` as
+and framework dependency proof fields as the static
 `ModelProjectBuildIdentity`, plus action role and parent model/run/package IDs.
+It does not embed the mutable execution environment. The action evidence
+separately binds the complete `RuntimeEnvironmentIdentity` used to execute it,
+just as a model run separately cross-links its project-build and runtime
+identities. This keeps static revision provenance distinct from independently
+verified installed bytes while requiring both for every governed action.
 `HostTrustPolicy` requires the same registered model repository as the parent
 unless its administrator-owned registry explicitly names an authorized delegate
 for that model/action/slot. The action identity is audit lineage and does not
@@ -1458,6 +1533,20 @@ It must not silently apply migrations from a notebook.
   review templates are never accepted as governed config.
 - Prove notebook 02 performs no SQL write and notebook 03 is the first model
   publication step.
+- Execute both governed runner roles from attested Git blobs and prove the
+  launcher-only cell is omitted, child mode cannot recurse, and mutating the
+  caller's live frame/model/grouping objects cannot alter the resulting frame or
+  publication.
+- Prove direct interactive/caller-supplied frame and fitted-model APIs remain
+  usable for `LOCAL_UNBOUND` work but cannot construct a
+  `GovernedTrainingRequest`, receive a remote capability, or reach the lowest
+  remote mutation boundary.
+- Seed user-site and IPython/Jupyter startup hooks, `PYTHONPATH`, an ignored
+  local module, an undeclared tracked helper, a cwd-shadow package, and a
+  changed original checkout; prove isolated governed execution rejects or cannot
+  observe each one and that its import/file-origin ledger names only the
+  attested snapshot, authenticated distributions, and explicit data/output/
+  provider channels.
 - Prove a frame created by notebook 01 is rejected by notebooks 02/03 after any
   ingestion SQL, definition-config, support-file, or governed/custom notebook-01
   code change, while an unrelated commit with byte-identical definition remains
@@ -1504,6 +1593,16 @@ It must not silently apply migrations from a notebook.
   commits, forked repository URLs, missing/forged attestations, altered installed
   files, unverifiable wheels, editable installs, and active kernels that differ
   from the lock. Confirm these states still allow local exploration.
+- For ordinary dependencies, verify the selected wheel archive against its lock
+  hash, derive expected installed files from the wheel's own authenticated
+  `RECORD`, and reject a package-file mutation even when the attacker updates the
+  installed `RECORD` to match. Reject a different locally rebuilt wheel from the
+  same version/source.
+- Prohibit governed sdist/VCS dependencies without a valid signed
+  `DependencyBuildOutputAttestation`; with a test company attestation, prove the
+  exact source revision, fixed build inputs, output-wheel hash, ABI/platform, and
+  installed payload must all match. Exercise the framework's specialized
+  detached attestation path independently.
 - Prove output/execution-count-only notebook autosave remains execution-clean,
   while changed source, attachments, widgets, unknown metadata, or a change after
   capability issuance blocks the next write.
@@ -1579,3 +1678,9 @@ The design is complete when all of the following are true:
     packaged or signed-compatible migrations can authorize governed writes.
 12. Legacy artifacts remain inspectable without fabricated provenance and
     cannot silently become parents of new governed evidence.
+13. Governed ingestion and training execute only in the isolated frozen runner;
+    user startup state, path injection, undeclared local code, mutable live-kernel
+    objects, and launcher recursion cannot influence a remotely published result.
+14. Every governed installed dependency is verified against an authenticated
+    expected build payload independent of installed metadata, and all run/action
+    evidence cross-links separate static project and runtime identities.
