@@ -1,7 +1,7 @@
 # SQL schema and migration runbook
 
-The authoritative SQL Server schema is the ordered migration chain in
-[`db/migrations`](../../db/migrations). Apply every file in order through the
+The authoritative SQL Server schema is the ordered packaged migration chain in
+`pricing_pipeline.resources.migrations`. Apply every file in order through the
 latest version; do not run a single late migration against an unknown baseline.
 
 Configured schema names may differ at work. This guide uses the defaults:
@@ -390,7 +390,6 @@ workflow testing. SQL Server migrations remain authoritative for production;
 trigger/procedure behavior is covered by migration/static tests where SQLite
 cannot execute T-SQL.
 
-`docs/pricing_useful_tables_ddl.sql` and
-`docs/pricing_useful_tables_full_ddl.sql` are conceptual ERD extracts. They do
-not include the entire operational migration history and must not be used to
-upgrade a work database.
+The Mermaid sources and the on-demand schema-rendering commands above are the
+maintained ERD guidance. Their generated output belongs in ignored state
+directories; do not commit copied runnable SQL.

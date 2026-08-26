@@ -283,6 +283,16 @@ def test_mtpl_notebook_import_setup_runs_from_model_directory():
         assert "pricing_pipeline" not in result.stderr
 
 
+def test_mtpl_notebook_setup_discovers_project_metadata_without_mutating_sys_path():
+    for name in WORKFLOW_NAMES:
+        setup = next(cell for cell in _code_cells(name) if "PROJECT_ROOT" in cell)
+
+        assert '(candidate / "pyproject.toml").is_file()' in setup
+        assert '(candidate / "pricing_models").is_dir()' in setup
+        assert 'candidate / "pricing_pipeline"' not in setup
+        assert "sys.path.insert" not in setup
+
+
 def test_reference_notebooks_do_not_ask_analysts_for_generated_ids():
     generated_ids = {
         "model_id",

@@ -38,6 +38,8 @@ def test_root_readme_is_a_concise_entry_point():
         assert expected in readme
 
     assert len(readme.splitlines()) < 125
+    assert "pricing_pipeline.resources.migrations" in readme
+    assert "pricing_useful_tables" not in readme
 
 
 def test_notebook_guide_documents_boundaries_and_public_functions():
@@ -166,7 +168,8 @@ def test_sql_guide_documents_triggers_views_and_migration_decision():
         "scripts/reset_remote_pricing_schema.py",
         "--i-understand-this-drops-pricing-objects",
         "Do not edit an already-applied migration",
-        "conceptual ERD extracts",
+        "pricing_pipeline.resources.migrations",
+        "scripts/render_schema_diagrams.py",
     ):
         assert expected in guide
 

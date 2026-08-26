@@ -95,9 +95,8 @@ For an underwriter-facing comparison of already-scored models, use
 `docs/notebooks/underwriter_report.example.toml`. It produces one offline HTML
 file and does not write models or diagnostics to SQL.
 
-The migration chain in [`db/migrations`](db/migrations) is the authoritative SQL
-Server schema. The standalone `docs/pricing_useful_tables*.sql` files are
-conceptual extracts, not a replacement for migrations.
+The packaged `pricing_pipeline.resources.migrations` chain is the authoritative SQL Server
+schema; inspect it with `pricing_pipeline.resources.migration_root()` and do not copy runnable DDL.
 
 ## Work database setup
 

@@ -233,23 +233,14 @@ def _notebook_document(cells: list[dict[str, object]]) -> dict[str, object]:
 def _project_setup_source(*, imports: str) -> str:
     setup = dedent(
         """
-        import sys
         from pathlib import Path
 
-        search_root = Path.cwd().resolve()
         PROJECT_ROOT = next(
-            (
-                root
-                for root in (search_root, *search_root.parents)
-                if (root / "pricing_pipeline").is_dir()
-                and (root / "pricing_models").is_dir()
-            ),
-            None,
+            candidate
+            for candidate in (Path.cwd().resolve(), *Path.cwd().resolve().parents)
+            if (candidate / "pyproject.toml").is_file()
+            and (candidate / "pricing_models").is_dir()
         )
-        if PROJECT_ROOT is None:
-            raise RuntimeError("Open this notebook from inside the pricing repository.")
-        if str(PROJECT_ROOT) not in sys.path:
-            sys.path.insert(0, str(PROJECT_ROOT))
         """
     ).strip()
     paths = dedent(

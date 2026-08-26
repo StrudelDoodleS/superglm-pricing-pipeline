@@ -18,7 +18,8 @@
 
 # Basic Airflow cluster configuration for CeleryExecutor with Redis and PostgreSQL.
 #
-# WARNING: This configuration is for local development. Do not use it in a production deployment.
+# WARNING: This development-only profile mounts local source at /opt/airflow/src.
+# It is not a clean-wheel production proof and must not be used in production.
 ---
 x-airflow-common:
   &airflow-common
@@ -41,7 +42,7 @@ x-airflow-common:
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-airflow_jwt_secret}
     AIRFLOW__API_AUTH__JWT_ISSUER: ${AIRFLOW__API_AUTH__JWT_ISSUER:-airflow}
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    PYTHONPATH: /opt/airflow
+    PYTHONPATH: /opt/airflow/src
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     MSSQL_SERVER: ${MSSQL_SERVER:-mssql,1433}
@@ -53,16 +54,14 @@ x-airflow-common:
     MSSQL_TRUST_SERVER_CERT: ${MSSQL_TRUST_SERVER_CERT:-yes}
     MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
     RATING_EXPORT_ROOT: ${RATING_EXPORT_ROOT:-/opt/pricing/state/rating_exports}
-    PRICING_SCHEMA_DIR: ${PRICING_SCHEMA_DIR:-/opt/pricing/db/migrations}
     PRICING_SKIP_DATABASE_CREATE: ${PRICING_SKIP_DATABASE_CREATE:-false}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/pricing_pipeline:/opt/airflow/pricing_pipeline
+    - ${AIRFLOW_PROJ_DIR:-.}/src/pricing_pipeline:/opt/airflow/src/pricing_pipeline
     - ${AIRFLOW_PROJ_DIR:-.}/pricing_models:/opt/airflow/pricing_models
-    - ${AIRFLOW_PROJ_DIR:-.}/db:/opt/pricing/db
     - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/pricing/scripts
     - ${AIRFLOW_PROJ_DIR:-.}/state/rating_exports:/opt/pricing/state/rating_exports
     - ${AIRFLOW_PROJ_DIR:-.}/state/cv_splits:/opt/pricing/state/cv_splits
@@ -365,7 +364,7 @@ services:
       MSSQL_TRUST_SERVER_CERT: ${MSSQL_TRUST_SERVER_CERT:-yes}
       DIAGRAM_INCLUDE_STAGING: ${DIAGRAM_INCLUDE_STAGING:-}
       DIAGRAM_INCLUDE_ROW_KEYS: ${DIAGRAM_INCLUDE_ROW_KEYS:-}
-      PYTHONPATH: /opt/airflow
+      PYTHONPATH: /opt/airflow/src
     entrypoint: /bin/bash
     command:
       - -c
@@ -385,7 +384,7 @@ services:
       mssql:
         condition: service_healthy
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/pricing_pipeline:/opt/airflow/pricing_pipeline
+      - ${AIRFLOW_PROJ_DIR:-.}/src/pricing_pipeline:/opt/airflow/src/pricing_pipeline
 
   mlflow:
     image: ${AIRFLOW_IMAGE_NAME:-airflow-superglm:3.2.1-python3.14}
@@ -417,11 +416,11 @@ services:
       MSSQL_DRIVER: ${MSSQL_DRIVER:-ODBC Driver 18 for SQL Server}
       MSSQL_ENCRYPT: ${MSSQL_ENCRYPT:-no}
       MSSQL_TRUST_SERVER_CERT: ${MSSQL_TRUST_SERVER_CERT:-yes}
-      PYTHONPATH: /opt/airflow
+      PYTHONPATH: /opt/airflow/src
     ports:
       - "5000:5000"
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/pricing_pipeline:/opt/airflow/pricing_pipeline
+      - ${AIRFLOW_PROJ_DIR:-.}/src/pricing_pipeline:/opt/airflow/src/pricing_pipeline
       - ${AIRFLOW_PROJ_DIR:-.}/state/mlflow/artifacts:/mlflow/artifacts
     depends_on:
       state-init:
@@ -464,7 +463,7 @@ services:
       MSSQL_DRIVER: ${MSSQL_DRIVER:-ODBC Driver 18 for SQL Server}
       MSSQL_ENCRYPT: ${MSSQL_ENCRYPT:-no}
       MSSQL_TRUST_SERVER_CERT: ${MSSQL_TRUST_SERVER_CERT:-yes}
-      PYTHONPATH: /opt/airflow
+      PYTHONPATH: /opt/airflow/src
     entrypoint: /bin/bash
     command:
       - -c
@@ -479,7 +478,7 @@ services:
         fi
         python /opt/pricing/scripts/generate_db_diagrams.py --schemas pricing mlops --output-dir /opt/pricing/state/db_diagrams "$${extra_args[@]}"
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}/pricing_pipeline:/opt/airflow/pricing_pipeline
+      - ${AIRFLOW_PROJ_DIR:-.}/src/pricing_pipeline:/opt/airflow/src/pricing_pipeline
       - ${AIRFLOW_PROJ_DIR:-.}/scripts:/opt/pricing/scripts
       - ${AIRFLOW_PROJ_DIR:-.}/state/db_diagrams:/opt/pricing/state/db_diagrams
     depends_on:

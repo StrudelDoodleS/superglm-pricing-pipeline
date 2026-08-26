@@ -11,5 +11,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 USER airflow
+# This development Compose image installs the exported compatibility dependencies;
+# clean-wheel installation is verified outside this source-mounted profile.
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" -r /requirements.txt

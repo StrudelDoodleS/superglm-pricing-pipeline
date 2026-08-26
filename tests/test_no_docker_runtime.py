@@ -8,8 +8,32 @@ import sys
 import types
 from pathlib import Path
 
+import yaml
+
 from pricing_pipeline.infra.config import Settings
 from scripts import no_docker_services
+
+
+def test_no_maintained_duplicate_schema_sql_files():
+    for path in (
+        Path("docs/pricing_useful_tables_ddl.sql"),
+        Path("docs/pricing_useful_tables_full_ddl.sql"),
+        Path("tutorials/schema/pricing_useful_tables_ddl.sql"),
+    ):
+        assert not path.exists()
+
+
+def test_compose_uses_src_development_mount_without_schema_mount():
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    common = compose["x-airflow-common"]
+
+    assert common["environment"]["PYTHONPATH"] == "/opt/airflow/src"
+    assert all(
+        "/pricing_pipeline:/opt/airflow/pricing_pipeline" not in item
+        for item in common["volumes"]
+    )
+    assert all(":/opt/pricing/db" not in item for item in common["volumes"])
+    assert "PRICING_SCHEMA_DIR" not in common["environment"]
 
 
 def test_no_docker_env_example_targets_host_processes_and_external_sql():
