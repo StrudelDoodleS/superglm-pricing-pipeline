@@ -202,6 +202,9 @@ The supported interface is:
 ```text
 pricing-pipeline scaffold ...
 pricing-pipeline scaffold --upgrade --dry-run ...
+pricing-pipeline environment verify --locked ...
+pricing-pipeline notebook kernel-install ...
+pricing-pipeline notebook execute --role data_ingestion ...
 pricing-pipeline schema status ...
 pricing-pipeline schema apply ...
 pricing-pipeline schema reset ...
@@ -215,6 +218,24 @@ implementations accept an argument list, return integer exit codes, and lazily
 import optional dependencies after subcommand selection. Stable notebook-facing
 Python functions remain under `pricing_pipeline.notebook`; the CLI is not the
 programmatic API.
+
+`environment verify --locked` resolves the current platform from committed
+`uv.lock`, verifies the active interpreter/distribution file manifests, and
+prints the resulting `RuntimeEnvironmentIdentity`. `notebook kernel-install`
+first requires that verification, then installs an ipykernel whose argv uses the
+exact project `.venv` interpreter and whose display name includes the model and
+lock prefix. The scaffold README uses `uv sync --locked` followed by this command
+and tells analysts to select that kernel. Kernel selection is still independently
+rechecked at remote-write time; a friendly display name is not evidence.
+
+`notebook execute --role data_ingestion` is the publication-grade ingestion
+runner. It snapshots the execution-clean committed notebook/config/source bytes,
+starts a fresh verified project-kernel subprocess, executes the saved notebook in
+cell order with typed parameters, captures the exact source/transcript identity,
+and verifies the source snapshot is unchanged before atomically installing the
+frame envelope. Notebook 01 exposes a helper that launches this runner and
+streams status, but the child never consumes mutable objects from the caller's
+interactive kernel.
 
 For one compatibility release, existing public `scripts/*.py` commands become
 thin wrappers around packaged CLI functions. Demos, portable-source generation,
@@ -301,7 +322,8 @@ scaffold_state = "current"
 name = "CLAIM_FREQUENCY"
 label = "Claim frequency"
 target = "claim_count"
-model_type = "frequency"
+model_type = "superglm_poisson"
+problem_type = "frequency"
 deployment_slot = "CLAIM_FREQUENCY_UAT"
 features = ["driver_age", "vehicle_band", "region"]
 dataset_name = "claim_frequency_model_frame"
@@ -331,7 +353,7 @@ random_state = 42
 
 [notebook_defaults]
 database_mode = "local"
-runtime_module = ""
+runtime_provider = "work-default"
 expected_remote_database = ""
 
 [manual_edit_defaults]
@@ -345,11 +367,11 @@ schema:
 | Section | Required fields | Optional/default fields |
 |---|---|---|
 | root | exact positive integer `schema_version = 2`, exact supported `template_version`, `scaffold_state` | none |
-| `[model]` | non-empty `name`, `label`, `target`, `deployment_slot`, `dataset_name`, `source_system`; `model_type` in `frequency`, `severity`, `burn_cost`; non-empty unique ordered `features` and `primary_keys`; `fit_mode` in `fit`, `fit_reml` | non-empty unique `scoring`, default `['deviance', 'nll', 'gini']`, limited in v2 to those three stable metric IDs |
+| `[model]` | non-empty `name`, `label`, `target`, `deployment_slot`, `dataset_name`, `source_system`, and registry-preserving `model_type`; `problem_type` in `frequency`, `severity`, `burn_cost`; non-empty unique ordered `features` and `primary_keys`; `fit_mode` in `fit`, `fit_reml` | non-empty unique `scoring`, default `['deviance', 'nll', 'gini']`, limited in v2 to those three stable metric IDs |
 | `[source]` | root-relative regular-file `sql`; non-empty `data_as_of_column` | unique ordered `support_files = []` |
 | `[roles]` | none | optional non-empty `sample_weight_column`, `export_weight_column`, `offset_column`, `offset_source_column`, and `offset_label` |
 | `[validation]` | one discriminating `kind` and the fields required by that kind | only the kind-specific defaults below |
-| `[notebook_defaults]` | none | operational `database_mode`, `runtime_module`, `expected_remote_database` |
+| `[notebook_defaults]` | none | operational `database_mode`, host-registered `runtime_provider` alias, `expected_remote_database` |
 | `[manual_edit_defaults]` | none | operational `source_selector`, `carry_forward` |
 
 Names are stripped non-empty strings, model/features/roles must refer to distinct
@@ -378,14 +400,23 @@ framework can validate, not merely a non-empty string.
   typed-TOML `train_values` and `test_values`; default `materialize = false`;
   random/test-size/shuffle fields are forbidden.
 
-Canonical validation identity includes the discriminant, all effective defaults,
-typed values, and the exact split indices/row-order evidence produced by the
-splitter. A versioned parser registry accepts only explicitly supported config
-versions. Each older version has one deterministic adapter to the current
-in-memory model or an actionable rejection; unknown newer versions always
-block. Golden fixtures cover every version and validation kind. A schema-version
-upgrade is written only after the adapted configuration has been printed and
-explicitly approved.
+`ValidationSpecIdentity` includes only the discriminant, all effective defaults,
+and canonical typed configuration. `ValidationRealizationIdentity` separately
+binds the exact split indices, split-set/manifest IDs, and row-order evidence
+produced for one frame. A versioned parser registry accepts only explicitly
+supported config versions. Each older version has one deterministic adapter to
+the current in-memory model or an actionable rejection; unknown newer versions
+always block. Golden fixtures cover every version and validation kind. A
+schema-version upgrade is written only after the adapted configuration has been
+printed and explicitly approved.
+
+`model_type` remains the immutable model-registry classifier used by existing
+SQL rows (for example `superglm_poisson` or `superglm_tweedie`); it is not
+repurposed. `problem_type` drives frequency/severity/burn-cost reporting and
+likelihood validation. A known legacy `superglm_poisson` may propose
+`problem_type = "frequency"` for review. `superglm_tweedie`, custom registry
+values, and every ambiguous case require an explicit analyst choice; registry
+rows are never renamed or backfilled by inference.
 
 The file never stores credentials or an `ALLOW_REMOTE_WRITES` switch. Remote
 authorization is deliberately outside governed source. Interactive notebooks
@@ -404,15 +435,18 @@ from tracked `pricing_model.toml` and cannot be overridden at execution time.
 Operational configuration precedence is explicit CLI option, then process
 environment, then `[notebook_defaults]`/`[manual_edit_defaults]`, then library
 default. Every effective governed value is included in model-source identity;
-root scaffold metadata and operational defaults are excluded.
+root scaffold metadata and operational defaults are excluded. Security
+authorities—trust roots, repository registries, runtime-provider module paths,
+signing keys, and remote-write policy—are never part of this precedence chain.
 
 The library does not implicitly load a `.env` file. Commands that need one
 accept `--env-file` explicitly; the
 resolved file must remain inside the model root unless a separately named
 administrator option authorizes an external secret provider. Runtime modules
-may use their normal company secret provider. Relative config, artifact, SQL,
-and report paths resolve against the model root, never cwd or the installed
-package. Existing host-specific `/opt/pricing/...` defaults are removed.
+may use their normal company secret provider, but TOML selects only a harmless
+provider alias registered by host policy. Relative config, artifact, SQL, and
+report paths resolve against the model root, never cwd or the installed package.
+Existing host-specific `/opt/pricing/...` defaults are removed.
 
 `scaffold`, `--help`, schema commands with explicit runtime arguments, and
 repository-maintainer diagnostics may run without an existing model marker.
@@ -420,30 +454,84 @@ Notebook/model commands require exactly one valid marker.
 
 ### Model-project provenance
 
+Before reading model-controlled TOML, the library loads an immutable
+`HostTrustPolicy` from an administrator-owned absolute path or an installed,
+allowlisted provider distribution whose own file manifest is host-verified. The
+location cannot be selected by the model repository, ordinary environment
+variables, `.env`, cwd, or `sys.path`. It contains company signing keys,
+framework repository IDs, a registry mapping model names to permitted company
+repository IDs/deployment slots/runtime-provider aliases, permitted action
+delegates, and signing rules. A registered runtime provider must resolve to an
+installed distribution
+outside the model root and match its host-pinned distribution/file identity.
+The current behavior that prepends the project root or `src/` before importing a
+runtime module is retired; project code can never provide trust policy,
+credentials policy, or a company-attestation verifier.
+
+When no administrator policy is installed (for example personal local
+development), the library uses a built-in fail-closed `LOCAL_ONLY` policy that
+recognizes only the packaged SQLite provider, trusts no company repository or
+signing key, and cannot mint a remote-write capability.
+
 Define an immutable, versioned `ModelProjectBuildIdentity` for every governed
 publication. It contains:
 
 - a credential-free normalized company model-repository identifier;
 - the full 40-hex `HEAD` commit;
+- a signed `ModelProjectRevisionAttestation` SHA/key ID proving that repository,
+  commit, protected company ref/PR, and governed tree manifest through company
+  CI;
 - the exact SHA-256 of committed `pyproject.toml` and `uv.lock` bytes;
-- the framework direct-reference commit parsed from both files;
+- a discriminated framework dependency proof: either a Git repository/full
+  commit from `pyproject.toml` and `uv.lock`, or a signed company-wheel release,
+  exact archive hash, version, and source commit;
 - a canonical path/blob manifest SHA for every governed model-project file; and
-- a clean-state assertion produced by comparing the index, tracked worktree,
-  and non-ignored untracked paths with `HEAD`.
+- an execution-clean assertion produced by comparing the index, normalized
+  tracked worktree, and non-ignored untracked paths with `HEAD`.
 
-Ignored runtime paths such as `.local/` do not make a project dirty. Any tracked
-change, staged change, unresolved merge, submodule, replace/graft state, or
-non-ignored untracked file does. The identity validator requires
+The host registry—not the repository's chosen remote name—must authorize the
+model name/repository pair and verify the signed revision attestation. Merely
+resolving a commit from a configured remote is not protected-ref proof.
+
+Ignored runtime paths such as `.local/` do not affect execution cleanliness.
+Every non-notebook tracked file must be byte-identical to `HEAD`. A tracked
+notebook may differ only in execution counts and output arrays that the notebook
+sanitizer proves contain no attachments, widgets, unknown metadata, or source
+changes; its normalized source, cell IDs, and governed metadata must equal the
+committed blob. This permits ordinary autosave after execution without accepting
+an edited cell. Any staged source change, unresolved merge, submodule,
+replace/graft state, prohibited notebook payload, or non-ignored untracked file
+blocks. The identity is recomputed when `RemoteWriteCapability` is issued and
+immediately before each external mutation, so a long-running session cannot rely
+on stale cleanliness.
+
+The identity validator requires
 `pyproject.toml`, `uv.lock`, every governed source file, and the current commit
-to exist in one ordinary repository; it rejects shallow/missing commit objects
-when the configured company remote cannot resolve the commit. It also requires
-the framework commit in the lock/direct reference to equal the installed
+to exist in one ordinary repository; it rejects shallow/missing commit objects.
+Its discriminated dependency proof must equal the installed
 `FrameworkBuildIdentity`.
 
-Dirty, uncommitted, non-Git, or locally forked projects may ingest, explore, and
-fit into `.local/`, with an explicit `LOCAL_UNBOUND` identity. They cannot
-publish, edit, manually adjust, monitor, or deploy remotely. Remote publication
-requires a clean committed `ModelProjectBuildIdentity`; its complete fields are
+Define a separate `RuntimeEnvironmentIdentity` covering the committed lock SHA,
+selected platform/marker resolution, Python implementation/version/ABI,
+installed distribution names/versions, PEP 610 source URLs/commits, wheel/archive
+identities where applicable, and canonical hashes of installed files from
+dist-info `RECORD`. Verification first makes `uv` validate every selected
+archive/source hash from the lock, then independently hashes the installed
+payload, so a matching version string alone is insufficient. The supported
+launch path performs `uv sync --locked` and
+starts/registers the project `.venv` kernel; remote preflight independently
+recomputes the environment identity and rejects a stale/different Jupyter
+kernel, missing locked package, version/source mismatch, shadowing extra package,
+or altered installed file. The complete runtime identity is persisted with run
+evidence; recording a lock SHA without proving the active interpreter is
+insufficient.
+
+Source-dirty, unattested, non-Git, locally forked, or runtime-mismatched projects
+may ingest, explore, and fit into `.local/`, with an explicit `LOCAL_UNBOUND`
+identity. They cannot publish, edit, manually adjust, monitor, or deploy
+remotely. Remote publication
+requires an execution-clean committed `ModelProjectBuildIdentity`; its complete
+fields are
 persisted through the frame handoff, candidate envelope, publication receipt,
 model run, monitoring evidence, SQL Server, SQLite, and deployment views. A
 content digest is therefore both verifiable and locatable at a protected company
@@ -546,42 +634,52 @@ before opening to narrow replacement races. SQL uses bind parameters rather
 than string interpolation. The verified model frame, not a raw extract, is
 stored under `.local/`.
 
-Notebook 01 constructs a versioned immutable `IngestionSourceIdentity` before it
-executes SQL. Its canonical digest binds:
+Notebook 01 constructs a versioned immutable `IngestionDefinitionIdentity`
+before it executes SQL. Its canonical digest binds:
 
 - the effective ingestion-relevant `[model]`, `[source]`, and `[roles]` fields
   from `pricing_model.toml`, including primary-key/order declarations;
 - exact normalized bytes of the configured SQL file and each ingestion support
   file;
-- normalized source cells of the installed-template role
-  `data_ingestion` (not a numeric filename assumption);
-- canonical typed bind parameters, including the exact data-as-at value;
-- the query/runtime adapter identity and source-system identifier; and
+- every governed notebook-01 code cell under the exact common cell policy below,
+  including unknown/untagged custom transformations (not merely cells from an
+  installed template role and not a numeric filename assumption);
+- the query-adapter definition and source-system identifier; and
 - the declared column-role, primary-key, deterministic-order, and expected-frame
   contract.
 
 Credentials, connection strings, host names, and remote-write authorization are
-never included. The SQL bytes actually passed to SQLAlchemy and the bind values
-actually passed to the driver must hash to this identity; changing a file after
-preflight causes execution to abort rather than producing a receipt for
-different bytes.
+never included. The SQL and notebook bytes actually executed must hash to this
+identity; changing a file after preflight causes execution to abort rather than
+producing a receipt for different bytes.
 
 After query and frame validation, notebook 01 constructs
-`IngestionBuildIdentity` from that source identity plus the observed frame
-schema, model-frame SHA, row-order SHA, exact data-as-at, row/column counts, and
-validation outcome. The source identity can therefore be computed before an
-external read, while the build identity proves what that exact read produced.
+`IngestionExecutionIdentity` from the definition identity plus canonical typed
+bind parameters (including exact data-as-at), connector/runtime identity,
+observed frame schema, model-frame SHA, row-order SHA, row/column counts, and
+validation outcome. The definition identity can therefore be computed before an
+external read, while execution identity proves what that exact read produced.
 
-`ModelFrameArtifact` advances to a versioned envelope that stores the complete
-ingestion identity, its SHA-256, the model-frame SHA, exact data-as-at, row-order
-SHA, and the `ModelProjectBuildIdentity` state observed at ingestion. Loading the
-frame verifies artifact bytes and then recomputes the current ingestion source
-identity. Notebooks 02 and 03 require an exact source match before deserializing
-or using the frame. Editing SQL, governed config, notebook-01 source, support
-files, query parameters, or role/order declarations therefore makes an older
-frame stale and requires rerunning notebook 01. A later Git commit that contains
-identical ingestion source does not invalidate the frame; remote publication
-separately requires the current clean committed project identity.
+Only the fresh child-process `notebook execute --role data_ingestion` runner may
+mark this execution `PUBLICATION_ELIGIBLE`, because it can prove the exact saved
+cell sequence and environment it executed. Direct interactive execution may
+write a clearly labelled `LOCAL_UNBOUND` frame for notebook 02 experimentation,
+but notebook 03 cannot publish from it. This is the enforcement behind the claim
+that custom/untagged notebook-01 transformations enter stale-frame identity; the
+framework does not infer execution history from an arbitrary live kernel.
+
+`ModelFrameArtifact` advances to a versioned envelope that stores both ingestion
+identities and SHA-256s, the model-frame SHA, exact data-as-at, row-order SHA,
+and `ModelProjectBuildIdentity` state observed at ingestion. Loading verifies
+artifact bytes and recomputes the current ingestion definition identity.
+Notebooks 02 and 03 require an exact definition match before deserializing or
+using the frame. Editing SQL, governed config, any governed notebook-01 code, a
+support file, or role/order declaration therefore makes an older frame stale
+and requires rerunning notebook 01. Changing only bind values/data-as-at creates
+a distinct execution/frame lineage, not a new source definition. A later Git
+commit that contains byte-identical ingestion definition does not invalidate the
+frame; remote publication separately requires current execution-clean, attested
+project/runtime identities.
 
 The legacy v1 frame envelope remains readable for inspection and local
 exploration, but because it contains no ingestion identity it is never eligible
@@ -594,7 +692,9 @@ the framework never guesses provenance for old frame bytes.
 
 The only governed step that runs the model query and constructs the verified
 model-frame artifact. It validates data-as-at, primary keys, roles, ordering,
-and frame evidence. It does not fit or publish a model.
+and frame evidence. Interactive cells support development; its final helper
+invokes the fresh locked ingestion runner for a publication-eligible frame. It
+does not fit or publish a model.
 
 ### 02 — Model exploration
 
@@ -702,6 +802,24 @@ canonical typed-identity order for unordered categoricals; group members are
 written in their `original_levels` order. Formatting, comments, or TOML table
 order do not affect the semantic digest.
 
+Format version 1 defines exact scalar vectors as compact canonical JSON arrays:
+`["str", <exact Unicode scalar sequence>]`, `["int", <base-10 string>]`,
+`["bool", true|false]`, `["float64", <16 lowercase big-endian IEEE-754 hex
+digits>]`, `["date", "YYYY-MM-DD"]`, `["local_datetime",
+"YYYY-MM-DDTHH:MM:SS.ffffff"]`, and `["offset_datetime",
+"YYYY-MM-DDTHH:MM:SS.ffffffZ"]` after UTC normalization. Strings are not Unicode
+normalized; JSON escaping does not change their scalar identity. Negative zero
+therefore differs from positive zero, while equal offset datetimes denote the
+same instant. Singleton display labels use the original string, base-10 integer,
+lowercase boolean, `float.hex()` form, local ISO date/datetime, or normalized UTC
+ISO datetime respectively; any resulting collision blocks. Golden vectors fix
+ASCII/non-ASCII, composed/decomposed Unicode, integer/string, both zero signs,
+subnormal floats, dates, local datetimes, and multiple equivalent offsets across
+all supported Python runtimes.
+
+Canonical JSON is UTF-8 with `ensure_ascii = false`, separators `,`/`:`, no
+insignificant whitespace or trailing newline, and lowercase type tags/hex.
+
 Validation rejects:
 
 - overlapping group membership;
@@ -721,9 +839,9 @@ Notebook 02 can load an existing config, fit an exploratory model with it,
 allow editor changes, and atomically export a new deterministic config after
 explicit replacement confirmation. It can also start with no groups and create
 the initial config. Generated Joblib metadata binds the compiled objects to the
-model name, verified frame and ingestion SHA, model-definition SHA, data-as-at,
-grouping semantic SHA, Python, SuperGLM, framework-build, and model-project
-identities.
+model name, verified frame, ingestion definition/execution SHAs,
+model-definition SHA, data-as-at, grouping semantic SHA, Python, SuperGLM,
+framework-build, model-project, and runtime-environment identities.
 
 The current requirement for a published RAW `Candidate` is removed from this
 exploration export path. Notebook 02 does not register or persist a model.
@@ -772,23 +890,28 @@ inherit the exact grouping and level universe embedded in the deployed candidate
 Replace numeric filename-prefix filtering with semantic roles. The governed
 model-source identity is a versioned canonical envelope, not a concatenation
 whose composition is implicit. It contains the current
-`IngestionSourceIdentity` SHA, `ModelDefinitionIdentity` SHA, canonical
-`[validation]` identity, normalized governed training-code SHA, and the
+`IngestionDefinitionIdentity` SHA, `ModelDefinitionIdentity` SHA,
+`ValidationSpecIdentity` SHA, normalized governed notebook-03 training-code SHA,
+and the
 model-kind extension described below. It also records (without folding locator
 fields into semantic equivalence) the complete `ModelProjectBuildIdentity`.
 
-The model run separately binds `IngestionBuildIdentity`, manifest, split, and
-frame hashes. Dataset contents therefore create new data/run lineage without
-pretending that byte-identical model source changed, while a stale frame can
-never be paired with a newer ingestion-source identity.
+The model run separately binds `IngestionExecutionIdentity`,
+`ValidationRealizationIdentity`, manifest, split, row-order, exact data-as-at,
+and frame hashes. Dataset contents, bind values, and realized splits therefore
+create new data/run lineage without pretending that byte-identical model source
+changed, while a stale frame can never be paired with a newer ingestion
+definition.
 
-The governed training-code SHA includes canonical content from:
+The governed training-code SHA contains only governed
+`03_model_training.ipynb` code cells. SQL/notebook-01 and model-spec/support-file
+bytes are already authoritative in the ingestion/model-definition identities;
+they are not independently normalized a second way.
 
-- `sql/**/*.sql`;
-- `model_spec.py`;
-- `01_data_ingestion.ipynb` source cells;
-- `03_model_training.ipynb` source cells; and
-- every relative regular file listed in `[source].support_files`.
+All identities consume slices of one immutable parsed `CanonicalProjectConfig`
+and one canonical path/blob manifest helper. Where a role/support value
+deliberately enters two identities, both reference the same canonical node or
+byte digest rather than reserializing it with separate code paths.
 
 Configured support files use the same root-contained, no-symlink-escape
 resolver as SQL. Duplicate paths, directories, globs, and files outside the
@@ -818,11 +941,16 @@ cannot erase a real grouped run.
 
 Derived and deployment actions preserve two distinct locators: the parent's
 original `ModelProjectBuildIdentity`, which remains the authority for fitted
-semantics, and the current clean `ActionProjectIdentity`, which records the
-company model-repository commit/lock that executed the editor, manual policy,
-monitoring, or deployment action. The latter is audit lineage and does not
-silently replace or re-hash the parent's source. Both are required for a new
-remote write.
+semantics, and a versioned `ActionProjectIdentity`. The action identity uses the
+same repository ID, signed protected-revision attestation, commit, committed
+pyproject/lock, governed path/blob manifest, execution-clean normalization,
+framework dependency proof, and `RuntimeEnvironmentIdentity` as
+`ModelProjectBuildIdentity`, plus action role and parent model/run/package IDs.
+`HostTrustPolicy` requires the same registered model repository as the parent
+unless its administrator-owned registry explicitly names an authorized delegate
+for that model/action/slot. The action identity is audit lineage and does not
+silently replace or re-hash the parent's source. Both identities are required
+and revalidated for every new remote write.
 
 It excludes notebook outputs and the exploratory/editor/manual/deployment
 notebooks (`02`, `04`, `05`, and `06`). Those steps create their own immutable
@@ -1048,6 +1176,10 @@ unreviewed `--tags` from work.
 7. Protect a company release ref/tag pointing to the reviewed company merge
    commit so old model pins remain fetchable. Model repositories depend only on
    that full company commit.
+8. Company CI generates the detached `FrameworkReleaseAttestation`, signs it
+   with the host-trusted key, publishes it to the immutable company registry,
+   and verifies retrieval from the runtime host path. The commit is not
+   governance-consumable before this step.
 
 Do not squash the personal import commit because preserved ancestry makes the
 next upstream delta auditable. Company feature work does not travel back to the
@@ -1083,8 +1215,23 @@ company commit with `uv add --no-sync` in a dedicated dependency-only commit and
 PR, inspecting the complete lock diff before environment sync. Rollback by
 reverting that dedicated dependency-upgrade commit and running `uv sync --locked`.
 
-A future company CI release may build and immutably publish wheels to a private
-index. It must retain the same import, CLI, resource, and provenance contracts.
+A model-project commit becomes remote-write eligible only after company CI has
+sanitized notebooks, scanned history, verified its framework dependency and
+lock, run its model tests, and published the signed
+`ModelProjectRevisionAttestation` into the administrator registry. The
+attestation is keyed by repository and full commit, so one reviewed model-source
+commit may govern many weekly runs without creating a Git commit per fit.
+
+The initial full-commit Git dependency and any later private-index wheel are both
+company CI releases. After the company PR merges, CI creates a detached signed
+`FrameworkReleaseAttestation` keyed by normalized repository ID and source
+commit and publishes it to an administrator-owned immutable registry/read-only
+host cache. It is deliberately not embedded into the commit it signs. The
+attestation covers protected release tag, PEP 440 version, canonical source-tree
+path/blob manifest, expected installed-distribution path/content manifest,
+build inputs, migration manifests, and supported Python/ABI. Git tags/signatures
+are supporting evidence; the detached company attestation is the runtime trust
+record. A future wheel additionally records its exact archive SHA-256.
 
 ## Database compatibility and provenance
 
@@ -1096,14 +1243,20 @@ Define one immutable, versioned `FrameworkBuildIdentity` containing distribution
 name, PEP 440 version, build kind (`GIT`, `WHEEL`, or `EDITABLE`), normalized
 credential-free source-repository identifier, full 40-hex source commit,
 protected release tag, build-attestation SHA-256, and signing-key ID. A Git
-install obtains repository URL and commit from PEP 610 direct-reference metadata
-and requires both to match an administrator-owned company-repository allowlist.
-Company wheel CI embeds a signed build statement covering repository ID, source
-commit, version, tag, and wheel build inputs; the model lock retains the wheel
-archive hash. Verification uses a company trust store supplied by the runtime
-module/host policy, never a key or allowlist controlled by the model repository.
-An arbitrary fork, unverifiable wheel, editable install, or dirty framework tree
-is marked untrusted and may explore locally but cannot make governed remote
+install obtains repository URL and commit from PEP 610, loads the detached
+attestation by that exact pair, verifies its signature through `HostTrustPolicy`,
+and recomputes the installed distribution manifest from package files,
+resources, entry points, and normalized dist-info metadata. Interpreter caches,
+installer-owned `RECORD`/timestamps, and bytecode are excluded by an explicit
+versioned rule; all prediction/schema authority files are included. The
+recomputed manifest must match the CI-attested deterministic PEP 517 payload and
+the model lock/direct reference. A wheel follows the same checks and additionally
+matches its lock archive hash. This gives the initial Git-pinned path a detached,
+non-circular attestation and proves installed bytes, rather than treating PEP 610
+as protected-ref evidence. Verification uses only the host trust policy, never
+a key/allowlist/provider selected by the model repository. An arbitrary fork,
+missing attestation, unverifiable wheel, editable install, or altered framework
+tree is marked untrusted and may explore locally but cannot make governed remote
 writes. This check lives at the lowest shared remote-write boundary, not only in
 notebook helpers.
 
@@ -1115,18 +1268,34 @@ identities. The first implementation migration adds nullable fields, labels old
 evidence `LEGACY_UNKNOWN`, and uses triggers plus application validation to
 require complete identities for new successful rows.
 
+Disposable SQLite simulations persist every available identity plus immutable
+`evidence_scope = "LOCAL_ONLY"`; they may exercise local package statuses and
+views but are not remote-governed successes and no import/promotion API accepts
+their IDs or receipts.
+
 All artifact and receipt formats have explicit versions and immutable readers.
 Legacy frame v1, candidate bundle v1/v2, grouping v1, and publication-receipt v1
 fixtures remain loadable through adapters that preserve missing facts as
 `LEGACY_UNKNOWN`; adapters never invent a framework, ingestion, or project
 identity. Legacy artifacts may be listed, inspected, reported, and used to keep
 an already-open deployment operational. They cannot become the parent of a new
-editor/manual/monitoring publication, be newly deployed, or be republished
-until an administrator attestation command has independently verified the
-artifact and SQL receipt against an archived trusted framework/model revision.
-If that proof is unavailable, the model must be rebuilt from a clean standalone
-repository. Notebook 04–06 surfaces the restriction as an actionable state,
-not a deserialization failure.
+editor/manual/monitoring publication or be republished until an administrator
+attestation command has independently verified the artifact and SQL receipt
+against an archived trusted framework/model revision.
+If that proof is unavailable, the model must be rebuilt from an attested,
+execution-clean standalone repository. Notebook 04–06 surfaces the restriction
+as an actionable state, not a deserialization failure.
+
+Before the first v2 deployment closes a legacy champion, an administrator must
+either attest it fully or create an immutable emergency rollback set. A rollback
+entry is allowed only for an exact artifact/package hash with a prior deployment
+receipt for the same model and slot, verified unchanged while it is still
+active or from archived receipt evidence. A later `LEGACY_ROLLBACK` deployment
+may point only to that allowlisted package and records source deployment ID,
+reason, actor, action-project/runtime identities, and remote capability. It does
+not authorize republishing, editing, monitoring parentage, a different slot, or
+an arbitrary published legacy package. This retains emergency rollback without
+fabricating provenance.
 
 ### Migration identity and compatibility
 
@@ -1252,8 +1421,11 @@ It must not silently apply migrations from a notebook.
 - Verify the legacy wrapper commands delegate to the same parser.
 - From the built wheel in a temporary Git repository, execute a fully synthetic
   standalone 01 ingestion -> optional 02 grouping -> 03 RAW/ROUTINE publication
-  -> package inspection -> deployment flow against fresh SQLite. The smoke must
-  not import any framework-checkout path.
+  -> package inspection/candidate-view flow against fresh SQLite. Local rows are
+  explicitly `LOCAL_ONLY`, cannot be promoted/imported as remote evidence, and
+  the deployment notebook continues to reject SQLite. A separate company-CI
+  smoke uses disposable SQL Server and trusted test attestations for publication
+  -> deployment -> rollback. Neither smoke may import a framework-checkout path.
 
 ### Standalone scaffold
 
@@ -1262,7 +1434,8 @@ It must not silently apply migrations from a notebook.
   `sys.path` mutation.
 - Execute/compile notebook setup cells using only site-packages.
 - Cover every versioned TOML validation variant, default, cross-field rejection,
-  legacy adapter, and unknown-newer-version failure.
+  registry-preserving `model_type`/reviewed `problem_type`, legacy adapter, and
+  unknown-newer-version failure.
 - Verify marker discovery from root and descendants and reject invalid,
   escaping, symlinked, or ambiguous roots.
 - Assert notebook 01 reads exactly `sql/model_data.sql` through `pathlib` and
@@ -1286,11 +1459,14 @@ It must not silently apply migrations from a notebook.
 - Prove notebook 02 performs no SQL write and notebook 03 is the first model
   publication step.
 - Prove a frame created by notebook 01 is rejected by notebooks 02/03 after any
-  ingestion SQL, config, bind-parameter, support-file, or notebook-01 source
-  change, while an unrelated commit with byte-identical ingestion source remains
-  valid.
+  ingestion SQL, definition-config, support-file, or governed/custom notebook-01
+  code change, while an unrelated commit with byte-identical definition remains
+  valid. Prove new bind values/data-as-at change execution lineage but not model
+  source.
 - Prove source hashes change for governed config/SQL/01/03/supporting code and
   do not change for 02/04/05/06 or notebook outputs.
+- Prove a changed validation specification changes model source, while different
+  realized split indices/row order under the same spec change run lineage only.
 - Prove every sample/export-weight and offset-role change alters both RAW and
   ROUTINE_EDIT source identity.
 - Prove changing only `groupings.toml` leaves RAW identity unchanged, changes
@@ -1314,17 +1490,26 @@ It must not silently apply migrations from a notebook.
   both backends. An unsigned future migration must never authorize writes.
 - Keep immutable v1/v2 frame, grouping, candidate, and publication fixtures;
   prove allowed inspection and prohibited child/deployment operations for
-  `LEGACY_UNKNOWN`.
+  `LEGACY_UNKNOWN`, plus the exact same-slot prior-receipt requirements for a
+  `LEGACY_ROLLBACK` exception.
 
 ### Release and confidentiality
 
-- Test version/tag/repository/source-SHA/attestation equality and propagate the
-  complete mandatory framework and model-project build identities through frame,
-  artifact, publication, monitoring, deployment, SQL Server, and SQLite evidence.
-- Reject remote writes from a dirty model repository, uncommitted lock, wrong
-  company framework commit, forked repository URL, unverifiable wheel, editable
-  install, and clean source whose lock SHA changed. Confirm these states still
-  allow local exploration.
+- Test version/tag/repository/source-SHA/detached-attestation/installed-manifest
+  equality for Git and wheel installs and propagate complete framework,
+  model-project, action-project, and runtime-environment identities through
+  frame, artifact, publication, monitoring, deployment, SQL Server, and SQLite.
+- Reject remote writes from source-dirty or unattested model repositories,
+  uncommitted locks, unauthorized action delegates, wrong company framework
+  commits, forked repository URLs, missing/forged attestations, altered installed
+  files, unverifiable wheels, editable installs, and active kernels that differ
+  from the lock. Confirm these states still allow local exploration.
+- Prove output/execution-count-only notebook autosave remains execution-clean,
+  while changed source, attachments, widgets, unknown metadata, or a change after
+  capability issuance blocks the next write.
+- Prove a model-root module cannot masquerade as the host trust policy or runtime
+  provider and that ordinary environment/TOML cannot replace administrator trust
+  roots.
 - Use `git check-ignore` assertions for every generated sensitive artifact type
   while proving SQL/config/notebooks remain trackable.
 - Reject unique sentinels in every notebook output, attachment, widget/rich MIME,
@@ -1334,11 +1519,12 @@ It must not silently apply migrations from a notebook.
 
 ## Delivery sequence
 
-1. **Identity foundation:** normative config and artifact versions,
-   `IngestionBuildIdentity`, `ModelDefinitionIdentity`, framework/model-project
-   build identities, trust-store interface, and frozen legacy fixtures.
-2. **Package foundation:** build backend, `src` layout, version source,
+1. **Package foundation:** build backend, `src` layout, version source,
    packaged SQL/templates, clean-room wheel tests.
+2. **Identity foundation:** normative config and artifact versions,
+   ingestion definition/execution, validation spec/realization,
+   `ModelDefinitionIdentity`, framework/model/action/runtime identities,
+   host-trust interface, and frozen legacy fixtures.
 3. **CLI:** common parser, scaffold/schema/inspect/report commands, module entry,
    compatibility wrappers.
 4. **Standalone project:** root marker/config, model tree, SQL loading, new
@@ -1372,7 +1558,8 @@ The design is complete when all of the following are true:
    reviewed decisions without a published RAW package.
 5. Notebook 03 publishes RAW and optional ROUTINE_EDIT models with full manifest,
    data-as-at, ingestion, grouping, split, framework, model-project, lock,
-   Python, and SuperGLM evidence; it cannot publish a stale frame.
+   runtime-environment, Python, and SuperGLM evidence; it cannot publish a stale
+   frame or confuse execution data/splits with model-source identity.
 6. Schema and SQLite commands use installed package resources by default;
    explicit development overrides are isolated and separately tested.
 7. Scaffold retry and upgrade never overwrite customized files or follow
@@ -1383,7 +1570,8 @@ The design is complete when all of the following are true:
    prefixes.
 9. A model repository is reproducible from its tracked source and `uv.lock`
    without the framework checkout, and every remote publication points to its
-   clean protected company commit and exact lock digest.
+   execution-clean, CI-attested protected company commit, exact lock digest, and
+   lock-matching active kernel.
 10. No work model, query, data, artifact, credential, or work-only change can be
     pushed through the configured personal remote, and first-push/import checks
     cover every reachable Git ref rather than only the current tree.
