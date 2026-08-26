@@ -254,7 +254,7 @@ def test_superglm_runtime_dependency_uses_pypi_without_git_provenance():
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
 
     assert "superglm>=0.26" in requirements
-    assert "superglm>=0.26" in pyproject["project"]["dependencies"]
+    assert "superglm>=0.26,<0.27" in pyproject["project"]["dependencies"]
     assert not any(line.startswith("superglm[") for line in requirements)
 
     superglm_package = next(package for package in lock["package"] if package["name"] == "superglm")
@@ -400,7 +400,7 @@ def test_generated_runtime_files_use_portable_exception_tuple_syntax():
 
 
 def test_deploy_api_publishes_model_scoped_deployment_history():
-    deployer = Path("pricing_pipeline/publishing/deployment.py").read_text(encoding="utf-8")
+    deployer = Path("src/pricing_pipeline/publishing/deployment.py").read_text(encoding="utf-8")
 
     assert "model_id" in deployer
     assert "PRICING_MODEL_DEPLOYMENT" in deployer
@@ -413,7 +413,7 @@ def test_deploy_api_publishes_model_scoped_deployment_history():
 
 
 def test_rating_package_loader_assigns_feature_level_ids_in_numeric_order():
-    loader = Path("pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    loader = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
 
     assert "ORDER BY" in loader
     assert "ls.level_set_id" in loader

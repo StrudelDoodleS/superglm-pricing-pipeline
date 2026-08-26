@@ -13,7 +13,7 @@ from sqlalchemy.engine import Engine
 
 from pricing_pipeline.infra.file_lock import exclusive_file_lock
 
-OFFLINE_DDL_DIR = Path(__file__).resolve().parents[2] / "db" / "offline_sqlite"
+OFFLINE_DDL_DIR = Path(__file__).resolve().parents[3] / "db" / "offline_sqlite"
 COORDINATOR_DB_FILE = "coordinator.sqlite"
 SCHEMA_DB_FILES = {
     "pricing": "pricing.sqlite",

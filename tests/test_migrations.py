@@ -430,7 +430,7 @@ def test_migration_checksum_is_sha256_of_rendered_sql():
 
 
 def test_migration_runner_tracks_checksum_status_and_uses_application_lock():
-    source = Path("pricing_pipeline/infra/migrations.py").read_text(encoding="utf-8")
+    source = Path("src/pricing_pipeline/infra/migrations.py").read_text(encoding="utf-8")
 
     assert "sys.sp_getapplock" in source
     assert "pricing_schema_migrations" in source
@@ -558,7 +558,7 @@ def test_offline_model_run_mirrors_parent_lineage_column():
 
 def test_offline_model_run_mirrors_rating_workbook_digest_column():
     source = Path("db/offline_sqlite/pricing.sql").read_text(encoding="utf-8")
-    upgrader = Path("pricing_pipeline/infra/offline_sqlite.py").read_text(encoding="utf-8")
+    upgrader = Path("src/pricing_pipeline/infra/offline_sqlite.py").read_text(encoding="utf-8")
 
     assert "rating_workbook_sha256 TEXT NOT NULL" in source
     assert '"rating_workbook_sha256"' in upgrader
@@ -834,7 +834,7 @@ def test_superglm_publication_receipt_migration_adds_metadata_columns():
 
 
 def test_package_writer_allocates_version_under_lock():
-    writer = Path("pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    writer = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
 
     assert "WITH (UPDLOCK, HOLDLOCK)" in writer
     assert "MAX(package_version)" in writer
@@ -1029,7 +1029,7 @@ def test_package_immutability_migration_blocks_direct_edits_to_frozen_packages()
 
 
 def test_rating_package_loader_builds_package_as_draft_before_final_status():
-    loader = Path("pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    loader = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
 
     assert "requested_package_status" not in loader
     assert '"package_status": "DRAFT"' in loader
