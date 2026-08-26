@@ -116,20 +116,26 @@ ENVIRONMENT_FILENAMES = {
     "environment.yaml",
     "environment.yml",
 }
-SECRET_BASENAMES = {
-    "api_key",
-    "api-key",
-    "credential",
-    "credentials",
-    "private_key",
-    "private-key",
-    "secret",
-    "secrets",
-    "service_account",
-    "service-account",
-}
 SECRET_KEY_FILENAMES = {"id_dsa", "id_ecdsa", "id_ed25519", "id_rsa", ".netrc", ".pypirc"}
-SECRET_NAME_TOKENS = {"credential", "credentials", "secret", "secrets", "token", "tokens"}
+ALWAYS_BLOCK_NAME_TOKENS = {"credential", "credentials", "secret", "secrets"}
+ALWAYS_BLOCK_NAME_MARKERS = {
+    ("api", "key"),
+    ("apikey",),
+    ("private", "key"),
+    ("privatekey",),
+    ("service", "account"),
+    ("serviceaccount",),
+}
+GENERIC_TOKEN_MARKERS = {"token", "tokens"}
+PUBLIC_NAME_MARKERS = {
+    ("ca",),
+    ("public", "cert"),
+    ("public", "certificate"),
+    ("public", "key"),
+    ("publiccert",),
+    ("publiccertificate",),
+    ("publickey",),
+}
 CODE_SUFFIXES = {".py", ".pyi"}
 CANONICAL_CREDENTIAL_STORE_PATHS = {
     (".aws", "credentials"),
@@ -244,9 +250,31 @@ def _is_canonical_credential_store(parts: tuple[str, ...]) -> bool:
     )
 
 
-def _is_clearly_named_secret_material(stem: str) -> bool:
-    tokens = set(stem.replace("-", "_").split("_"))
-    return stem in SECRET_BASENAMES or bool(tokens & SECRET_NAME_TOKENS)
+def _normalized_filename_tokens(filename: str) -> tuple[str, ...]:
+    return tuple(
+        token
+        for token in filename.casefold().lstrip(".").replace("-", "_").replace(".", "_").split("_")
+        if token
+    )
+
+
+def _has_compound_marker(tokens: tuple[str, ...], markers: set[tuple[str, ...]]) -> bool:
+    return any(
+        tokens[index : index + len(marker)] == marker
+        for marker in markers
+        for index in range(len(tokens) - len(marker) + 1)
+    )
+
+
+def _is_clearly_named_secret_material(filename: str) -> bool:
+    tokens = _normalized_filename_tokens(filename)
+    if set(tokens) & ALWAYS_BLOCK_NAME_TOKENS or _has_compound_marker(
+        tokens, ALWAYS_BLOCK_NAME_MARKERS
+    ):
+        return True
+    return bool(set(tokens) & GENERIC_TOKEN_MARKERS) and not _has_compound_marker(
+        tokens, PUBLIC_NAME_MARKERS
+    )
 
 
 def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> None:
@@ -257,14 +285,13 @@ def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> Non
 
         filename = lowered_parts[-1]
         suffix = PurePosixPath(filename).suffix
-        stem = PurePosixPath(filename).stem
         assert filename not in CACHE_FILENAMES
         assert not filename.endswith((".pyc", ".pyo"))
         assert not filename.startswith(".env")
         assert filename not in ENVIRONMENT_FILENAMES
         assert filename not in SECRET_KEY_FILENAMES
         assert not _is_canonical_credential_store(lowered_parts)
-        assert not (_is_clearly_named_secret_material(stem) and suffix not in CODE_SUFFIXES)
+        assert not (_is_clearly_named_secret_material(filename) and suffix not in CODE_SUFFIXES)
 
 
 def _assert_tracked_package_paths_without_pycache(paths: tuple[Path, ...]) -> None:
@@ -393,8 +420,21 @@ def test_package_path_classifier_rejects_extensionless_credential_material(path:
 @pytest.mark.parametrize(
     "path",
     (
+        "keys/client_private_key",
+        "keys/prod-private-key.pem",
+    ),
+)
+def test_package_path_classifier_rejects_private_key_material(path: str):
+    with pytest.raises(AssertionError):
+        _assert_safe_package_relative_paths((PurePosixPath(path),))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
         "trust/public-ca.crt",
         "keys/public-signing-key.pem",
+        "keys/jwt-token-public-key.pem",
     ),
 )
 def test_package_path_classifier_allows_benign_public_certificate_assets(path: str):
