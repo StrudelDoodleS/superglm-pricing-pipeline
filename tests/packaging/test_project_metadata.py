@@ -40,6 +40,11 @@ def test_distribution_metadata_and_runtime_version_have_one_authority():
     )
 
 
+def test_console_script_has_one_parser_authority():
+    project = _project()["project"]
+    assert project["scripts"] == {"pricing-pipeline": "pricing_pipeline.cli:main"}
+
+
 def test_dependency_contract_is_exact():
     project = _project()["project"]
     assert project["dependencies"] == [

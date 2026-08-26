@@ -16,6 +16,9 @@ dependencies = [
   "superglm>=0.26,<0.27",
 ]
 
+[project.scripts]
+pricing-pipeline = "pricing_pipeline.cli:main"
+
 [project.optional-dependencies]
 sqlserver = ["pyodbc"]
 azure = ["azure-identity", "pyodbc"]
