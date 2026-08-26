@@ -228,51 +228,69 @@ lock prefix. The scaffold README uses `uv sync --locked` followed by this comman
 and tells analysts to select that kernel. Kernel selection is still independently
 rechecked at remote-write time; a friendly display name is not evidence.
 
-`notebook execute` is the publication-grade governed runner for ingestion and
-training. It materializes a read-only `GovernedProjectSnapshot` from the exact
-CI-attested Git blobs—not mutable working-tree files—containing only the selected
-role notebook, config, SQL, `model_spec.py`, declared support files, and packaged
-launcher metadata. It starts a fresh verified child kernel with isolated Python,
-empty IPython/Jupyter profile directories, user site and `PYTHONPATH` disabled,
-fixed `sys.path`, an allowlisted environment, and cwd/root set to that snapshot.
-A Python audit hook and post-run origin ledger reject code/import/file execution
-from the original project, ignored/untracked files, user startup hooks, undeclared
-helpers, or any path outside the snapshot and verified installed-distribution
-payloads (apart from explicit artifact output and runtime-provider channels).
+`notebook execute` is the publication-grade governed supervisor for ingestion
+and training. Trusted packaged supervisor code materializes a read-only
+`GovernedProjectSnapshot` from the exact CI-attested Git blobs—not mutable
+working-tree files. Its role-specific closure contains only the selected
+notebook, config, SQL, `model_spec.py`, optional tracked `groupings.toml`,
+declared support files, and packaged launcher metadata. The supervisor never
+imports project modules or executes notebook cells.
 
-The runner executes saved cells in order with canonical typed parameters,
-captures exact source/transcript/runtime identities, and verifies snapshot and
-installed payloads again before atomically installing the frame or publishing
-the build. Notebooks 01 and 03 expose orchestration-only launcher cells that
-stream status; those cells have a stable `launcher_only` role, are omitted by the
-child, and contain a child-mode recursion guard. A launcher is orchestration
-only: it may parameterize and start the child but cannot perform ingestion,
-fitting, publication, or invoke another launcher when child mode is set.
+It starts a fresh unprivileged child kernel in an OS-enforced
+filesystem/process/network sandbox with isolated Python, empty IPython/Jupyter
+profile directories, user site and `PYTHONPATH` disabled, fixed `sys.path`, an
+allowlisted environment, and cwd/root set to that snapshot. The sandbox, a
+Python audit hook, and a post-run origin ledger reject code/import/file execution
+from the original project, ignored/untracked files, user startup hooks,
+undeclared helpers, or any path outside the snapshot and authenticated installed
+payloads. The worker has no direct database route, ambient company credential,
+remote connection, capability, or inheritable handle. Ingestion uses a narrow
+supervisor-owned read-only query RPC bound to the exact SQL/source/parameters;
+training receives only verified input artifacts.
 
-The child never consumes frame, model, grouping, split, or capability objects
-from the caller's interactive kernel. For a remote training run it reconstructs
-all of them from the verified frame envelope, canonical config/model factory,
-grouping TOML, and validation spec. The lowest remote publication boundary
-accepts only a runner-created `GovernedTrainingRequest` whose digest binds those
-freshly verified artifacts and identities; the existing convenient Python APIs
-that accept a mutable `frame` or `superglm_model` remain local/compatibility APIs
-and cannot accept or obtain a remote capability. A one-use child-bound
-`RemoteWriteCapability` is minted after the normal prompt and passed through a
-protected inherited OS channel rather than serialized.
+The child executes saved cells in order with canonical typed parameters and
+emits a versioned, immutable, content-addressed `GovernedExecutionResult` into a
+supervisor-owned output spool. For ingestion it contains a proposed frame
+envelope. For training it contains candidate artifacts, canonical primitive
+rating/export rows, receipts, and all claimed source/run identities. It contains
+no capability or credential. After the entire sandboxed process group exits,
+the supervisor revokes its channels, takes ownership of the spool, rehashes all
+bytes, verifies snapshot/transcript/runtime identities, and validates the result
+independently. Any required model deserialization or prediction check runs in a
+second capability-free sandbox; trusted supervisor code never unpickles or
+imports model-project output.
+
+Only after every check succeeds does the supervisor construct an opaque
+`VerifiedPublicationPlan` from validated typed primitives and identity digests.
+It atomically installs a verified frame or, for training, invokes the lowest
+remote writer with that plan and a supervisor-local one-use
+`RemoteWriteCapability`. The worker cannot construct the opaque plan, call the
+writer, inspect a capability, inherit a connection, or retain a process/channel
+after verification. A result is inert proposal data until this independent
+transition. Existing convenient Python APIs that accept a mutable `frame` or
+`superglm_model` remain local/compatibility APIs and cannot submit a governed
+result, construct a verified plan, or accept or obtain a remote capability.
+
+Notebooks 01 and 03 expose orchestration-only launcher cells that stream status;
+those cells have a stable `launcher_only` role, are omitted by the child, and
+contain a child-mode recursion guard. A launcher is orchestration only: it may
+parameterize and start the supervisor but cannot perform ingestion, fitting,
+publication, or invoke another launcher when child mode is set. The child never
+consumes frame, model, grouping, split, or capability objects from the caller's
+interactive kernel. For training it reconstructs them from the verified frame
+envelope, canonical config/model factory, grouping TOML, and validation spec.
 
 The isolation contract is tested and versioned: the child uses the verified
-project interpreter with Python's `-I` isolation (including the equivalent
-isolated ipykernel launch), has no user site, `PYTHONPATH`, IPython or Jupyter
-startup/config path, and exposes on `sys.path` only the read-only snapshot plus
-authenticated installed-distribution roots. The snapshot is
-constructed from attested Git blob objects, not by copying a clean-looking
-worktree, and contains every permitted local import as an explicitly declared,
-hashed support file. Attempts to import or execute from the original checkout,
-an ignored/untracked path, an undeclared tracked helper, cwd, or a user startup
-location fail closed. File/network access needed for the query, verified input
-artifact, artifact output, and registered runtime provider uses distinct
-allowlisted channels and is recorded in the execution ledger; those channels do
-not add arbitrary code roots.
+project interpreter with Python's `-I` isolation, including the equivalent
+isolated ipykernel launch, and exposes on `sys.path` only the read-only snapshot
+plus authenticated installed-distribution roots. The snapshot is constructed
+from attested Git blob objects, not by copying a clean-looking worktree, and
+contains every permitted local import as an explicitly declared, hashed support
+file. File access for verified input and result output and the supervisor's
+narrow read-only query RPC use distinct allowlisted channels recorded in the
+execution ledger; those channels add neither arbitrary code roots nor direct
+network/credential access. Registered runtime providers and remote connections
+execute only in trusted supervisor/broker code outside the notebook sandbox.
 
 For one compatibility release, existing public `scripts/*.py` commands become
 thin wrappers around packaged CLI functions. Demos, portable-source generation,
@@ -456,16 +474,20 @@ values, and every ambiguous case require an explicit analyst choice; registry
 rows are never renamed or backfilled by inference.
 
 The file never stores credentials or an `ALLOW_REMOTE_WRITES` switch. Remote
-authorization is deliberately outside governed source. Interactive notebooks
-obtain a short-lived, non-serializable `RemoteWriteCapability` by calling a
-library prompt that requires the operator to enter the expected database and a
-fixed destructive/write acknowledgement at execution time. Automation uses the
-equivalent explicit CLI flags. The capability is bound to the current process,
-connection identity, expected database, verified framework/project identities,
-and schema preflight, and every lowest-level remote mutation API requires it.
-Notebook source therefore remains unchanged between read-only and write runs;
-the capability and acknowledgement never enter notebook cells, files, model
-source identity, or artifacts.
+authorization is deliberately outside governed source. An interactive notebook
+launcher asks the separate trusted CLI supervisor to begin a governed action;
+the supervisor itself prompts the operator for the expected database and fixed
+destructive/write acknowledgement. Automation supplies the equivalent explicit
+flags to that supervisor. Only the supervisor or an administrator-owned broker
+obtains the short-lived, non-serializable `RemoteWriteCapability`; the notebook
+kernel and governed worker never receive it, its connection, a write credential,
+or an inheritable handle that can recover them. The capability is bound to the
+supervisor process, connection identity, expected database, verified
+framework/project/runtime identities, schema preflight, and one verified
+publication plan, and every lowest-level remote mutation API requires both. The
+notebook source therefore remains unchanged between read-only and write runs;
+the acknowledgement and capability never enter notebook cells, worker IPC,
+files, model-source identity, or artifacts.
 
 Governed `[model]`, `[source]`, `[roles]`, and `[validation]` values come only
 from tracked `pricing_model.toml` and cannot be overridden at execution time.
@@ -778,8 +800,10 @@ ROUTINE_EDIT explicitly. Interactive cells may build and inspect local models,
 but their caller-supplied frame and fitted-model objects are `LOCAL_UNBOUND` and
 cannot reach a remote mutation API. The final launcher invokes
 `notebook execute --role model_training`; only that fresh runner may reconstruct
-the verified frame, model, groupings, and validation realization and receive the
-child-bound `RemoteWriteCapability` used to publish.
+the verified frame, model, groupings, and validation realization. Its
+unprivileged child emits only the content-addressed result; the trusted
+supervisor independently verifies it, constructs the publication plan, and owns
+the capability used to publish.
 
 ### 04 — Model editor
 
@@ -993,12 +1017,13 @@ requires a later config-schema version rather than an implicit optimization.
 Notebook cells carry stable semantic-role metadata. Every code cell in notebooks
 01 and 03 is governed and hashed by default. The only exclusions are
 package-owned, checksum-verified operational cells whose roles are limited to
-display, credential acquisition, or the runtime `RemoteWriteCapability` prompt;
-editing such a cell removes its exemption and either includes it in the digest
-or blocks if it attempts to serialize authorization. Unknown or untagged custom
-code is always included. Cell IDs/tags select a role but never substitute for
-hashing source bytes. Execution state, entered prompt text, outputs, and
-execution counts are excluded.
+display, credential acquisition, or launching/status-streaming the trusted
+supervisor prompt; the cell itself never receives authorization. Editing such a
+cell removes its exemption and either includes it in the digest or blocks if it
+attempts to serialize authorization. Unknown or untagged custom code is always
+included. Cell IDs/tags select a role but never substitute for hashing source
+bytes. Execution state, entered prompt text, outputs, and execution counts are
+excluded.
 
 The semantic identity is model-kind aware. RAW binds the canonical raw model
 contract and excludes grouping decisions. ROUTINE_EDIT includes the canonical
@@ -1538,9 +1563,14 @@ It must not silently apply migrations from a notebook.
   caller's live frame/model/grouping objects cannot alter the resulting frame or
   publication.
 - Prove direct interactive/caller-supplied frame and fitted-model APIs remain
-  usable for `LOCAL_UNBOUND` work but cannot construct a
-  `GovernedTrainingRequest`, receive a remote capability, or reach the lowest
-  remote mutation boundary.
+  usable for `LOCAL_UNBOUND` work but cannot submit a
+  `GovernedExecutionResult`, construct a `VerifiedPublicationPlan`, receive a
+  remote capability, or reach the lowest remote mutation boundary.
+- Run adversarial notebook cells that inspect descriptors/environment/modules,
+  retain background tasks, import mutation internals, and attempt direct SQL
+  egress; prove the sandbox contains no capability/connection/write credential,
+  kills the whole process group before verification, and permits only the
+  supervisor to perform one write from a newly verified opaque plan.
 - Seed user-site and IPython/Jupyter startup hooks, `PYTHONPATH`, an ignored
   local module, an undeclared tracked helper, a cwd-shadow package, and a
   changed original checkout; prove isolated governed execution rejects or cannot
