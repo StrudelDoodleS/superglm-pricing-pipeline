@@ -147,6 +147,12 @@ def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
     options = _scaffold_options(namespace, root, config)
     try:
         result = legacy.scaffold_pricing_model(options)
+    except IsADirectoryError as exc:
+        managed_root = root / "pricing_models"
+        raise UserCommandError(
+            f"cannot write scaffold output under {managed_root}: "
+            "a managed output leaf is a directory; replace or remove it, then rerun"
+        ) from exc
     except (FileExistsError, NotADirectoryError) as exc:
         managed_root = root / "pricing_models"
         raise UserCommandError(

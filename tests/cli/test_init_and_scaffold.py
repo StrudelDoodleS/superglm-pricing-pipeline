@@ -110,8 +110,14 @@ def test_init_rejects_unsafe_existing_config_without_overwriting(
     _project(root)
     config = root / "pricing_scaffold.toml"
     external = tmp_path / "external.toml"
+    malformed_before = None
+    malformed_mtime_ns = None
     if config_kind == "malformed":
         config.write_text("not valid = [\n", encoding="utf-8")
+        fixed_mtime_ns = 1_700_000_000_000_000_000
+        os.utime(config, ns=(fixed_mtime_ns, fixed_mtime_ns))
+        malformed_before = config.read_bytes()
+        malformed_mtime_ns = config.stat().st_mtime_ns
     elif config_kind == "directory":
         config.mkdir()
     else:
@@ -124,6 +130,9 @@ def test_init_rejects_unsafe_existing_config_without_overwriting(
     assert config.is_dir() if config_kind == "directory" else config.exists()
     if before is not None:
         assert external.read_bytes() == before
+    if malformed_before is not None:
+        assert config.read_bytes() == malformed_before
+        assert config.stat().st_mtime_ns == malformed_mtime_ns
     assert "error:" in capsys.readouterr().err
 
 
@@ -212,6 +221,54 @@ def test_installed_scaffold_reports_a_managed_parent_file_as_a_user_precondition
     assert "directory" in error
     assert "failed unexpectedly" not in error
     assert managed_parent.read_bytes() == sentinel
+    assert {path.name for path in root.iterdir()} == {
+        "pricing_models",
+        "pricing_scaffold.toml",
+        "pyproject.toml",
+    }
+
+
+def test_installed_scaffold_force_reports_an_output_leaf_directory_without_mutation(
+    tmp_path: Path, capsys
+):
+    root = tmp_path / "model-repo"
+    _project(root)
+    assert cli.main(["init", "--root", str(root)]) == 0
+    capsys.readouterr()
+    package = root / "pricing_models" / "claim_frequency"
+    output_leaf = package / "__init__.py"
+    output_leaf.mkdir(parents=True)
+    sentinel = output_leaf / "keep.txt"
+    sentinel_bytes = b"do not replace this directory or its contents\n"
+    sentinel.write_bytes(sentinel_bytes)
+    fixed_mtime_ns = 1_700_000_000_000_000_000
+    os.utime(sentinel, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "CLAIM_FREQUENCY",
+                "--target-name",
+                "claim_count",
+                "--root",
+                str(root),
+                "--force",
+            ]
+        )
+        == 2
+    )
+
+    error = capsys.readouterr().err
+    assert "pricing_models" in error
+    assert "directory" in error
+    assert "failed unexpectedly" not in error
+    assert output_leaf.is_dir()
+    assert {path.name for path in output_leaf.iterdir()} == {"keep.txt"}
+    assert sentinel.read_bytes() == sentinel_bytes
+    assert sentinel.stat().st_mtime_ns == fixed_mtime_ns
+    assert {path.name for path in package.iterdir()} == {"__init__.py"}
     assert {path.name for path in root.iterdir()} == {
         "pricing_models",
         "pricing_scaffold.toml",
