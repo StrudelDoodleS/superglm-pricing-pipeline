@@ -22,6 +22,20 @@ def test_help_is_checkout_independent_and_does_not_import_optional_stacks(monkey
     assert "pricing-pipeline init" in capsys.readouterr().out
 
 
+def test_main_uses_process_arguments_and_returns_help_code(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pricing-pipeline", "--help"])
+
+    assert cli.main() == 0
+
+
+def test_subcommand_help_returns_zero_instead_of_raising():
+    assert cli.main(["init", "--help"]) == 0
+
+
+def test_invalid_command_returns_two_instead_of_raising():
+    assert cli.main(["unknown"]) == 2
+
+
 def test_console_and_module_forms_share_help(tmp_path: Path):
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)

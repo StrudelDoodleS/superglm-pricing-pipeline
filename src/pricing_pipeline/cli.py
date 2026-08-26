@@ -10,6 +10,18 @@ class UserCommandError(Exception):
     """A sanitized analyst-actionable command failure."""
 
 
+class _ParserExit(Exception):
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def exit(self, status: int = 0, message: str | None = None) -> None:
+        if message:
+            self._print_message(message, sys.stderr)
+        raise _ParserExit(status)
+
+
 _HANDLERS = {
     "init": "pricing_pipeline.scaffold.commands:run_init",
     "scaffold": "pricing_pipeline.scaffold.commands:run_scaffold",
@@ -22,7 +34,7 @@ def _load_handler(spec: str) -> Callable[[argparse.Namespace], tuple[str, ...]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="pricing-pipeline",
         description="pricing-pipeline init creates pricing_model.toml, then stops for review.",
     )
@@ -38,11 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    arguments = list(argv) if argv is not None else None
-    if arguments == ["--help"] or arguments == ["-h"]:
-        parser.print_help()
-        return 0
-    namespace = parser.parse_args(arguments)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        namespace = parser.parse_args(arguments)
+    except _ParserExit as exc:
+        return exc.status
     if namespace.command is None:
         parser.print_help(sys.stderr)
         return 2
