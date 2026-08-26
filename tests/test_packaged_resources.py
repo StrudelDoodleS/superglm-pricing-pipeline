@@ -72,12 +72,16 @@ def test_offline_bootstrap_works_outside_checkout(tmp_path, monkeypatch):
 
     engine, _paths = open_offline_sqlite(tmp_path / "database")
     with engine.connect() as connection:
-        assert connection.execute(
-            text("SELECT COUNT(*) FROM pricing.MODEL_RUN")
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT COUNT(*) FROM pricing.MODEL_MONITOR_VARIANT")
-        ).scalar_one() == 4
-        assert connection.execute(
-            text("SELECT COUNT(*) FROM pricing.V_CURRENT_DEPLOYED_RELATIVITY")
-        ).scalar_one() == 0
+        assert connection.execute(text("SELECT COUNT(*) FROM pricing.MODEL_RUN")).scalar_one() == 0
+        assert (
+            connection.execute(
+                text("SELECT COUNT(*) FROM pricing.MODEL_MONITOR_VARIANT")
+            ).scalar_one()
+            == 4
+        )
+        assert (
+            connection.execute(
+                text("SELECT COUNT(*) FROM pricing.V_CURRENT_DEPLOYED_RELATIVITY")
+            ).scalar_one()
+            == 0
+        )

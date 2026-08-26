@@ -137,6 +137,8 @@ PUBLIC_NAME_MARKERS = {
     ("publickey",),
 }
 CODE_SUFFIXES = {".py", ".pyi"}
+INTERFACE_FILENAMES = {"py.typed"}
+DIST_INFO_FILENAMES = {"METADATA", "WHEEL", "RECORD"}
 CANONICAL_CREDENTIAL_STORE_PATHS = {
     (".aws", "credentials"),
     (".azure", "accesstokens.json"),
@@ -153,9 +155,16 @@ def _assert_wheel_member_layout(names: list[str]) -> None:
     assert len(names) == len(set(names)) == len({name.casefold() for name in names})
     assert all(not PurePosixPath(name).is_absolute() for name in names)
     assert all(".." not in PurePosixPath(name).parts for name in names)
-    _assert_safe_package_relative_paths(
-        tuple(PurePosixPath(name).relative_to(PACKAGE_PREFIX) for name in names if name.startswith(PACKAGE_PREFIX))
+    package_paths = tuple(
+        PurePosixPath(name).relative_to(PACKAGE_PREFIX)
+        for name in names
+        if name.startswith(PACKAGE_PREFIX)
     )
+    _assert_release_package_relative_paths(package_paths)
+    _assert_resource_inventory(set(names))
+    assert {name for name in names if name.startswith(f"{DIST_INFO}/")} == {
+        f"{DIST_INFO}/{filename}" for filename in DIST_INFO_FILENAMES
+    }
 
 
 def _tracked_package_files() -> tuple[Path, ...]:
@@ -203,7 +212,9 @@ def _expected_resource_names() -> set[str]:
 
 def _assert_resource_inventory(names: set[str]) -> None:
     assert len(MIGRATION_FILES) == 38
-    assert {name for name in names if name.startswith(RESOURCE_PREFIX)} == _expected_resource_names()
+    assert {
+        name for name in names if name.startswith(RESOURCE_PREFIX)
+    } == _expected_resource_names()
 
 
 def _assert_metadata_requirements(metadata) -> None:
@@ -237,9 +248,9 @@ def _assert_record_hashes_and_sizes(archive: ZipFile) -> None:
         assert algorithm == "sha256"
         contents = archive.read(path)
         padding = "=" * (-len(encoded_digest) % 4)
-        assert base64.urlsafe_b64decode(encoded_digest + padding) == hashlib.sha256(
-            contents
-        ).digest()
+        assert (
+            base64.urlsafe_b64decode(encoded_digest + padding) == hashlib.sha256(contents).digest()
+        )
         assert size == str(len(contents))
 
 
@@ -294,11 +305,22 @@ def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> Non
         assert not (_is_clearly_named_secret_material(filename) and suffix not in CODE_SUFFIXES)
 
 
+def _assert_release_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> None:
+    _assert_safe_package_relative_paths(paths)
+    expected_resources = _expected_resource_names()
+    for path in paths:
+        if path.parts[0] == "resources":
+            assert f"{PACKAGE_PREFIX}{path.as_posix()}" in expected_resources
+            continue
+
+        assert path.suffix in CODE_SUFFIXES or path.name in INTERFACE_FILENAMES
+
+
 def _assert_tracked_package_paths_without_pycache(paths: tuple[Path, ...]) -> None:
     relative_paths = tuple(
         PurePosixPath(path.as_posix()).relative_to("src/pricing_pipeline") for path in paths
     )
-    _assert_safe_package_relative_paths(relative_paths)
+    _assert_release_package_relative_paths(relative_paths)
 
 
 def _metadata_with_requirements(*additional_requirements: str):
@@ -307,7 +329,9 @@ def _metadata_with_requirements(*additional_requirements: str):
         requirements.extend(
             f'Requires-Dist: {dependency}; extra == "{extra}"' for dependency in dependencies
         )
-    return BytesParser().parsebytes("\n".join(requirements + list(additional_requirements)).encode())
+    return BytesParser().parsebytes(
+        "\n".join(requirements + list(additional_requirements)).encode()
+    )
 
 
 def _record_digest(contents: bytes) -> str:
@@ -381,6 +405,40 @@ def test_resource_inventory_rejects_unexpected_resource_root_file():
         _assert_resource_inventory(_clean_resource_names() | {f"{RESOURCE_PREFIX}scratch.sqlite"})
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "src/pricing_pipeline/data/confidential_customer_extract.parquet",
+        "src/pricing_pipeline/models/fitted_tariff.joblib",
+        "src/pricing_pipeline/artifacts/training_rows.csv",
+        "src/pricing_pipeline/state/runtime.sqlite",
+        "src/pricing_pipeline/assets/unreviewed.json",
+        "src/pricing_pipeline/assets/unreviewed.txt",
+        "src/pricing_pipeline/assets/unreviewed.bin",
+        "src/pricing_pipeline/resources/unreviewed.json",
+    ),
+)
+def test_package_source_validator_rejects_unreviewed_release_artifacts(path: str):
+    with pytest.raises(AssertionError):
+        _assert_tracked_package_paths_without_pycache((Path(path),))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "src/pricing_pipeline/infra/release_contract.py",
+        "src/pricing_pipeline/typing/release_contract.pyi",
+        "src/pricing_pipeline/py.typed",
+        "src/pricing_pipeline/resources/__init__.py",
+        "src/pricing_pipeline/resources/migrations/V001__dataset_manifest_cv.sql",
+        "src/pricing_pipeline/resources/offline_sqlite/pricing.sql",
+        "src/pricing_pipeline/resources/scaffold/__init__.py",
+    ),
+)
+def test_package_source_validator_allows_reviewed_release_inventory(path: str):
+    _assert_tracked_package_paths_without_pycache((Path(path),))
+
+
 def test_metadata_validator_rejects_unknown_conditional_requirement():
     metadata = _metadata_with_requirements(
         'Requires-Dist: unexpected-package; python_version < "3.15"'
@@ -437,13 +495,46 @@ def test_package_path_classifier_rejects_private_key_material(path: str):
         "keys/jwt-token-public-key.pem",
     ),
 )
-def test_package_path_classifier_allows_benign_public_certificate_assets(path: str):
-    _assert_safe_package_relative_paths((PurePosixPath(path),))
+def test_secret_material_classifier_allows_benign_public_certificate_assets(path: str):
+    assert not _is_clearly_named_secret_material(PurePosixPath(path).name)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "trust/public-ca.crt",
+        "keys/public-signing-key.pem",
+        "keys/jwt-token-public-key.pem",
+    ),
+)
+def test_package_source_validator_rejects_unreviewed_public_certificate_assets(path: str):
+    with pytest.raises(AssertionError):
+        _assert_tracked_package_paths_without_pycache((Path("src/pricing_pipeline") / path,))
 
 
 def test_wheel_member_validator_rejects_environment_file():
     with pytest.raises(AssertionError):
         _assert_wheel_member_layout(["pricing_pipeline/.env.production"])
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "secrets.env",
+        "confidential_dataset.parquet",
+    ),
+)
+def test_wheel_member_validator_rejects_unknown_dist_info_members(filename: str):
+    with pytest.raises(AssertionError):
+        _assert_wheel_member_layout(
+            [
+                "pricing_pipeline/__init__.py",
+                f"{DIST_INFO}/METADATA",
+                f"{DIST_INFO}/WHEEL",
+                f"{DIST_INFO}/RECORD",
+                f"{DIST_INFO}/{filename}",
+            ]
+        )
 
 
 def test_wheel_has_only_package_and_dist_info(wheel_path: Path):

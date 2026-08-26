@@ -248,6 +248,17 @@ def test_env_example_does_not_ship_invalid_fernet_placeholder():
     assert "Fernet.generate_key()" in env_example
 
 
+def test_environment_examples_do_not_advertise_checkout_resource_overrides():
+    for path in [Path(".env.example"), Path(".env.nodocker.example")]:
+        variable_names = {
+            line.partition("=")[0]
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#") and "=" in line
+        }
+        assert "PRICING_MIGRATIONS_DIR" not in variable_names
+        assert "PRICING_SCHEMA_DIR" not in variable_names
+
+
 def test_superglm_runtime_dependency_uses_pypi_without_git_provenance():
     requirements = Path("requirements.txt").read_text(encoding="utf-8").splitlines()
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))

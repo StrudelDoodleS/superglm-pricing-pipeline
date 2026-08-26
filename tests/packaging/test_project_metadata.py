@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pricing_pipeline
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -34,9 +33,11 @@ def test_distribution_metadata_and_runtime_version_have_one_authority():
     assert project["name"] == "airflow-superglm-builder"
     assert project["version"] == "0.2.0"
     assert project["requires-python"] == ">=3.14"
-    assert pricing_pipeline.__version__ == importlib.metadata.version(
-        "airflow-superglm-builder"
-    ) == "0.2.0"
+    assert (
+        pricing_pipeline.__version__
+        == importlib.metadata.version("airflow-superglm-builder")
+        == "0.2.0"
+    )
 
 
 def test_dependency_contract_is_exact():
