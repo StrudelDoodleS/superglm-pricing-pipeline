@@ -190,6 +190,11 @@ Templates must not depend on the framework checkout.
 
 ### Public CLI
 
+The initial configuration and scaffold lifecycle is refined by
+`2026-08-27-init-scaffold-cli-amendment.md`. That amendment is authoritative
+where it adds `pricing-pipeline init`, the `draft` configuration state, and the
+Python-only local fallback.
+
 Add one console entry point:
 
 ```toml
@@ -200,6 +205,7 @@ pricing-pipeline = "pricing_pipeline.cli:main"
 The supported interface is:
 
 ```text
+pricing-pipeline init ...
 pricing-pipeline scaffold ...
 pricing-pipeline scaffold --upgrade --dry-run ...
 pricing-pipeline environment verify --locked ...
