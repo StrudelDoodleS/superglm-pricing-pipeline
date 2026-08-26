@@ -128,9 +128,16 @@ SECRET_BASENAMES = {
     "service_account",
     "service-account",
 }
-SECRET_CONFIG_SUFFIXES = {".ini", ".json", ".toml", ".txt", ".yaml", ".yml"}
 SECRET_KEY_FILENAMES = {"id_dsa", "id_ecdsa", "id_ed25519", "id_rsa", ".netrc", ".pypirc"}
-SECRET_KEY_SUFFIXES = {".cer", ".crt", ".der", ".key", ".p12", ".pem", ".pfx"}
+SECRET_NAME_TOKENS = {"credential", "credentials", "secret", "secrets", "token", "tokens"}
+CODE_SUFFIXES = {".py", ".pyi"}
+CANONICAL_CREDENTIAL_STORE_PATHS = {
+    (".aws", "credentials"),
+    (".azure", "accesstokens.json"),
+    (".config", "gcloud", "application_default_credentials.json"),
+    (".docker", "config.json"),
+    (".kube", "config"),
+}
 
 
 def _assert_wheel_member_layout(names: list[str]) -> None:
@@ -230,6 +237,18 @@ def _assert_record_hashes_and_sizes(archive: ZipFile) -> None:
         assert size == str(len(contents))
 
 
+def _is_canonical_credential_store(parts: tuple[str, ...]) -> bool:
+    return any(
+        len(parts) >= len(store) and parts[-len(store) :] == store
+        for store in CANONICAL_CREDENTIAL_STORE_PATHS
+    )
+
+
+def _is_clearly_named_secret_material(stem: str) -> bool:
+    tokens = set(stem.replace("-", "_").split("_"))
+    return stem in SECRET_BASENAMES or bool(tokens & SECRET_NAME_TOKENS)
+
+
 def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> None:
     for path in paths:
         lowered_parts = tuple(part.casefold() for part in path.parts)
@@ -244,8 +263,8 @@ def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> Non
         assert not filename.startswith(".env")
         assert filename not in ENVIRONMENT_FILENAMES
         assert filename not in SECRET_KEY_FILENAMES
-        assert suffix not in SECRET_KEY_SUFFIXES
-        assert not (stem in SECRET_BASENAMES and suffix in SECRET_CONFIG_SUFFIXES)
+        assert not _is_canonical_credential_store(lowered_parts)
+        assert not (_is_clearly_named_secret_material(stem) and suffix not in CODE_SUFFIXES)
 
 
 def _assert_tracked_package_paths_without_pycache(paths: tuple[Path, ...]) -> None:
@@ -357,6 +376,29 @@ def test_metadata_validator_rejects_unknown_conditional_requirement():
 def test_package_source_validator_rejects_cache_environment_and_secret_files(path: str):
     with pytest.raises(AssertionError):
         _assert_tracked_package_paths_without_pycache((Path(path),))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        ".aws/credentials",
+        "secrets/api_token",
+    ),
+)
+def test_package_path_classifier_rejects_extensionless_credential_material(path: str):
+    with pytest.raises(AssertionError):
+        _assert_safe_package_relative_paths((PurePosixPath(path),))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "trust/public-ca.crt",
+        "keys/public-signing-key.pem",
+    ),
+)
+def test_package_path_classifier_allows_benign_public_certificate_assets(path: str):
+    _assert_safe_package_relative_paths((PurePosixPath(path),))
 
 
 def test_wheel_member_validator_rejects_environment_file():
