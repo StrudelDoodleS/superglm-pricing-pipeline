@@ -100,6 +100,17 @@ RESOURCE_PREFIX = "pricing_pipeline/resources/"
 MIGRATIONS_PREFIX = f"{RESOURCE_PREFIX}migrations/"
 OFFLINE_SQLITE_PREFIX = f"{RESOURCE_PREFIX}offline_sqlite/"
 SCAFFOLD_PREFIX = f"{RESOURCE_PREFIX}scaffold/"
+SCAFFOLD_TEMPLATE = b"""# Connection names only. Keep credentials in the private runtime module or its secret provider.
+
+[notebook_defaults]
+database_mode = "local"
+runtime_module = ""
+expected_remote_database = ""
+
+[manual_edit_defaults]
+source_selector = "deployed"
+carry_forward = true
+"""
 CACHE_DIRECTORY_NAMES = {
     ".cache",
     ".hypothesis",
@@ -138,7 +149,7 @@ PUBLIC_NAME_MARKERS = {
 }
 CODE_SUFFIXES = {".py", ".pyi"}
 INTERFACE_FILENAMES = {"py.typed"}
-DIST_INFO_FILENAMES = {"METADATA", "WHEEL", "RECORD"}
+DIST_INFO_FILENAMES = {"METADATA", "WHEEL", "RECORD", "entry_points.txt"}
 CANONICAL_CREDENTIAL_STORE_PATHS = {
     (".aws", "credentials"),
     (".azure", "accesstokens.json"),
@@ -205,6 +216,7 @@ def _expected_resource_names() -> set[str]:
     return {
         f"{RESOURCE_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}__init__.py",
+        f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
     }
@@ -556,9 +568,10 @@ def test_wheel_matches_tracked_package_files_byte_for_byte(wheel_path: Path):
             assert archive.read(member) == (ROOT / source_path).read_bytes()
 
 
-def test_wheel_contains_all_packaged_sql_resources_and_scaffold(wheel_path: Path):
+def test_wheel_contains_the_exact_reviewed_resource_inventory(wheel_path: Path):
     with ZipFile(wheel_path) as archive:
         _assert_resource_inventory(set(archive.namelist()))
+        assert archive.read(f"{SCAFFOLD_PREFIX}pricing_scaffold.toml") == SCAFFOLD_TEMPLATE
 
 
 def test_wheel_metadata_has_exact_project_requirements_and_extras(wheel_path: Path):

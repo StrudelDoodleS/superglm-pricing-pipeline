@@ -1,0 +1,10 @@
+# Connection names only. Keep credentials in the private runtime module or its secret provider.
+
+[notebook_defaults]
+database_mode = "local"
+runtime_module = ""
+expected_remote_database = ""
+
+[manual_edit_defaults]
+source_selector = "deployed"
+carry_forward = true

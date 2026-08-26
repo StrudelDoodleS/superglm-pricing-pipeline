@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +40,50 @@ if direct_url is not None:
     assert direct_url_payload.get("dir_info", {}).get("editable") is not True
     assert str(checkout) not in direct_url
 assert all(_is_outside_checkout(entry, checkout) for entry in sys.path if entry)
+assert importlib.util.find_spec("ipykernel") is None
+assert importlib.util.find_spec("pyodbc") is None
+
+consumer = Path.cwd()
+(consumer / "pyproject.toml").write_text(
+    '[project]\nname = "clean-wheel-consumer"\nversion = "0.1.0"\n',
+    encoding="utf-8",
+)
+init_result = subprocess.run(
+    [sys.executable, "-I", "-m", "pricing_pipeline", "init", "--root", str(consumer)],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+assert init_result.returncode == 0, init_result.stderr
+assert str((consumer / "pricing_scaffold.toml").resolve()) in init_result.stdout
+scaffold_result = subprocess.run(
+    [
+        sys.executable,
+        "-I",
+        "-m",
+        "pricing_pipeline",
+        "scaffold",
+        "--model-name",
+        "CLEAN_WHEEL_MODEL",
+        "--target-name",
+        "claim_count",
+        "--root",
+        str(consumer),
+    ],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+assert scaffold_result.returncode == 0, scaffold_result.stderr
+package = consumer / "pricing_models" / "clean_wheel_model"
+assert tuple(sorted(path.name for path in package.glob("*.ipynb"))) == (
+    "01_data_ingestion.ipynb",
+    "02_model_training.ipynb",
+    "03_model_editor.ipynb",
+    "04_manual_adjustment.ipynb",
+    "05_model_deployment.ipynb",
+    "99_scratch_work.ipynb",
+)
 
 root = Path(os.environ["SMOKE_DATABASE_ROOT"])
 engine, _paths = open_offline_sqlite(root)

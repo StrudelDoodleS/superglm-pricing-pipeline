@@ -4,6 +4,7 @@ import argparse
 import importlib
 import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 
 class UserCommandError(Exception):
@@ -36,15 +37,38 @@ def _load_handler(spec: str) -> Callable[[argparse.Namespace], tuple[str, ...]]:
 def build_parser() -> argparse.ArgumentParser:
     parser = _ArgumentParser(
         prog="pricing-pipeline",
-        description="pricing-pipeline init creates pricing_model.toml, then stops for review.",
+        description=(
+            "Run pricing-pipeline init, edit the config, then scaffold a pricing-model workspace."
+        ),
     )
     subcommands = parser.add_subparsers(dest="command")
-    for name, help_text in (
-        ("init", "create pricing_model.toml, then stop for review"),
-        ("scaffold", "create the configured standalone notebook workflow"),
-    ):
-        command = subcommands.add_parser(name, help=help_text)
-        command.add_argument("--root", type=str, default=".")
+    init = subcommands.add_parser(
+        "init",
+        help="create pricing_scaffold.toml, then stop for review",
+    )
+    init.add_argument("--root", type=Path, default=Path("."))
+    scaffold = subcommands.add_parser(
+        "scaffold",
+        help="create the configured standalone notebook workflow",
+    )
+    scaffold.add_argument("--model-name", required=True)
+    scaffold.add_argument("--target-name", required=True)
+    scaffold.add_argument("--model-label")
+    scaffold.add_argument("--model-type", default="superglm_poisson")
+    scaffold.add_argument("--deployment-slot")
+    scaffold.add_argument("--package-name")
+    scaffold.add_argument("--root", type=Path, default=Path("."))
+    scaffold.add_argument("--config", type=Path)
+    scaffold.add_argument("--database-mode", choices=("local", "remote"))
+    scaffold.add_argument("--runtime-module")
+    scaffold.add_argument("--expected-remote-database")
+    scaffold.add_argument("--manual-edit-source", choices=("deployed", "latest"))
+    scaffold.add_argument(
+        "--manual-edit-carry-forward",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    scaffold.add_argument("--force", action="store_true")
     return parser
 
 
@@ -63,7 +87,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except UserCommandError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except Exception:
+    except Exception:  # noqa: BLE001 - sanitize unexpected command failures at the CLI boundary
         print(
             "error: pricing-pipeline failed unexpectedly; rerun with your normal support logging",
             file=sys.stderr,

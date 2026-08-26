@@ -1,1 +1,1 @@
-"""Reserved package boundary for future scaffold resources."""
+"""Static resources for initializing the installed scaffold command."""

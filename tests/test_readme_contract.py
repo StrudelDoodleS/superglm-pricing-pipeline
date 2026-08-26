@@ -42,6 +42,36 @@ def test_root_readme_is_a_concise_entry_point():
     assert "pricing_useful_tables" not in readme
 
 
+def test_root_readme_documents_the_installed_scaffold_flow_and_dependency_ownership():
+    readme = _read(ROOT_README)
+    ordered = (
+        "uv init --bare --python 3.14",
+        'uv add "airflow-superglm-builder @ git+ssh://git@HOST/TEAM/REPOSITORY.git" --tag v0.2.0',
+        "uv run pricing-pipeline init",
+        "# edit pricing_scaffold.toml",
+        "uv run pricing-pipeline scaffold",
+        "--model-name CLAIM_FREQUENCY",
+        "--target-name claim_count",
+        "uv add --dev ipykernel",
+    )
+    positions = [readme.index(value) for value in ordered]
+
+    assert positions == sorted(positions)
+    for expected in (
+        "python -m pricing_pipeline init",
+        "python -m pricing_pipeline scaffold",
+        "only works after installation",
+        "do not require uv",
+        "model repository owns `ipykernel`",
+        "private runtime package owns SQL driver and authentication dependencies",
+        "installed private Python module",
+        "get_engine(database=None)",
+        "contains no credentials",
+        "legacy checkout command",
+    ):
+        assert expected in readme
+
+
 def test_notebook_guide_documents_boundaries_and_public_functions():
     guide = _read(NOTEBOOK_GUIDE)
 

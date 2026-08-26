@@ -1,18 +1,37 @@
 # SuperGLM pricing workbench
 
-This repository is a notebook-first path from model data to a reviewed,
+This package provides a notebook-first path from model data to a reviewed,
 immutable SQL rating package. Airflow is not required for the current workflow.
 
-## Create a model workspace
+## Start a model repository
 
 ```bash
-uv sync
-cp pricing_scaffold.example.toml pricing_scaffold.toml
-uv run python scripts/scaffold_pricing_model.py \
+uv init --bare --python 3.14
+uv add "airflow-superglm-builder @ git+ssh://git@HOST/TEAM/REPOSITORY.git" --tag v0.2.0
+uv run pricing-pipeline init
+# edit pricing_scaffold.toml
+uv run pricing-pipeline scaffold \
   --model-name CLAIM_FREQUENCY \
-  --target-name claim_count \
-  --model-label "Claim frequency"
+  --target-name claim_count
+uv add --dev ipykernel
 ```
+
+Use the real internal Git host, team, and repository in the dependency URL.
+The plain-Python fallback, which only works after installation, is:
+
+```bash
+python -m pricing_pipeline init
+python -m pricing_pipeline scaffold \
+  --model-name CLAIM_FREQUENCY \
+  --target-name claim_count
+```
+
+`init` and a local scaffold do not require uv. The model repository owns `ipykernel`;
+a private runtime package owns SQL driver and authentication dependencies.
+
+`runtime_module` is the installed private Python module that exposes
+`get_engine(database=None)`. The TOML contains no credentials: keep them in
+that module's secret provider.
 
 The scaffold creates:
 
@@ -26,63 +45,36 @@ pricing_models/claim_frequency/
 └── 99_scratch_work.ipynb
 ```
 
-Notebook names follow `xx_name_name2.ipynb`.
-
 | Notebook | Purpose |
 |---|---|
-| `01_data_ingestion.ipynb` | Build the governed model frame and record its data-as-at date. |
-| `02_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`, candidates. |
-| `03_model_editor.ipynb` | Optionally edit a selected published package and publish an `EDITOR_EDIT`. |
-| `04_manual_adjustment.ipynb` | Apply replayable business factors and publish a `MANUAL_EDIT`; deployment is optional and explicit. |
-| `05_model_deployment.ipynb` | Review and deploy one selected published package. |
-| `99_scratch_work.ipynb` | Disposable data, feature, model, and grouping experiments. It cannot publish or deploy. |
+| `01_data_ingestion.ipynb` | Build the governed model frame and record its Data-as-at date. |
+| `02_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
+| `03_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
+| `04_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |
+| `05_model_deployment.ipynb` | Review and deploy one selected package. |
+| `99_scratch_work.ipynb` | Run disposable experiments; it cannot publish or deploy. |
 
-The reference workflow is in
-[`pricing_models/mtpl_frequency`](pricing_models/mtpl_frequency).
+`pricing_scaffold.toml` supplies connection names and safe notebook defaults.
+An explicit `--config` wins, and explicit command-line options win over the
+file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
+notebooks set it to `False`.
 
-The editor is an optional baseline/refresh gate. Once that selected package is
-deployed, controlled weekly monitoring can compare static scoring, a
-coefficient-only frozen refit, a fixed-knot lambda refit, and a fully adaptive
-refit. Monitoring rows are evidence only and cannot be deployed as packages.
-
-## Scaffold defaults
-
-`pricing_scaffold.toml` at `--root` is discovered automatically. An explicit
-`--config` wins; explicit command-line options win over the file.
-
-```toml
-[notebook_defaults]
-database_mode = "remote"
-runtime_module = "work_runtime.database"
-expected_remote_database = "PricingAudit"
-
-[manual_edit_defaults]
-source_selector = "deployed"
-carry_forward = true
-```
-
-Only the five keys shown above are accepted. Do not put credentials in this file.
-`ALLOW_REMOTE_WRITES` is deliberately not configurable and every generated
-notebook starts with it set to `False`.
+For a legacy checkout command, copy `pricing_scaffold.example.toml` to
+`pricing_scaffold.toml` and run `uv run python scripts/scaffold_pricing_model.py`
+with the same model and target options.
 
 ## Important rules
 
-- Data-as-at is part of dataset identity, not a fit or deployment timestamp.
-- Grouping happens in Python. SQL stores the completed model and its evidence.
-- An equivalent successful model is detected in Python before SQL staging.
-- `RAW`, `ROUTINE_EDIT`, `EDITOR_EDIT`, and `MANUAL_EDIT` are distinct model kinds.
-- Monitoring always freezes groupings, levels, specials, basis shape, and
-  monotonic constraints from the exact deployed baseline.
-- Every monitoring fit is checked again after fitting. Protected lambdas,
-  lambda history, knot locations/boundaries, and model structure must verify
-  exactly before SQL persistence is allowed.
-- Persisted monitoring starts from a freshly re-verified deployed candidate and
-  binds the exact observation frame, fit configuration, and complete result
-  evidence; raw fitted objects are simulation-only.
-- Local mode uses persistent SQLite audit databases; editor/manual publication
-  and deployment require guarded remote mode.
-- Save notebooks before building: source cells are part of model evidence;
-  outputs and execution counts are not.
+- Data-as-at is dataset identity, not a fit or deployment timestamp.
+- Grouping happens in Python; SQL stores the completed model and evidence.
+- Equivalent successful models are detected before SQL staging.
+- Local mode uses persistent SQLite audit databases; guarded remote mode is
+  required for editor/manual publication and deployment.
+- Save notebooks before building: source cells are evidence, while outputs and
+  execution counts are not.
+
+The reference workflow remains in
+[`pricing_models/mtpl_frequency`](pricing_models/mtpl_frequency).
 
 ## Guides
 
@@ -90,17 +82,18 @@ notebook starts with it set to `False`.
 - [SQL schema, relationships, triggers, views, and migration runbook](docs/sql/README.md)
 - [Script command index](scripts/README.md)
 
-For an underwriter-facing comparison of already-scored models, use
-`scripts/build_underwriter_report.py` with the generic
-`docs/notebooks/underwriter_report.example.toml`. It produces one offline HTML
+For an underwriter comparison of already-scored models, use
+`scripts/build_underwriter_report.py` with
+`docs/notebooks/underwriter_report.example.toml`. It creates one offline HTML
 file and does not write models or diagnostics to SQL.
 
-The packaged `pricing_pipeline.resources.migrations` chain is the authoritative SQL Server
-schema; inspect it with `pricing_pipeline.resources.migration_root()` and do not copy runnable DDL.
+The packaged `pricing_pipeline.resources.migrations` chain is the authoritative
+SQL Server schema; inspect it with `pricing_pipeline.resources.migration_root()`
+and do not copy runnable DDL.
 
 ## Work database setup
 
-For an existing database, apply only missing migrations:
+Apply only missing migrations to an existing database:
 
 ```bash
 uv run python scripts/apply_schema.py \
@@ -108,8 +101,8 @@ uv run python scripts/apply_schema.py \
   --expected-database PricingAudit
 ```
 
-Use the reset command only for a disposable schema. It is dry-run by default;
-the destructive command and checks are in the [SQL runbook](docs/sql/README.md).
+The destructive reset command and safeguards are in the [SQL
+runbook](docs/sql/README.md).
 
 ## Verify
 
@@ -119,6 +112,6 @@ uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
 uv build --force-pep517 --sdist --wheel --clear --out-dir dist
 ```
 
-`uv run` uses the editable development install; only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works from a clean environment outside this checkout.
-
-Do not commit model-local `.local/` state, notebook outputs, credentials, or private work runtime modules.
+Only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works
+outside this checkout. Do not commit model-local `.local/` state, notebook
+outputs, credentials, or private work runtime modules.
