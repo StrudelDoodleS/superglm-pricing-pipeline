@@ -1,4 +1,3 @@
-from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -8,6 +7,7 @@ from pricing_pipeline.infra.offline_sqlite import (
     apply_offline_ddl,
     sqlite_engine_with_offline_schemas,
 )
+from pricing_pipeline.resources import offline_sqlite_root
 
 
 def test_offline_views_expose_fold_metrics_and_final_relativity(tmp_path):
@@ -803,11 +803,9 @@ def test_offline_upgrade_extends_existing_model_kind_check_for_manual_edits(tmp_
             "mlops": tmp_path / "mlops.sqlite",
         }
     )
-    legacy_pricing_sql = (
-        Path("db/offline_sqlite/pricing.sql")
-        .read_text(encoding="utf-8")
-        .replace(", 'MANUAL_EDIT'", "")
-    )
+    legacy_pricing_sql = offline_sqlite_root().joinpath("pricing.sql").read_text(
+        encoding="utf-8"
+    ).replace(", 'MANUAL_EDIT'", "")
     raw_connection = engine.raw_connection()
     try:
         raw_connection.executescript(legacy_pricing_sql)
@@ -970,11 +968,9 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
             "mlops": tmp_path / "mlops.sqlite",
         }
     )
-    legacy_pricing_sql = (
-        Path("db/offline_sqlite/pricing.sql")
-        .read_text(encoding="utf-8")
-        .replace(", 'MANUAL_EDIT'", "")
-    )
+    legacy_pricing_sql = offline_sqlite_root().joinpath("pricing.sql").read_text(
+        encoding="utf-8"
+    ).replace(", 'MANUAL_EDIT'", "")
     raw_connection = engine.raw_connection()
     try:
         raw_connection.executescript(legacy_pricing_sql)

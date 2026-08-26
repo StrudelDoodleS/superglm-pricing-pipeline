@@ -11,6 +11,7 @@ from pricing_pipeline.infra.migrations import (
     split_sql_server_batches,
 )
 from pricing_pipeline.infra.schema import SchemaNames
+from pricing_pipeline.resources import offline_sqlite_root
 
 
 def test_candidate_effective_date_becomes_nullable():
@@ -536,7 +537,7 @@ def test_package_specific_scorer_matches_interactions_by_ordered_components():
 
 
 def test_offline_model_run_mirrors_candidate_artifact_columns():
-    source = Path("db/offline_sqlite/pricing.sql").read_text(encoding="utf-8")
+    source = offline_sqlite_root().joinpath("pricing.sql").read_text(encoding="utf-8")
 
     for column in (
         "candidate_artifact_path",
@@ -551,13 +552,13 @@ def test_offline_model_run_mirrors_candidate_artifact_columns():
 
 
 def test_offline_model_run_mirrors_parent_lineage_column():
-    source = Path("db/offline_sqlite/pricing.sql").read_text(encoding="utf-8")
+    source = offline_sqlite_root().joinpath("pricing.sql").read_text(encoding="utf-8")
 
     assert "parent_model_run_id" in source
 
 
 def test_offline_model_run_mirrors_rating_workbook_digest_column():
-    source = Path("db/offline_sqlite/pricing.sql").read_text(encoding="utf-8")
+    source = offline_sqlite_root().joinpath("pricing.sql").read_text(encoding="utf-8")
     upgrader = Path("src/pricing_pipeline/infra/offline_sqlite.py").read_text(encoding="utf-8")
 
     assert "rating_workbook_sha256 TEXT NOT NULL" in source
