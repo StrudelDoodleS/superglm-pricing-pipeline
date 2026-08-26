@@ -9,6 +9,8 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
+import pytest
+
 from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,6 +96,53 @@ OPTIONAL_REQUIREMENTS = {
     "scratch": ("catboost", "lightgbm", "matplotlib", "scipy", "xgboost"),
     "mlflow": ("mlflow",),
 }
+RESOURCE_PREFIX = "pricing_pipeline/resources/"
+MIGRATIONS_PREFIX = f"{RESOURCE_PREFIX}migrations/"
+OFFLINE_SQLITE_PREFIX = f"{RESOURCE_PREFIX}offline_sqlite/"
+SCAFFOLD_PREFIX = f"{RESOURCE_PREFIX}scaffold/"
+CACHE_DIRECTORY_NAMES = {
+    ".cache",
+    ".hypothesis",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "cache",
+}
+CACHE_FILENAMES = {".cache"}
+ENVIRONMENT_FILENAMES = {
+    "environment.json",
+    "environment.toml",
+    "environment.yaml",
+    "environment.yml",
+}
+SECRET_BASENAMES = {
+    "api_key",
+    "api-key",
+    "credential",
+    "credentials",
+    "private_key",
+    "private-key",
+    "secret",
+    "secrets",
+    "service_account",
+    "service-account",
+}
+SECRET_CONFIG_SUFFIXES = {".ini", ".json", ".toml", ".txt", ".yaml", ".yml"}
+SECRET_KEY_FILENAMES = {"id_dsa", "id_ecdsa", "id_ed25519", "id_rsa", ".netrc", ".pypirc"}
+SECRET_KEY_SUFFIXES = {".cer", ".crt", ".der", ".key", ".p12", ".pem", ".pfx"}
+
+
+def _assert_wheel_member_layout(names: list[str]) -> None:
+    assert names
+    assert all(name.startswith((PACKAGE_PREFIX, f"{DIST_INFO}/")) for name in names)
+    assert not any(name.startswith(FORBIDDEN_WHEEL_PREFIXES) for name in names)
+    assert len(names) == len(set(names)) == len({name.casefold() for name in names})
+    assert all(not PurePosixPath(name).is_absolute() for name in names)
+    assert all(".." not in PurePosixPath(name).parts for name in names)
+    _assert_safe_package_relative_paths(
+        tuple(PurePosixPath(name).relative_to(PACKAGE_PREFIX) for name in names if name.startswith(PACKAGE_PREFIX))
+    )
 
 
 def _tracked_package_files() -> tuple[Path, ...]:
@@ -104,7 +153,9 @@ def _tracked_package_files() -> tuple[Path, ...]:
         capture_output=True,
         text=True,
     )
-    return tuple(Path(name) for name in completed.stdout.splitlines())
+    paths = tuple(Path(name) for name in completed.stdout.splitlines())
+    _assert_tracked_package_paths_without_pycache(paths)
+    return paths
 
 
 def _expected_wheel_files() -> set[str]:
@@ -128,21 +179,201 @@ def _requirement_set(requirements: tuple[str, ...]) -> set[Requirement]:
     return {Requirement(requirement) for requirement in requirements}
 
 
+def _expected_resource_names() -> set[str]:
+    return {
+        f"{RESOURCE_PREFIX}__init__.py",
+        f"{SCAFFOLD_PREFIX}__init__.py",
+        *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
+        *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
+    }
+
+
+def _assert_resource_inventory(names: set[str]) -> None:
+    assert len(MIGRATION_FILES) == 38
+    assert {name for name in names if name.startswith(RESOURCE_PREFIX)} == _expected_resource_names()
+
+
+def _assert_metadata_requirements(metadata) -> None:
+    requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
+    allowed = _requirement_set(BASE_REQUIREMENTS)
+    for extra, dependencies in OPTIONAL_REQUIREMENTS.items():
+        allowed.update(
+            Requirement(f'{dependency}; extra == "{extra}"') for dependency in dependencies
+        )
+    assert len(requirements) == len(allowed)
+    assert set(requirements) == allowed
+
+
+def _assert_record_hashes_and_sizes(archive: ZipFile) -> None:
+    record = archive.read(f"{DIST_INFO}/RECORD").decode("utf-8")
+    rows = list(csv.reader(record.splitlines()))
+    assert all(len(row) == 3 for row in rows)
+    paths = [row[0] for row in rows]
+    assert len(paths) == len(set(paths))
+    assert set(paths) == set(archive.namelist())
+
+    for path, digest, size in rows:
+        if path == f"{DIST_INFO}/RECORD":
+            assert digest == ""
+            assert size == ""
+            continue
+
+        assert digest
+        assert size
+        algorithm, encoded_digest = digest.split("=", maxsplit=1)
+        assert algorithm == "sha256"
+        contents = archive.read(path)
+        padding = "=" * (-len(encoded_digest) % 4)
+        assert base64.urlsafe_b64decode(encoded_digest + padding) == hashlib.sha256(
+            contents
+        ).digest()
+        assert size == str(len(contents))
+
+
+def _assert_safe_package_relative_paths(paths: tuple[PurePosixPath, ...]) -> None:
+    for path in paths:
+        lowered_parts = tuple(part.casefold() for part in path.parts)
+        assert lowered_parts
+        assert not any(part in CACHE_DIRECTORY_NAMES for part in lowered_parts[:-1])
+
+        filename = lowered_parts[-1]
+        suffix = PurePosixPath(filename).suffix
+        stem = PurePosixPath(filename).stem
+        assert filename not in CACHE_FILENAMES
+        assert not filename.endswith((".pyc", ".pyo"))
+        assert not filename.startswith(".env")
+        assert filename not in ENVIRONMENT_FILENAMES
+        assert filename not in SECRET_KEY_FILENAMES
+        assert suffix not in SECRET_KEY_SUFFIXES
+        assert not (stem in SECRET_BASENAMES and suffix in SECRET_CONFIG_SUFFIXES)
+
+
+def _assert_tracked_package_paths_without_pycache(paths: tuple[Path, ...]) -> None:
+    relative_paths = tuple(
+        PurePosixPath(path.as_posix()).relative_to("src/pricing_pipeline") for path in paths
+    )
+    _assert_safe_package_relative_paths(relative_paths)
+
+
+def _metadata_with_requirements(*additional_requirements: str):
+    requirements = [f"Requires-Dist: {requirement}" for requirement in BASE_REQUIREMENTS]
+    for extra, dependencies in OPTIONAL_REQUIREMENTS.items():
+        requirements.extend(
+            f'Requires-Dist: {dependency}; extra == "{extra}"' for dependency in dependencies
+        )
+    return BytesParser().parsebytes("\n".join(requirements + list(additional_requirements)).encode())
+
+
+def _record_digest(contents: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(contents).digest()).decode().rstrip("=")
+
+
+def _clean_resource_names() -> set[str]:
+    return _expected_resource_names()
+
+
+def test_record_validator_rejects_wheel_member_missing_from_record(tmp_path: Path):
+    archive_path = tmp_path / "missing-record-entry.whl"
+    tracked_contents = b"tracked"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("pricing_pipeline/tracked.py", tracked_contents)
+        archive.writestr("pricing_pipeline/unlisted.py", b"unlisted")
+        archive.writestr(
+            f"{DIST_INFO}/RECORD",
+            "\n".join(
+                (
+                    f"pricing_pipeline/tracked.py,sha256={_record_digest(tracked_contents)},7",
+                    f"{DIST_INFO}/RECORD,,",
+                )
+            ),
+        )
+
+    with ZipFile(archive_path) as archive, pytest.raises(AssertionError):
+        _assert_record_hashes_and_sizes(archive)
+
+
+@pytest.mark.parametrize(
+    "record_rows",
+    (
+        lambda digest: (
+            f"pricing_pipeline/tracked.py,sha256={digest},7",
+            f"pricing_pipeline/tracked.py,sha256={digest},7",
+            f"{DIST_INFO}/RECORD,,",
+        ),
+        lambda digest: (
+            f"pricing_pipeline/tracked.py,sha256={digest},7",
+            "pricing_pipeline/not-a-member.py,sha256=not-a-real-digest,15",
+            f"{DIST_INFO}/RECORD,,",
+        ),
+    ),
+    ids=("duplicate", "extra"),
+)
+def test_record_validator_rejects_duplicate_or_extra_rows(tmp_path: Path, record_rows):
+    archive_path = tmp_path / "malformed-record.whl"
+    contents = b"tracked"
+    with ZipFile(archive_path, "w") as archive:
+        archive.writestr("pricing_pipeline/tracked.py", contents)
+        archive.writestr(f"{DIST_INFO}/RECORD", "\n".join(record_rows(_record_digest(contents))))
+
+    with ZipFile(archive_path) as archive, pytest.raises(AssertionError):
+        _assert_record_hashes_and_sizes(archive)
+
+
+def test_resource_inventory_rejects_unexpected_migration_and_offline_sql_file():
+    names = _clean_resource_names() | {
+        "pricing_pipeline/resources/migrations/V039__unreviewed.sql",
+        "pricing_pipeline/resources/offline_sqlite/extra.sql",
+        "pricing_pipeline/resources/scaffold/credentials.toml",
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_resource_inventory(names)
+
+
+def test_resource_inventory_rejects_unexpected_resource_root_file():
+    with pytest.raises(AssertionError):
+        _assert_resource_inventory(_clean_resource_names() | {f"{RESOURCE_PREFIX}scratch.sqlite"})
+
+
+def test_metadata_validator_rejects_unknown_conditional_requirement():
+    metadata = _metadata_with_requirements(
+        'Requires-Dist: unexpected-package; python_version < "3.15"'
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_metadata_requirements(metadata)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "src/pricing_pipeline/.env.production",
+        "src/pricing_pipeline/.cache",
+        "src/pricing_pipeline/cache/serialized-result.bin",
+        "src/pricing_pipeline/credentials.json",
+        "src/pricing_pipeline/private_key.pem",
+    ),
+)
+def test_package_source_validator_rejects_cache_environment_and_secret_files(path: str):
+    with pytest.raises(AssertionError):
+        _assert_tracked_package_paths_without_pycache((Path(path),))
+
+
+def test_wheel_member_validator_rejects_environment_file():
+    with pytest.raises(AssertionError):
+        _assert_wheel_member_layout(["pricing_pipeline/.env.production"])
+
+
 def test_wheel_has_only_package_and_dist_info(wheel_path: Path):
     with ZipFile(wheel_path) as archive:
         names = archive.namelist()
 
-    assert names
-    assert all(name.startswith((PACKAGE_PREFIX, f"{DIST_INFO}/")) for name in names)
-    assert not any(name.startswith(FORBIDDEN_WHEEL_PREFIXES) for name in names)
-    assert len(names) == len(set(names)) == len({name.casefold() for name in names})
-    assert all(not PurePosixPath(name).is_absolute() for name in names)
-    assert all(".." not in PurePosixPath(name).parts for name in names)
+    _assert_wheel_member_layout(names)
 
 
 def test_wheel_matches_tracked_package_files_byte_for_byte(wheel_path: Path):
     expected = _expected_wheel_files()
-    assert all("__pycache__" not in path.parts for path in _tracked_package_files())
+    _assert_tracked_package_paths_without_pycache(_tracked_package_files())
 
     with ZipFile(wheel_path) as archive:
         packaged = {name for name in archive.namelist() if name.startswith(PACKAGE_PREFIX)}
@@ -153,18 +384,8 @@ def test_wheel_matches_tracked_package_files_byte_for_byte(wheel_path: Path):
 
 
 def test_wheel_contains_all_packaged_sql_resources_and_scaffold(wheel_path: Path):
-    expected_resources = {
-        "pricing_pipeline/resources/__init__.py",
-        "pricing_pipeline/resources/scaffold/__init__.py",
-        *{
-            f"pricing_pipeline/resources/offline_sqlite/{name}" for name in OFFLINE_SQLITE_FILES
-        },
-        *{f"pricing_pipeline/resources/migrations/{name}" for name in MIGRATION_FILES},
-    }
-    assert len(MIGRATION_FILES) == 38
-
     with ZipFile(wheel_path) as archive:
-        assert expected_resources <= set(archive.namelist())
+        _assert_resource_inventory(set(archive.namelist()))
 
 
 def test_wheel_metadata_has_exact_project_requirements_and_extras(wheel_path: Path):
@@ -176,19 +397,7 @@ def test_wheel_metadata_has_exact_project_requirements_and_extras(wheel_path: Pa
     assert metadata["Requires-Python"] == ">=3.14"
     assert set(metadata.get_all("Provides-Extra", [])) == set(OPTIONAL_REQUIREMENTS)
 
-    requirements = [Requirement(value) for value in metadata.get_all("Requires-Dist", [])]
-    base = {requirement for requirement in requirements if requirement.marker is None}
-    assert base == _requirement_set(BASE_REQUIREMENTS)
-    for extra, dependencies in OPTIONAL_REQUIREMENTS.items():
-        expected = {
-            Requirement(f'{dependency}; extra == "{extra}"') for dependency in dependencies
-        }
-        actual = {
-            requirement
-            for requirement in requirements
-            if requirement.marker is not None and f'extra == "{extra}"' in str(requirement.marker)
-        }
-        assert actual == expected
+    _assert_metadata_requirements(metadata)
 
 
 def test_wheel_is_pure_python_with_universal_tag(wheel_path: Path):
@@ -201,21 +410,7 @@ def test_wheel_is_pure_python_with_universal_tag(wheel_path: Path):
 
 def test_wheel_record_hashes_and_sizes_match_members(wheel_path: Path):
     with ZipFile(wheel_path) as archive:
-        record = archive.read(f"{DIST_INFO}/RECORD").decode("utf-8")
-        for path, digest, size in csv.reader(record.splitlines()):
-            if not digest:
-                assert path == f"{DIST_INFO}/RECORD"
-                assert size == ""
-                continue
-
-            algorithm, encoded_digest = digest.split("=", maxsplit=1)
-            assert algorithm == "sha256"
-            contents = archive.read(path)
-            padding = "=" * (-len(encoded_digest) % 4)
-            assert base64.urlsafe_b64decode(encoded_digest + padding) == hashlib.sha256(
-                contents
-            ).digest()
-            assert size == str(len(contents))
+        _assert_record_hashes_and_sizes(archive)
 
 
 def test_sdist_is_complete_and_excludes_workspace_content(sdist_path: Path):
