@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from sqlfluff.api.simple import parse
 
+from pricing_pipeline.infra.migrations import migration_files
 from scripts.render_schema_sql import render_schema_sql
 
 
@@ -17,16 +16,15 @@ def _parse_tsql(sql: str, label: str) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    sorted(Path("db/migrations").glob("V*.sql")),
+    migration_files(),
     ids=lambda path: path.name,
 )
-def test_migration_sql_parses_as_tsql(path: Path):
-    _parse_tsql(path.read_text(encoding="utf-8"), path.as_posix())
+def test_migration_sql_parses_as_tsql(path):
+    _parse_tsql(path.read_text(encoding="utf-8"), path.name)
 
 
 def test_rendered_custom_schema_sql_parses_as_tsql():
     sql = render_schema_sql(
-        Path("db/migrations"),
         pricing_schema="python_pricing",
         pricing_staging_schema="python_pricing_stg",
         mlops_schema="python_mlops",

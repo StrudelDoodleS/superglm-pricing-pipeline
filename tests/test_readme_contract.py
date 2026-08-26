@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from pricing_pipeline import notebook
+from pricing_pipeline.resources import migration_root
 
 ROOT_README = Path("README.md")
 NOTEBOOK_GUIDE = Path("docs/notebooks/README.md")
@@ -173,7 +174,9 @@ def test_sql_guide_documents_triggers_views_and_migration_decision():
 def test_sql_guide_names_every_current_trigger_view_and_procedure():
     guide = _read(SQL_GUIDE)
     migration_sql = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(Path("db/migrations").glob("V*.sql"))
+        path.read_text(encoding="utf-8")
+        for path in sorted(migration_root().iterdir(), key=lambda path: path.name)
+        if path.is_file() and path.name.startswith("V") and path.name.endswith(".sql")
     )
     object_names = {
         match.group(2)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from sqlalchemy import text
@@ -12,7 +13,7 @@ from pricing_pipeline.infra.schema import (
     render_sql_schemas,
     schema_names_from_connectable,
 )
-
+from pricing_pipeline.resources import migration_root
 
 _MIGRATION_LOCK_TIMEOUT_MS = 10_000
 
@@ -34,8 +35,19 @@ def split_sql_server_batches(sql_text: str) -> list[str]:
     return batches
 
 
-def migration_files(directory: Path) -> list[Path]:
-    return sorted(directory.glob("V*.sql"))
+MigrationEntry = Path | Traversable
+
+
+def migration_files(directory: MigrationEntry | None = None) -> list[MigrationEntry]:
+    root = migration_root() if directory is None else directory
+    return sorted(
+        (
+            item
+            for item in root.iterdir()
+            if item.is_file() and item.name.startswith("V") and item.name.endswith(".sql")
+        ),
+        key=lambda item: item.name,
+    )
 
 
 def render_migration_sql(sql_text: str, schemas: SchemaNames) -> str:
@@ -152,7 +164,7 @@ def _ensure_schema_configuration(con, schemas: SchemaNames) -> None:
 
 def apply_migrations_in_transaction(
     con,
-    migrations_dir: Path,
+    migrations_dir: MigrationEntry | None = None,
     *,
     schemas: SchemaNames | None = None,
     acquire_lock: bool = True,
@@ -262,7 +274,7 @@ def apply_migrations_in_transaction(
     return applied
 
 
-def apply_migrations(engine: Engine, migrations_dir: Path) -> list[str]:
+def apply_migrations(engine: Engine, migrations_dir: MigrationEntry | None = None) -> list[str]:
     schemas = schema_names_from_connectable(engine)
     with engine.begin() as con:
         return apply_migrations_in_transaction(

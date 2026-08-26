@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -100,7 +101,7 @@ def test_apply_schema_main_checks_database_before_calling_migrations(monkeypatch
     )
     monkeypatch.setattr(apply_schema, "load_env", lambda: None)
     monkeypatch.setattr(apply_schema, "get_runtime", lambda _module: runtime)
-    monkeypatch.setattr(apply_schema, "_schema_dir", lambda: tmp_path)
+    monkeypatch.setattr(apply_schema, "materialized_migration_dir", lambda: nullcontext(tmp_path))
     monkeypatch.setattr(
         "pricing_pipeline.infra.migrations.migration_files",
         lambda _path: [tmp_path / "V001__test.sql"],
@@ -115,3 +116,35 @@ def test_apply_schema_main_checks_database_before_calling_migrations(monkeypatch
 
     assert connection.statements == ["SELECT DB_NAME();"]
     assert applied == []
+
+
+def test_apply_schema_main_uses_materialized_packaged_migrations_by_default(monkeypatch, tmp_path):
+    connection = _Connection("PricingAudit")
+    engine = _Engine(connection)
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(pricing_database="PricingAudit"),
+        get_engine=lambda: engine,
+    )
+    observed: list[Path] = []
+
+    monkeypatch.setenv("PRICING_SCHEMA_DIR", str(tmp_path / "poison"))
+    monkeypatch.setattr(
+        apply_schema,
+        "parse_args",
+        lambda: Namespace(runtime_module="work_runtime.database", expected_database=None),
+    )
+    monkeypatch.setattr(apply_schema, "load_env", lambda: None)
+    monkeypatch.setattr(apply_schema, "get_runtime", lambda _module: runtime)
+    monkeypatch.setattr(apply_schema, "materialized_migration_dir", lambda: nullcontext(tmp_path))
+    monkeypatch.setattr(
+        "pricing_pipeline.infra.migrations.migration_files",
+        lambda path: [path / "V001__test.sql"],
+    )
+    monkeypatch.setattr(
+        "pricing_pipeline.infra.migrations.apply_migrations",
+        lambda _engine, path: observed.append(path) or [],
+    )
+
+    apply_schema.main()
+
+    assert observed == [tmp_path]

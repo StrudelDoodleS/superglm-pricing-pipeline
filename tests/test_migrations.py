@@ -11,11 +11,15 @@ from pricing_pipeline.infra.migrations import (
     split_sql_server_batches,
 )
 from pricing_pipeline.infra.schema import SchemaNames
-from pricing_pipeline.resources import offline_sqlite_root
+from pricing_pipeline.resources import migration_root, offline_sqlite_root
+
+
+def _migration_text(name: str) -> str:
+    return migration_root().joinpath(name).read_text(encoding="utf-8")
 
 
 def test_candidate_effective_date_becomes_nullable():
-    path = Path("db/migrations/V026__nullable_candidate_effective_date.sql")
+    path = migration_root().joinpath("V026__nullable_candidate_effective_date.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -25,7 +29,7 @@ def test_candidate_effective_date_becomes_nullable():
 
 
 def test_remote_model_version_reservation_migration_is_concurrency_safe():
-    path = Path("db/migrations/V027__model_version_reservations.sql")
+    path = migration_root().joinpath("V027__model_version_reservations.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -41,7 +45,7 @@ def test_remote_model_version_reservation_migration_is_concurrency_safe():
 
 
 def test_staging_content_digest_migration_binds_staged_rows():
-    path = Path("db/migrations/V028__staging_content_digest.sql")
+    path = migration_root().joinpath("V028__staging_content_digest.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -54,7 +58,7 @@ def test_staging_content_digest_migration_binds_staged_rows():
 
 
 def test_staging_content_digest_collation_upgrade_recreates_constraints():
-    path = Path("db/migrations/V030__staging_content_digest_binary_collation.sql")
+    path = migration_root().joinpath("V030__staging_content_digest_binary_collation.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -68,7 +72,7 @@ def test_staging_content_digest_collation_upgrade_recreates_constraints():
 
 
 def test_dataset_manifest_frame_evidence_migration_adds_auditable_columns():
-    path = Path("db/migrations/V033__dataset_manifest_frame_evidence.sql")
+    path = migration_root().joinpath("V033__dataset_manifest_frame_evidence.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -83,7 +87,7 @@ def test_dataset_manifest_frame_evidence_migration_adds_auditable_columns():
 
 
 def test_dataset_manifest_offset_contract_migration_adds_explicit_audit_columns():
-    path = Path("db/migrations/V034__dataset_manifest_offset_contract.sql")
+    path = migration_root().joinpath("V034__dataset_manifest_offset_contract.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -100,7 +104,7 @@ def test_dataset_manifest_offset_contract_migration_adds_explicit_audit_columns(
 
 
 def test_validation_and_final_relativity_views_use_existing_audit_tables():
-    path = Path("db/migrations/V035__validation_metrics_and_final_relativity_views.sql")
+    path = migration_root().joinpath("V035__validation_metrics_and_final_relativity_views.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -136,7 +140,7 @@ def test_validation_and_final_relativity_views_use_existing_audit_tables():
 
 
 def test_model_kind_data_lineage_and_equivalence_migration_is_normalized():
-    path = Path("db/migrations/V036__model_kind_manifest_relativity.sql")
+    path = migration_root().joinpath("V036__model_kind_manifest_relativity.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -199,7 +203,7 @@ def test_model_kind_data_lineage_and_equivalence_migration_is_normalized():
 
 
 def test_manual_edit_migration_extends_model_kind_without_rewriting_history():
-    path = Path("db/migrations/V038__manual_edit_model_kind.sql")
+    path = migration_root().joinpath("V038__manual_edit_model_kind.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -210,7 +214,7 @@ def test_manual_edit_migration_extends_model_kind_without_rewriting_history():
 
 
 def test_controlled_monitoring_migration_has_frozen_presets_and_lineage_views():
-    path = Path("db/migrations/V037__controlled_model_monitoring.sql")
+    path = migration_root().joinpath("V037__controlled_model_monitoring.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -264,7 +268,7 @@ def test_controlled_monitoring_migration_has_frozen_presets_and_lineage_views():
 
 
 def test_controlled_monitoring_migration_freezes_referenced_deployments():
-    sql = Path("db/migrations/V037__controlled_model_monitoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V037__controlled_model_monitoring.sql")
 
     assert "TR_PRICING_MODEL_DEPLOYMENT_MONITORING_LINEAGE_GUARD" in sql
     assert "ON pricing.PRICING_MODEL_DEPLOYMENT" in sql
@@ -277,7 +281,7 @@ def test_controlled_monitoring_migration_freezes_referenced_deployments():
 
 
 def test_controlled_monitoring_migration_freezes_referenced_manifests():
-    sql = Path("db/migrations/V037__controlled_model_monitoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V037__controlled_model_monitoring.sql")
 
     assert "TR_DATASET_MANIFEST_MONITORING_LINEAGE_GUARD" in sql
     assert "ON pricing.DATASET_MANIFEST" in sql
@@ -287,7 +291,7 @@ def test_controlled_monitoring_migration_freezes_referenced_manifests():
 
 
 def test_controlled_monitoring_migration_freezes_canonical_variant_policy():
-    sql = Path("db/migrations/V037__controlled_model_monitoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V037__controlled_model_monitoring.sql")
 
     assert "TR_MODEL_MONITOR_VARIANT_IMMUTABLE" in sql
     assert "ON mlops.MODEL_MONITOR_VARIANT" in sql
@@ -297,7 +301,7 @@ def test_controlled_monitoring_migration_freezes_canonical_variant_policy():
 
 
 def test_current_scorer_upgrade_matches_package_term_semantics():
-    path = Path("db/migrations/V029__current_rate_package_scoring.sql")
+    path = migration_root().joinpath("V029__current_rate_package_scoring.sql")
 
     assert path.exists()
     sql = path.read_text(encoding="utf-8")
@@ -443,9 +447,7 @@ def test_migration_runner_tracks_checksum_status_and_uses_application_lock():
 
 
 def test_publication_receipt_migration_enforces_hash_shape():
-    source = Path("db/migrations/V022__superglm_publication_receipt_metadata.sql").read_text(
-        encoding="utf-8"
-    )
+    source = _migration_text("V022__superglm_publication_receipt_metadata.sql")
 
     assert "CK_PRICING_RATE_PACKAGE_PUBLICATION_RECEIPT_SHA256" in source
     assert "publication_receipt_sha256 IS NULL" in source
@@ -455,7 +457,7 @@ def test_publication_receipt_migration_enforces_hash_shape():
 
 
 def test_candidate_artifact_migration_extends_model_run_and_guards_package_identity():
-    source = Path("db/migrations/V024__candidate_model_artifacts.sql").read_text(encoding="utf-8")
+    source = _migration_text("V024__candidate_model_artifacts.sql")
 
     for column in (
         "candidate_artifact_path",
@@ -476,7 +478,7 @@ def test_candidate_artifact_migration_extends_model_run_and_guards_package_ident
 
 
 def test_model_run_parent_lineage_migration_persists_self_reference():
-    path = Path("db/migrations/V031__model_run_parent_lineage.sql")
+    path = migration_root().joinpath("V031__model_run_parent_lineage.sql")
 
     assert path.exists()
     source = path.read_text(encoding="utf-8")
@@ -491,7 +493,7 @@ def test_model_run_parent_lineage_migration_persists_self_reference():
 
 
 def test_rating_workbook_digest_migration_binds_model_run_evidence():
-    path = Path("db/migrations/V032__model_run_rating_workbook_digest.sql")
+    path = migration_root().joinpath("V032__model_run_rating_workbook_digest.sql")
 
     assert path.exists()
     source = path.read_text(encoding="utf-8")
@@ -503,7 +505,7 @@ def test_rating_workbook_digest_migration_binds_model_run_evidence():
 
 
 def test_package_specific_scorer_does_not_resolve_live_pointer():
-    sql = Path("db/migrations/V025__package_specific_scoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V025__package_specific_scoring.sql")
 
     assert "CREATE OR ALTER PROCEDURE pricing.PREDICT_RATE_PACKAGE" in sql
     assert "@rate_package_id BIGINT" in sql
@@ -515,7 +517,7 @@ def test_package_specific_scorer_does_not_resolve_live_pointer():
 
 
 def test_package_specific_scorer_applies_numeric_coefficients_to_input_values():
-    sql = Path("db/migrations/V025__package_specific_scoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V025__package_specific_scoring.sql")
 
     assert "cell.term_type = 'NUMERIC_MAIN'" in sql
     assert "pricing.PRICING_TERM_FEATURE AS term_feature" in sql
@@ -526,7 +528,7 @@ def test_package_specific_scorer_applies_numeric_coefficients_to_input_values():
 
 
 def test_package_specific_scorer_matches_interactions_by_ordered_components():
-    sql = Path("db/migrations/V025__package_specific_scoring.sql").read_text(encoding="utf-8")
+    sql = _migration_text("V025__package_specific_scoring.sql")
 
     assert "cell.term_type = 'CATEGORICAL_INTERACTION'" in sql
     assert "pricing.PRICING_RATE_CELL_LEVEL AS cell_level" in sql
@@ -708,9 +710,7 @@ def test_schema_configuration_guard_rejects_different_initialized_schema_names()
 
 
 def test_model_registry_migration_keeps_history_and_guards_current_deployments():
-    migration = Path("db/migrations/V006__model_registry_deployments.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V006__model_registry_deployments.sql")
 
     assert "CREATE TABLE pricing.PRICING_MODEL" in migration
     assert "model_id BIGINT IDENTITY(1,1) PRIMARY KEY" in migration
@@ -722,8 +722,8 @@ def test_model_registry_migration_keeps_history_and_guards_current_deployments()
 
 
 def test_fresh_schema_defines_model_names_near_table_identifiers():
-    pricing_core = Path("db/migrations/V002__pricing_core_minimal.sql").read_text(encoding="utf-8")
-    fremtpl_run = Path("db/migrations/V005__fremtpl_raw_model_run.sql").read_text(encoding="utf-8")
+    pricing_core = _migration_text("V002__pricing_core_minimal.sql")
+    fremtpl_run = _migration_text("V005__fremtpl_raw_model_run.sql")
 
     assert (
         pricing_core.index("rate_package_id        BIGINT IDENTITY")
@@ -748,9 +748,7 @@ def test_fresh_schema_defines_model_names_near_table_identifiers():
 
 
 def test_model_registry_migration_scopes_packages_pointers_and_level_sets():
-    migration = Path("db/migrations/V006__model_registry_deployments.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V006__model_registry_deployments.sql")
 
     assert "ALTER TABLE pricing.PRICING_RATE_PACKAGE ADD model_id BIGINT NULL" in migration
     assert "ALTER TABLE pricing.MODEL_RUN ADD model_id BIGINT NULL" in migration
@@ -762,9 +760,7 @@ def test_model_registry_migration_scopes_packages_pointers_and_level_sets():
 
 
 def test_rate_package_version_guard_migration_adds_unique_model_version_index():
-    migration = Path("db/migrations/V016__rate_package_version_and_deploy_guards.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V016__rate_package_version_and_deploy_guards.sql")
 
     assert "UX_PRICING_RATE_PACKAGE_MODEL_VERSION" in migration
     assert "PRICING_RATE_PACKAGE(model_id, package_version)" in migration
@@ -776,9 +772,7 @@ def test_rate_package_version_guard_migration_adds_unique_model_version_index():
 
 
 def test_deploy_guard_migration_blocks_unpublished_or_mismatched_packages():
-    migration = Path("db/migrations/V016__rate_package_version_and_deploy_guards.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V016__rate_package_version_and_deploy_guards.sql")
 
     assert "TR_PRICING_MODEL_DEPLOYMENT_PACKAGE_GUARD" in migration
     assert "package_status <> 'PUBLISHED'" in migration
@@ -786,9 +780,7 @@ def test_deploy_guard_migration_blocks_unpublished_or_mismatched_packages():
 
 
 def test_rate_package_source_export_migration_adds_idempotency_key():
-    migration = Path("db/migrations/V017__rate_package_source_export_id.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V017__rate_package_source_export_id.sql")
 
     assert "ALTER TABLE pricing.PRICING_RATE_PACKAGE" in migration
     assert "ADD source_export_id NVARCHAR(128) NULL" in migration
@@ -799,7 +791,7 @@ def test_rate_package_source_export_migration_adds_idempotency_key():
 
 
 def test_rate_package_source_file_migration_adds_workbook_identity():
-    migration = Path("db/migrations/V020__rate_package_source_file.sql").read_text(encoding="utf-8")
+    migration = _migration_text("V020__rate_package_source_file.sql")
 
     assert "ALTER TABLE pricing.PRICING_RATE_PACKAGE" in migration
     assert "ADD source_file NVARCHAR(1024) NULL" in migration
@@ -809,7 +801,7 @@ def test_rate_package_source_file_migration_adds_workbook_identity():
 
 
 def test_model_name_unification_migration_replaces_model_key_contract():
-    migration = Path("db/migrations/V021__unify_model_name.sql").read_text(encoding="utf-8")
+    migration = _migration_text("V021__unify_model_name.sql")
 
     assert "sp_rename 'pricing.PRICING_MODEL.model_key', 'model_name', 'COLUMN'" in migration
     assert "CREATE OR ALTER VIEW pricing.V_ACTIVE_MODEL" in migration
@@ -819,9 +811,7 @@ def test_model_name_unification_migration_replaces_model_key_contract():
 
 
 def test_superglm_publication_receipt_migration_adds_metadata_columns():
-    migration = Path("db/migrations/V022__superglm_publication_receipt_metadata.sql").read_text(
-        encoding="utf-8",
-    )
+    migration = _migration_text("V022__superglm_publication_receipt_metadata.sql")
 
     assert "publication_receipt_json" in migration
     assert "publication_receipt_sha256" in migration
@@ -842,9 +832,7 @@ def test_package_writer_allocates_version_under_lock():
 
 
 def test_model_registry_migration_exposes_current_views_not_mutable_active_flags():
-    migration = Path("db/migrations/V006__model_registry_deployments.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V006__model_registry_deployments.sql")
 
     assert "CREATE OR ALTER VIEW pricing.V_ACTIVE_MODEL" in migration
     assert "CREATE OR ALTER VIEW pricing.V_CURRENT_RATE_PACKAGE" in migration
@@ -854,9 +842,7 @@ def test_model_registry_migration_exposes_current_views_not_mutable_active_flags
 
 
 def test_model_relativity_views_union_bands_and_non_banded_cells_for_bi():
-    migration = Path("db/migrations/V023__model_relativity_bi_views.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V023__model_relativity_bi_views.sql")
 
     assert "CREATE OR ALTER VIEW pricing.V_MODEL_RELATIVITY" in migration
     assert "CREATE OR ALTER VIEW pricing.V_PUBLISHED_MODEL_RELATIVITY" in migration
@@ -883,7 +869,7 @@ def test_model_relativity_views_union_bands_and_non_banded_cells_for_bi():
 
 
 def test_compiled_band_sort_order_migration_backfills_and_rekeys_table():
-    migration = Path("db/migrations/V008__compiled_band_sort_order.sql").read_text(encoding="utf-8")
+    migration = _migration_text("V008__compiled_band_sort_order.sql")
 
     assert "ALTER TABLE pricing.PRICING_COMPILED_1D_RATE_BAND" in migration
     assert "ADD sort_order INT NOT NULL" in migration
@@ -894,9 +880,7 @@ def test_compiled_band_sort_order_migration_backfills_and_rekeys_table():
 
 
 def test_current_dataset_cv_fold_view_exposes_latest_split_metadata():
-    migration = Path("db/migrations/V009__current_dataset_cv_fold_view.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V009__current_dataset_cv_fold_view.sql")
 
     assert "CREATE OR ALTER VIEW pricing.V_CURRENT_DATASET_CV_FOLD" in migration
     assert "ROW_NUMBER() OVER" in migration
@@ -910,12 +894,8 @@ def test_current_dataset_cv_fold_view_exposes_latest_split_metadata():
 
 
 def test_cv_split_runtime_metadata_migration_adds_dependency_audit_json():
-    migration = Path("db/migrations/V010__cv_split_runtime_metadata.sql").read_text(
-        encoding="utf-8"
-    )
-    current_view = Path("db/migrations/V011__cv_split_runtime_metadata_view.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V010__cv_split_runtime_metadata.sql")
+    current_view = _migration_text("V011__cv_split_runtime_metadata_view.sql")
 
     assert "ALTER TABLE pricing.CV_SPLIT_SET" in migration
     assert "ADD runtime_metadata_json NVARCHAR(MAX) NULL" in migration
@@ -924,7 +904,7 @@ def test_cv_split_runtime_metadata_migration_adds_dependency_audit_json():
 
 
 def test_model_run_lineage_migration_adds_minimal_mlops_link_tables():
-    migration = Path("db/migrations/V013__model_run_lineage_tables.sql").read_text(encoding="utf-8")
+    migration = _migration_text("V013__model_run_lineage_tables.sql")
 
     assert "CREATE SCHEMA mlops" in migration
     assert "CREATE TABLE mlops.MODEL_RUN_DATASET" in migration
@@ -944,9 +924,7 @@ def test_model_run_lineage_migration_adds_minimal_mlops_link_tables():
 
 
 def test_cv_split_row_cleanup_migration_drops_only_when_empty():
-    migration = Path("db/migrations/V018__drop_cv_split_row_if_empty.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V018__drop_cv_split_row_if_empty.sql")
 
     assert "OBJECT_ID('mlops.CV_SPLIT_ROW', 'U')" in migration
     assert "SELECT 1 FROM mlops.CV_SPLIT_ROW" in migration
@@ -956,9 +934,7 @@ def test_cv_split_row_cleanup_migration_drops_only_when_empty():
 
 
 def test_guard_error_compatibility_migration_keeps_throw_with_statement_terminators():
-    migration = Path("db/migrations/V019__terminate_throw_guard_errors.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V019__terminate_throw_guard_errors.sql")
 
     assert "CREATE OR ALTER PROCEDURE pricing.PREDICT_CURRENT_RATE" in migration
     assert (
@@ -979,9 +955,7 @@ def test_guard_error_compatibility_migration_keeps_throw_with_statement_terminat
 
 
 def test_prediction_proc_migration_scores_current_package_from_compiled_views():
-    migration = Path("db/migrations/V014__current_rate_prediction_proc.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V014__current_rate_prediction_proc.sql")
 
     assert "CREATE OR ALTER PROCEDURE pricing.PREDICT_CURRENT_RATE" in migration
     assert "@features_json NVARCHAR(MAX)" in migration
@@ -999,7 +973,7 @@ def test_prediction_proc_migration_scores_current_package_from_compiled_views():
 
 
 def test_prediction_proc_aggregates_relativity_from_matched_terms():
-    migration = Path("db/migrations/V021__unify_model_name.sql").read_text(encoding="utf-8")
+    migration = _migration_text("V021__unify_model_name.sql")
 
     assert re.search(
         r"SELECT\s+@model_name AS model_name,.*?"
@@ -1011,9 +985,7 @@ def test_prediction_proc_aggregates_relativity_from_matched_terms():
 
 
 def test_package_immutability_migration_blocks_direct_edits_to_frozen_packages():
-    migration = Path("db/migrations/V015__rate_package_immutability.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V015__rate_package_immutability.sql")
 
     assert "TR_PRICING_RATE_PACKAGE_IMMUTABLE_UPDATE_DELETE" in migration
     assert "TR_PRICING_TERM_IMMUTABLE_WRITE" in migration
@@ -1040,9 +1012,7 @@ def test_rating_package_loader_builds_package_as_draft_before_final_status():
 
 
 def test_clean_pricing_schema_migration_moves_staging_and_drops_obsolete_tables():
-    migration = Path("db/migrations/V012__clean_pricing_schema_tables.sql").read_text(
-        encoding="utf-8"
-    )
+    migration = _migration_text("V012__clean_pricing_schema_tables.sql")
 
     assert "CREATE SCHEMA pricing_stg" in migration
     assert "CREATE TABLE pricing_stg.STG_RATING_EXPORT" in migration
