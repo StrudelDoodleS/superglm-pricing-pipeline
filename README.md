@@ -114,10 +114,11 @@ the destructive command and checks are in the [SQL runbook](docs/sql/README.md).
 ## Verify
 
 ```bash
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
+uv sync --locked --all-extras
+uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
+uv build --force-pep517 --sdist --wheel --clear --out-dir dist
 ```
 
-Do not commit model-local `.local/` state, notebook outputs, credentials, or
-private work runtime modules.
+`uv run` uses the editable development install; only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works from a clean environment outside this checkout.
+
+Do not commit model-local `.local/` state, notebook outputs, credentials, or private work runtime modules.
