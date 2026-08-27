@@ -73,6 +73,12 @@ SQL lifecycle:
 uv run python -m pytest -q tests/test_migrations.py tests/test_offline_sqlite.py tests/test_packaged_resources.py
 ```
 
+Cross-domain integration:
+
+```bash
+uv run python -m pytest -q tests/test_notebook_workflow.py tests/test_offline_sqlite.py tests/test_model_monitoring.py
+```
+
 Release gate:
 
 ```bash
