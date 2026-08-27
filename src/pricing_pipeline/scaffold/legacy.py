@@ -1121,7 +1121,7 @@ REPLACE_GROUPING_ARTIFACT = False
 
                 Use normal SuperGLM feature objects here. This fits only in memory: it
                 does not register a model, create a manifest, build a candidate, or
-                publish anything. Copy accepted choices into notebook 02.
+                publish anything. Copy accepted choices into notebook 03.
                 """
             ),
             _code(

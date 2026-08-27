@@ -130,7 +130,12 @@ def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(
 def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     package_dir = _scaffold(tmp_path)
     ingestion = _code(package_dir / "01_data_ingestion.ipynb")
-    exploration = _code(package_dir / "02_model_exploration.ipynb")
+    exploration_path = package_dir / "02_model_exploration.ipynb"
+    exploration_notebook = _notebook(exploration_path)
+    exploration = _code(exploration_path)
+    exploration_text = "\n".join(
+        "".join(cell.get("source", [])) for cell in exploration_notebook["cells"]
+    )
     training = _code(package_dir / "03_model_training.ipynb")
     editor = _code(package_dir / "04_model_editor.ipynb")
     manual = _code(package_dir / "05_manual_adjustment.ipynb")
@@ -202,6 +207,8 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert 'versions["Kind"].eq("RAW")' in exploration
     assert "open_candidate(" in exploration
     assert "export_level_groupings(" in exploration
+    assert "Copy accepted choices into notebook 03." in exploration_text
+    assert "Copy accepted choices into notebook 02." not in exploration_text
 
 
 def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
