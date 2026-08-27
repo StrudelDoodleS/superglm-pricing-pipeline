@@ -46,7 +46,7 @@ def test_root_readme_documents_the_installed_scaffold_flow_and_dependency_owners
     readme = _read(ROOT_README)
     ordered = (
         "uv init --bare --python 3.14",
-        'uv add "airflow-superglm-builder @ git+ssh://git@HOST/TEAM/REPOSITORY.git" --tag v0.2.0',
+        'uv add "superglm-pricing-pipeline @ git+ssh://git@HOST/TEAM/REPOSITORY.git@v0.2.0"',
         "uv run pricing-pipeline init",
         "# edit pricing_scaffold.toml",
         "uv run pricing-pipeline scaffold",

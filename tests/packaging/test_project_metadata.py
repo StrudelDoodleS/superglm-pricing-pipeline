@@ -28,14 +28,25 @@ def test_project_uses_hatchling_and_only_the_src_package():
     assert not (ROOT / "pricing_pipeline").exists()
 
 
+def test_framework_repository_excludes_application_runtime_and_model_workspaces():
+    for relative_path in (
+        "airflow",
+        ".env.example",
+        "docker-compose.yml",
+        "pricing_models",
+        "requirements.txt",
+    ):
+        assert not (ROOT / relative_path).exists()
+
+
 def test_distribution_metadata_and_runtime_version_have_one_authority():
     project = _project()["project"]
-    assert project["name"] == "airflow-superglm-builder"
+    assert project["name"] == "superglm-pricing-pipeline"
     assert project["version"] == "0.2.0"
     assert project["requires-python"] == ">=3.14"
     assert (
         pricing_pipeline.__version__
-        == importlib.metadata.version("airflow-superglm-builder")
+        == importlib.metadata.version("superglm-pricing-pipeline")
         == "0.2.0"
     )
 

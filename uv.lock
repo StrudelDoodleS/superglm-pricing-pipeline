@@ -75,96 +75,6 @@ wheels = [
 ]
 
 [[package]]
-name = "airflow-superglm-builder"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "joblib" },
-    { name = "numpy" },
-    { name = "openpyxl" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "scikit-learn" },
-    { name = "sqlalchemy" },
-    { name = "superglm" },
-]
-
-[package.optional-dependencies]
-azure = [
-    { name = "azure-identity" },
-    { name = "pyodbc" },
-]
-mlflow = [
-    { name = "mlflow" },
-]
-notebook = [
-    { name = "ipykernel" },
-]
-report = [
-    { name = "plotly" },
-    { name = "scipy" },
-]
-scratch = [
-    { name = "catboost" },
-    { name = "lightgbm" },
-    { name = "matplotlib" },
-    { name = "scipy" },
-    { name = "xgboost" },
-]
-sqlserver = [
-    { name = "pyodbc" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "matplotlib" },
-    { name = "pytest" },
-    { name = "pyyaml" },
-    { name = "ruff" },
-    { name = "sqlfluff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "azure-identity", marker = "extra == 'azure'" },
-    { name = "catboost", marker = "extra == 'scratch'" },
-    { name = "ipykernel", marker = "extra == 'notebook'" },
-    { name = "joblib" },
-    { name = "lightgbm", marker = "extra == 'scratch'" },
-    { name = "matplotlib", marker = "extra == 'scratch'" },
-    { name = "mlflow", marker = "extra == 'mlflow'" },
-    { name = "numpy" },
-    { name = "openpyxl" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "plotly", marker = "extra == 'report'", specifier = ">=6.9" },
-    { name = "pyarrow", specifier = ">=23.0.1" },
-    { name = "pydantic", specifier = ">=2.13,<3" },
-    { name = "pyodbc", marker = "extra == 'azure'" },
-    { name = "pyodbc", marker = "extra == 'sqlserver'" },
-    { name = "python-dotenv" },
-    { name = "scikit-learn" },
-    { name = "scipy", marker = "extra == 'report'" },
-    { name = "scipy", marker = "extra == 'scratch'" },
-    { name = "sqlalchemy" },
-    { name = "superglm", specifier = ">=0.26,<0.27" },
-    { name = "xgboost", marker = "extra == 'scratch'" },
-]
-provides-extras = ["sqlserver", "azure", "report", "notebook", "scratch", "mlflow"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "matplotlib", specifier = ">=3.10.9" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pyyaml" },
-    { name = "ruff" },
-    { name = "sqlfluff", specifier = ">=4.2.1" },
-]
-
-[[package]]
 name = "alembic"
 version = "1.18.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2313,6 +2223,94 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/17/29/f311f890d72604fa6ebb9784457d3b42e3c793e7be8fc9cf099f3825ff0c/superglm-0.26.0.tar.gz", hash = "sha256:fb6713b4a34ab7107067dedaf5e7d46bb55b0d1829b7a57e2aa40f20577ea543", size = 1049702, upload-time = "2026-08-11T14:13:06.783Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/58/d20330126ef9a00153cdca57adaa2343df51f5524c5e8744ad10f2052253/superglm-0.26.0-py3-none-any.whl", hash = "sha256:8dd5d0af42abbec9e6c1f0a9cae56867414a934e4fa29fe6ece2c2ca9ba91dab", size = 1186565, upload-time = "2026-08-11T14:13:04.851Z" },
+]
+
+[[package]]
+name = "superglm-pricing-pipeline"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "joblib" },
+    { name = "numpy" },
+    { name = "openpyxl" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "scikit-learn" },
+    { name = "sqlalchemy" },
+    { name = "superglm" },
+]
+
+[package.optional-dependencies]
+azure = [
+    { name = "azure-identity" },
+    { name = "pyodbc" },
+]
+mlflow = [
+    { name = "mlflow" },
+]
+notebook = [
+    { name = "ipykernel" },
+]
+report = [
+    { name = "plotly" },
+    { name = "scipy" },
+]
+scratch = [
+    { name = "catboost" },
+    { name = "lightgbm" },
+    { name = "matplotlib" },
+    { name = "scipy" },
+    { name = "xgboost" },
+]
+sqlserver = [
+    { name = "pyodbc" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "matplotlib" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "sqlfluff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "azure-identity", marker = "extra == 'azure'" },
+    { name = "catboost", marker = "extra == 'scratch'" },
+    { name = "ipykernel", marker = "extra == 'notebook'" },
+    { name = "joblib" },
+    { name = "lightgbm", marker = "extra == 'scratch'" },
+    { name = "matplotlib", marker = "extra == 'scratch'" },
+    { name = "mlflow", marker = "extra == 'mlflow'" },
+    { name = "numpy" },
+    { name = "openpyxl" },
+    { name = "packaging" },
+    { name = "pandas" },
+    { name = "plotly", marker = "extra == 'report'", specifier = ">=6.9" },
+    { name = "pyarrow", specifier = ">=23.0.1" },
+    { name = "pydantic", specifier = ">=2.13,<3" },
+    { name = "pyodbc", marker = "extra == 'azure'" },
+    { name = "pyodbc", marker = "extra == 'sqlserver'" },
+    { name = "python-dotenv" },
+    { name = "scikit-learn" },
+    { name = "scipy", marker = "extra == 'report'" },
+    { name = "scipy", marker = "extra == 'scratch'" },
+    { name = "sqlalchemy" },
+    { name = "superglm", specifier = ">=0.26,<0.27" },
+    { name = "xgboost", marker = "extra == 'scratch'" },
+]
+provides-extras = ["sqlserver", "azure", "report", "notebook", "scratch", "mlflow"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "matplotlib", specifier = ">=3.10.9" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "ruff" },
+    { name = "sqlfluff", specifier = ">=4.2.1" },
 ]
 
 [[package]]

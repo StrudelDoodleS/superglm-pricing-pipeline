@@ -1,13 +1,13 @@
-# SuperGLM pricing workbench
+# SuperGLM pricing pipeline
 
 This package provides a notebook-first path from model data to a reviewed,
-immutable SQL rating package. Airflow is not required for the current workflow.
+immutable SQL rating package.
 
 ## Start a model repository
 
 ```bash
 uv init --bare --python 3.14
-uv add "airflow-superglm-builder @ git+ssh://git@HOST/TEAM/REPOSITORY.git" --tag v0.2.0
+uv add "superglm-pricing-pipeline @ git+ssh://git@HOST/TEAM/REPOSITORY.git@v0.2.0"
 uv run pricing-pipeline init
 # edit pricing_scaffold.toml
 uv run pricing-pipeline scaffold \
@@ -73,8 +73,9 @@ with the same model and target options.
 - Save notebooks before building: source cells are evidence, while outputs and
   execution counts are not.
 
-The reference workflow remains in
-[`pricing_models/mtpl_frequency`](pricing_models/mtpl_frequency).
+Generated model repositories own their notebooks, data, configuration, and local
+artifacts. This framework repository contains only the reusable Python package,
+schema resources, documentation, and development tooling.
 
 ## Guides
 
@@ -109,7 +110,7 @@ runbook](docs/sql/README.md).
 ```bash
 uv sync --locked --all-extras
 uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
-uv build --force-pep517 --sdist --wheel --clear --out-dir dist
+uv build --force-pep517 --sdist --wheel --out-dir dist
 ```
 
 Only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works

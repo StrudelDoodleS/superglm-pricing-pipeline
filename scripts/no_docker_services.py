@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import argparse
 import curses
-from dataclasses import dataclass
 import os
 import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,13 +46,6 @@ def service_catalog(*, python_executable: str = sys.executable) -> dict[str, Ser
             name="mlflow",
             description="Start the local MLflow tracking server.",
             argv=[python_executable, "scripts/start_mlflow_local.py"],
-            category="service",
-            long_running=True,
-        ),
-        "cloudbeaver": ServiceCommand(
-            name="cloudbeaver",
-            description="Start CloudBeaver SQL UI; Docker-backed local-only option.",
-            argv=["docker", "compose", "--profile", "sql-ui", "up", "cloudbeaver"],
             category="service",
             long_running=True,
         ),
@@ -493,7 +485,6 @@ def run_runtime_tui(manager: RuntimeManager | None = None) -> None:
 
 def _run_one_shot(commands: list[ServiceCommand], *, dry_run: bool) -> None:
     for command in commands:
-        _print_command_warning(command)
         print(f"==> {command.name}: {' '.join(command.argv)}", flush=True)
         if not dry_run:
             subprocess.run(command.argv, cwd=ROOT, check=True)
@@ -503,7 +494,6 @@ def _run_long_running(commands: list[ServiceCommand], *, dry_run: bool) -> None:
     processes: list[subprocess.Popen] = []
     try:
         for command in commands:
-            _print_command_warning(command)
             print(f"==> {command.name}: {' '.join(command.argv)}", flush=True)
             if not dry_run:
                 processes.append(subprocess.Popen(command.argv, cwd=ROOT, start_new_session=True))
@@ -530,14 +520,6 @@ def run_services(names: list[str], *, dry_run: bool = False) -> None:
     long_running = [command for command in commands if command.long_running]
     _run_one_shot(one_shot, dry_run=dry_run)
     _run_long_running(long_running, dry_run=dry_run)
-
-
-def _print_command_warning(command: ServiceCommand) -> None:
-    if command.name == "cloudbeaver":
-        print(
-            "cloudbeaver uses Docker Compose in this repo; skip it on Docker-blocked machines.",
-            flush=True,
-        )
 
 
 def build_parser() -> argparse.ArgumentParser:

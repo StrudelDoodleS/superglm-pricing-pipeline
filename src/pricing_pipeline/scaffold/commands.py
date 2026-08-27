@@ -143,6 +143,7 @@ def _scaffold_options(
 
 def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
     root = _root(namespace.root)
+    _require_project_root(root)
     config = _load_installed_config(namespace, root)
     options = _scaffold_options(namespace, root, config)
     try:

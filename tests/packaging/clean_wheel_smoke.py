@@ -23,7 +23,7 @@ package_file = Path(pricing_pipeline.__file__).resolve()
 assert checkout not in package_file.parents
 assert (
     pricing_pipeline.__version__
-    == importlib.metadata.version("airflow-superglm-builder")
+    == importlib.metadata.version("superglm-pricing-pipeline")
     == "0.2.0"
 )
 assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 38
@@ -33,7 +33,7 @@ assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if ite
     "pricing_stg.sql",
     "pricing_views.sql",
 )
-distribution = importlib.metadata.distribution("airflow-superglm-builder")
+distribution = importlib.metadata.distribution("superglm-pricing-pipeline")
 direct_url = distribution.read_text("direct_url.json")
 if direct_url is not None:
     direct_url_payload = json.loads(direct_url)

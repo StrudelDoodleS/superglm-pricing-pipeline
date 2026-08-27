@@ -2,4 +2,4 @@
 
 from importlib.metadata import version
 
-__version__ = version("airflow-superglm-builder")
+__version__ = version("superglm-pricing-pipeline")

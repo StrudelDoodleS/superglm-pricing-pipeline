@@ -15,8 +15,8 @@ from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "0.2.0"
-DIST_INFO = f"airflow_superglm_builder-{VERSION}.dist-info"
-SDIST_ROOT = f"airflow_superglm_builder-{VERSION}"
+DIST_INFO = f"superglm_pricing_pipeline-{VERSION}.dist-info"
+SDIST_ROOT = f"superglm_pricing_pipeline-{VERSION}"
 PACKAGE_PREFIX = "pricing_pipeline/"
 FORBIDDEN_WHEEL_PREFIXES = (
     "tests/",
@@ -578,7 +578,7 @@ def test_wheel_metadata_has_exact_project_requirements_and_extras(wheel_path: Pa
     with ZipFile(wheel_path) as archive:
         metadata = BytesParser().parsebytes(archive.read(f"{DIST_INFO}/METADATA"))
 
-    assert metadata["Name"] == "airflow-superglm-builder"
+    assert metadata["Name"] == "superglm-pricing-pipeline"
     assert metadata["Version"] == VERSION
     assert metadata["Requires-Python"] == ">=3.14"
     assert set(metadata.get_all("Provides-Extra", [])) == set(OPTIONAL_REQUIREMENTS)

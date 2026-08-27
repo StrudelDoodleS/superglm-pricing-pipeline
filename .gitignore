@@ -10,14 +10,10 @@ __pycache__/
 pricing_models/*/.local/
 *.sqlite
 .codex
-.dags_root_owned_backup_*/
 logs/
 config/
 plugins/
 state/
-airflow/logs/
-airflow/config/
-airflow/plugins/
 .worktrees/
 docs/superpowers/plans/
 docs/superpowers/specs/

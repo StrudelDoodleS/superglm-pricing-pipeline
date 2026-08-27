@@ -18,22 +18,19 @@ def distribution_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
             "build",
             "--force-pep517",
             "--sdist",
-            "--clear",
-            "--no-create-gitignore",
             "--out-dir",
             str(output),
             str(ROOT),
         ],
         check=True,
     )
-    sdist = output / f"airflow_superglm_builder-{VERSION}.tar.gz"
+    sdist = output / f"superglm_pricing_pipeline-{VERSION}.tar.gz"
     subprocess.run(
         [
             "uv",
             "build",
             "--force-pep517",
             "--wheel",
-            "--no-create-gitignore",
             "--out-dir",
             str(output),
             str(sdist),
@@ -45,9 +42,9 @@ def distribution_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="session")
 def sdist_path(distribution_dir: Path) -> Path:
-    return distribution_dir / f"airflow_superglm_builder-{VERSION}.tar.gz"
+    return distribution_dir / f"superglm_pricing_pipeline-{VERSION}.tar.gz"
 
 
 @pytest.fixture(scope="session")
 def wheel_path(distribution_dir: Path) -> Path:
-    return distribution_dir / f"airflow_superglm_builder-{VERSION}-py3-none-any.whl"
+    return distribution_dir / f"superglm_pricing_pipeline-{VERSION}-py3-none-any.whl"

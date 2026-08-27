@@ -159,6 +159,35 @@ def test_installed_scaffold_requires_the_initialized_default_config(tmp_path: Pa
     assert f"pricing-pipeline init --root {root.resolve()}" in capsys.readouterr().err
 
 
+def test_installed_scaffold_with_explicit_config_requires_a_project_root(tmp_path: Path, capsys):
+    root = tmp_path / "not-a-model-repo"
+    root.mkdir()
+    config = tmp_path / "explicit.toml"
+    config.write_text(TEMPLATE, encoding="utf-8")
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "CLAIM_FREQUENCY",
+                "--target-name",
+                "claim_count",
+                "--root",
+                str(root),
+                "--config",
+                str(config),
+            ]
+        )
+        == 2
+    )
+
+    error = capsys.readouterr().err
+    assert "regular non-symlink pyproject.toml" in error
+    assert "failed unexpectedly" not in error
+    assert {path.name for path in root.iterdir()} == set()
+
+
 def test_installed_scaffold_reuses_the_exact_six_notebook_workflow(tmp_path: Path, capsys):
     root = tmp_path / "model-repo"
     _project(root)
@@ -274,6 +303,64 @@ def test_installed_scaffold_force_reports_an_output_leaf_directory_without_mutat
         "pricing_scaffold.toml",
         "pyproject.toml",
     }
+
+
+def test_installed_scaffold_force_preflights_all_outputs_before_writing(tmp_path: Path, capsys):
+    root = tmp_path / "model-repo"
+    _project(root)
+    assert cli.main(["init", "--root", str(root)]) == 0
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "CLAIM_FREQUENCY",
+                "--target-name",
+                "claim_count",
+                "--root",
+                str(root),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    package = root / "pricing_models" / "claim_frequency"
+    earlier_output = package / "01_data_ingestion.ipynb"
+    earlier_bytes = b"held analyst notebook\n"
+    earlier_output.write_bytes(earlier_bytes)
+    fixed_mtime_ns = 1_700_000_000_000_000_000
+    os.utime(earlier_output, ns=(fixed_mtime_ns, fixed_mtime_ns))
+    later_output = package / "05_model_deployment.ipynb"
+    later_output.unlink()
+    later_output.mkdir()
+    sentinel = later_output / "keep.txt"
+    sentinel.write_bytes(b"keep this directory\n")
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "CLAIM_FREQUENCY",
+                "--target-name",
+                "claim_count",
+                "--root",
+                str(root),
+                "--force",
+            ]
+        )
+        == 2
+    )
+
+    error = capsys.readouterr().err
+    assert "05_model_deployment.ipynb" in error
+    assert "regular file" in error
+    assert "failed unexpectedly" not in error
+    assert earlier_output.read_bytes() == earlier_bytes
+    assert earlier_output.stat().st_mtime_ns == fixed_mtime_ns
+    assert later_output.is_dir()
+    assert sentinel.read_bytes() == b"keep this directory\n"
 
 
 def test_init_does_not_import_optional_runtime_stacks(tmp_path: Path, monkeypatch):

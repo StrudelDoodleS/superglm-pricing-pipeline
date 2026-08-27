@@ -1438,6 +1438,16 @@ def _reject_output_symlinks(content: Mapping[Path, str]) -> None:
             )
 
 
+def _reject_invalid_output_types(content: Mapping[Path, str]) -> None:
+    for path in content:
+        if path.exists() and not path.is_file():
+            raise ValueError(
+                f"cannot write scaffold output {path}: existing output is a directory or other "
+                "non-regular path; output must be a regular file. Replace or remove it, then "
+                "rerun the scaffold."
+            )
+
+
 def _reject_managed_ancestor_symlinks(pricing_models_dir: Path, package_dir: Path) -> None:
     for path in (pricing_models_dir, package_dir):
         if path.is_symlink():
@@ -1509,6 +1519,7 @@ def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
         **{package_dir / filename: source for filename, source in notebooks.items()},
     }
     _reject_output_symlinks(content)
+    _reject_invalid_output_types(content)
     migrated_deployment = _migrate_legacy_deployment_notebook(package_dir)
     created = []
     for path, source in content.items():
