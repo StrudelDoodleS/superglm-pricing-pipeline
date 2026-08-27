@@ -83,9 +83,7 @@ def render_notebooks(
         "__PRIMARY_KEY__": primary_key,
         "__DATASET_NAME__": f"{package_name}_model_frame",
     }
-    replacements = {
-        token: json.dumps(value, ensure_ascii=False)[1:-1] for token, value in string_values.items()
-    }
+    replacements = {token: json.dumps(value)[1:-1] for token, value in string_values.items()}
     replacements.update(
         {
             "__MODEL_LABEL_MARKDOWN__": model_label,

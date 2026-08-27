@@ -188,6 +188,30 @@ def test_scaffold_renderer_preserves_token_shaped_user_values():
     assert "__CUSTOM_LABEL__" in rendered["01_data_ingestion.ipynb"]
 
 
+def test_scaffold_renderer_preserves_v021_non_ascii_escaping():
+    from pricing_pipeline.scaffold.render import render_notebooks
+
+    rendered = render_notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="Müller",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        deployment_slot="CLAIM_FREQUENCY_UAT",
+        database_mode="local",
+        runtime_module=None,
+        expected_remote_database="",
+        manual_edit_source_selector="deployed",
+        manual_edit_carry_forward=True,
+    )
+
+    notebook = json.loads(rendered["03_model_training.ipynb"])
+    code = "\n".join(
+        "".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"
+    )
+    assert 'label="M\\u00fcller"' in code
+
+
 def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
     result = scaffold_pricing_model(
         ScaffoldOptions(

@@ -29,6 +29,18 @@ workspace scaffold -> scheduled execution
   lineage, publication, or persistence.
 - Reporting and scratch helpers do not control governed model lifecycle state.
 
+## Lifecycle ownership
+
+| Transition | Owner |
+|---|---|
+| source data -> verified frame and manifest | `data/`, `pricing_pipeline.notebook` |
+| manifest -> fitted candidate | `modeling/standard_superglm.py` |
+| candidate -> immutable published package | `publishing/`, `orchestration/pipeline.py` |
+| published package -> editor/manual child | `workbench/`, `publishing/editor_candidate.py`, `modeling/manual_adjustment.py` |
+| published package -> deployment | `publishing/deployment.py` |
+| deployment -> monitoring evidence | `modeling/monitoring.py` |
+| schema version -> migrated/seeded/reset database | `infra/`, packaged SQL resources |
+
 ## Test lanes
 
 Focused scaffold work:
@@ -37,10 +49,28 @@ Focused scaffold work:
 uv run python -m pytest -q tests/test_scaffold_pricing_model.py tests/cli/test_init_and_scaffold.py
 ```
 
-Cross-domain integration:
+Monitoring:
 
 ```bash
-uv run python -m pytest -q tests/test_notebook_workflow.py tests/test_offline_sqlite.py tests/test_model_monitoring.py
+uv run python -m pytest -q tests/test_model_monitoring.py tests/test_monitoring_simulation.py
+```
+
+Publishing:
+
+```bash
+uv run python -m pytest -q tests/test_rating_export.py tests/test_package_writer.py tests/test_local_model_equivalence.py
+```
+
+Reporting:
+
+```bash
+uv run python -m pytest -q tests/test_underwriter_report.py tests/test_superglm_report_adapter.py
+```
+
+SQL lifecycle:
+
+```bash
+uv run python -m pytest -q tests/test_migrations.py tests/test_offline_sqlite.py tests/test_packaged_resources.py
 ```
 
 Release gate:
@@ -66,4 +96,6 @@ not mix mechanical whole-repository cleanup into a domain change.
 Never commit source datasets, model-frame artifacts, fitted models, row-level
 predictions, credentials, environment dumps, or generated state. Keep local
 and SharePoint-synced artifacts outside Git. Package tests must inspect archive
-contents before release.
+contents before release. Never log or embed row-level values, raw predictions,
+comparison-unit identifiers, credentials, or source data in HTML or SQL
+evidence; persist only approved aggregate evidence.
