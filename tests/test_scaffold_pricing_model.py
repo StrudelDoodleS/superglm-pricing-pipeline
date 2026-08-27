@@ -107,6 +107,19 @@ def test_scaffold_has_one_strict_ordered_notebook_contract():
     assert all(NOTEBOOK_NAME.fullmatch(name) for name in _NOTEBOOK_NAMES)
 
 
+def test_legacy_scaffold_adapter_exports_focused_implementation():
+    try:
+        from pricing_pipeline.scaffold import config, service
+    except ModuleNotFoundError:
+        pytest.fail("focused scaffold modules are missing")
+
+    assert scaffold_module.ScaffoldConfig is config.ScaffoldConfig
+    assert scaffold_module.ScaffoldOptions is config.ScaffoldOptions
+    assert scaffold_module.ScaffoldResult is service.ScaffoldResult
+    assert scaffold_module.load_scaffold_config is config.load_scaffold_config
+    assert scaffold_module.scaffold_pricing_model is service.scaffold_pricing_model
+
+
 @pytest.mark.parametrize(
     ("case", "settings"),
     (
@@ -563,10 +576,12 @@ def test_scaffold_allows_a_symlinked_user_root_after_resolving_it(tmp_path):
 def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
     monkeypatch, tmp_path
 ):
+    from pricing_pipeline.scaffold import service
+
     external_path = tmp_path / "external-init.py"
     external_content = "do not modify this file\n"
     external_path.write_text(external_content, encoding="utf-8")
-    original_migration = scaffold_module._migrate_legacy_deployment_notebook
+    original_migration = service._migrate_legacy_deployment_notebook
 
     def swap_leaf_after_preflight(package_dir: Path):
         package_dir.mkdir(parents=True)
@@ -574,7 +589,7 @@ def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
         return original_migration(package_dir)
 
     monkeypatch.setattr(
-        scaffold_module,
+        service,
         "_migrate_legacy_deployment_notebook",
         swap_leaf_after_preflight,
     )
