@@ -1367,8 +1367,8 @@ def test_model_source_hash_tracks_notebook_source_but_ignores_execution_output(t
     )
     checkpoint_only_change = hash_model_source(tmp_path)
 
-    scratch_path = tmp_path / "99_scratch_work.ipynb"
-    scratch_path.write_text(
+    exploration_path = tmp_path / "02_model_exploration.ipynb"
+    exploration_path.write_text(
         json.dumps(
             {
                 **notebook,
@@ -1382,12 +1382,12 @@ def test_model_source_hash_tracks_notebook_source_but_ignores_execution_output(t
         ),
         encoding="utf-8",
     )
-    scratch_only_change = hash_model_source(tmp_path)
+    exploration_only_change = hash_model_source(tmp_path)
 
     for operational_name in (
-        "03_model_editor.ipynb",
-        "04_manual_adjustment.ipynb",
-        "05_model_deployment.ipynb",
+        "04_model_editor.ipynb",
+        "05_manual_adjustment.ipynb",
+        "06_model_deployment.ipynb",
     ):
         (tmp_path / operational_name).write_text(
             json.dumps(
@@ -1414,8 +1414,16 @@ def test_model_source_hash_tracks_notebook_source_but_ignores_execution_output(t
     notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
     source_change = hash_model_source(tmp_path)
 
+    training_path = tmp_path / "03_model_training.ipynb"
+    training_path.write_text(json.dumps(notebook), encoding="utf-8")
+    training_original = hash_model_source(tmp_path)
+    notebook["cells"][0]["source"] = ["MODEL_NAME = 'HOME_BURN_COST'\n"]
+    training_path.write_text(json.dumps(notebook), encoding="utf-8")
+    training_source_change = hash_model_source(tmp_path)
+
     assert checkpoint_only_change == original
-    assert scratch_only_change == original
+    assert exploration_only_change == original
     assert operational_notebook_change == original
     assert output_only_change == original
     assert source_change != original
+    assert training_source_change != training_original

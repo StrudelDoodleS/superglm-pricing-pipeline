@@ -9,18 +9,18 @@ writes, artifacts, publication, and deployment guards.
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified model-frame artifact | Fit or publish a model |
-| `02_model_training.ipynb` | Exact model frame; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
-| `03_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
-| `04_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
-| `05_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
-| `99_scratch_work.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `03_model_training.ipynb` | Exact model frame; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
+| `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
+| `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
+| `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
 
-Accepted scratch data work moves to notebook 01. Accepted model choices move to
-notebook 02. Scratch cells are excluded from model-source identity.
+Accepted exploration data work moves to notebook 01. Accepted model choices move to
+notebook 03. Exploration cells are excluded from model-source identity.
 
 ## Optional scratch benchmarks
 
-Notebook 99 includes two deliberately disposable benchmarks:
+Notebook 02 includes two deliberately disposable benchmarks:
 
 - `unconstrained_superglm_features(...)` keeps raw categorical levels and uses
   unconstrained, data-driven splines with REML-estimated lambdas. It applies no

@@ -24,7 +24,7 @@ assert checkout not in package_file.parents
 assert (
     pricing_pipeline.__version__
     == importlib.metadata.version("superglm-pricing-pipeline")
-    == "0.2.0"
+    == "0.2.1"
 )
 assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 38
 assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if item.is_file())) == (
@@ -78,11 +78,11 @@ assert scaffold_result.returncode == 0, scaffold_result.stderr
 package = consumer / "pricing_models" / "clean_wheel_model"
 assert tuple(sorted(path.name for path in package.glob("*.ipynb"))) == (
     "01_data_ingestion.ipynb",
-    "02_model_training.ipynb",
-    "03_model_editor.ipynb",
-    "04_manual_adjustment.ipynb",
-    "05_model_deployment.ipynb",
-    "99_scratch_work.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
 )
 
 root = Path(os.environ["SMOKE_DATABASE_ROOT"])

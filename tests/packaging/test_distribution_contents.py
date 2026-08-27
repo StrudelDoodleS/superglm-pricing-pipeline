@@ -14,7 +14,7 @@ import pytest
 from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DIST_INFO = f"superglm_pricing_pipeline-{VERSION}.dist-info"
 SDIST_ROOT = f"superglm_pricing_pipeline-{VERSION}"
 PACKAGE_PREFIX = "pricing_pipeline/"

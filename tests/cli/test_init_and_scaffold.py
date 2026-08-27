@@ -21,11 +21,11 @@ carry_forward = true
 """
 EXPECTED_NOTEBOOKS = (
     "01_data_ingestion.ipynb",
-    "02_model_training.ipynb",
-    "03_model_editor.ipynb",
-    "04_manual_adjustment.ipynb",
-    "05_model_deployment.ipynb",
-    "99_scratch_work.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
 )
 
 
@@ -331,7 +331,7 @@ def test_installed_scaffold_force_preflights_all_outputs_before_writing(tmp_path
     earlier_output.write_bytes(earlier_bytes)
     fixed_mtime_ns = 1_700_000_000_000_000_000
     os.utime(earlier_output, ns=(fixed_mtime_ns, fixed_mtime_ns))
-    later_output = package / "05_model_deployment.ipynb"
+    later_output = package / "06_model_deployment.ipynb"
     later_output.unlink()
     later_output.mkdir()
     sentinel = later_output / "keep.txt"
@@ -354,7 +354,7 @@ def test_installed_scaffold_force_preflights_all_outputs_before_writing(tmp_path
     )
 
     error = capsys.readouterr().err
-    assert "05_model_deployment.ipynb" in error
+    assert "06_model_deployment.ipynb" in error
     assert "regular file" in error
     assert "failed unexpectedly" not in error
     assert earlier_output.read_bytes() == earlier_bytes

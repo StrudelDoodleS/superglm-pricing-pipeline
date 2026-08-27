@@ -42,12 +42,12 @@ def test_framework_repository_excludes_application_runtime_and_model_workspaces(
 def test_distribution_metadata_and_runtime_version_have_one_authority():
     project = _project()["project"]
     assert project["name"] == "superglm-pricing-pipeline"
-    assert project["version"] == "0.2.0"
+    assert project["version"] == "0.2.1"
     assert project["requires-python"] == ">=3.14"
     assert (
         pricing_pipeline.__version__
         == importlib.metadata.version("superglm-pricing-pipeline")
-        == "0.2.0"
+        == "0.2.1"
     )
 
 

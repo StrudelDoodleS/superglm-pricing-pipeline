@@ -7,7 +7,7 @@ immutable SQL rating package.
 
 ```bash
 uv init --bare --python 3.14
-uv add "superglm-pricing-pipeline @ git+ssh://git@HOST/TEAM/REPOSITORY.git@v0.2.0"
+uv add "superglm-pricing-pipeline @ git+ssh://git@HOST/TEAM/REPOSITORY.git@v0.2.1"
 uv run pricing-pipeline init
 # edit pricing_scaffold.toml
 uv run pricing-pipeline scaffold \
@@ -38,21 +38,21 @@ The scaffold creates:
 ```text
 pricing_models/claim_frequency/
 ├── 01_data_ingestion.ipynb
-├── 02_model_training.ipynb
-├── 03_model_editor.ipynb
-├── 04_manual_adjustment.ipynb
-├── 05_model_deployment.ipynb
-└── 99_scratch_work.ipynb
+├── 02_model_exploration.ipynb
+├── 03_model_training.ipynb
+├── 04_model_editor.ipynb
+├── 05_manual_adjustment.ipynb
+└── 06_model_deployment.ipynb
 ```
 
 | Notebook | Purpose |
 |---|---|
 | `01_data_ingestion.ipynb` | Build the governed model frame and record its Data-as-at date. |
-| `02_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
-| `03_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
-| `04_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |
-| `05_model_deployment.ipynb` | Review and deploy one selected package. |
-| `99_scratch_work.ipynb` | Run disposable experiments; it cannot publish or deploy. |
+| `02_model_exploration.ipynb` | Explore features, benchmarks, and groupings without publishing or deploying. |
+| `03_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
+| `04_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
+| `05_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |
+| `06_model_deployment.ipynb` | Review and deploy one selected package. |
 
 `pricing_scaffold.toml` supplies connection names and safe notebook defaults.
 An explicit `--config` wins, and explicit command-line options win over the
