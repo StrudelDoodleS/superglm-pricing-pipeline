@@ -25,6 +25,10 @@ def scaffold_template() -> Traversable:
     return scaffold_root().joinpath("pricing_scaffold.toml")
 
 
+def scaffold_notebook_root() -> Traversable:
+    return scaffold_root().joinpath("notebooks")
+
+
 @contextmanager
 def materialized_migration_dir() -> Iterator[Path]:
     with as_file(migration_root()) as path:

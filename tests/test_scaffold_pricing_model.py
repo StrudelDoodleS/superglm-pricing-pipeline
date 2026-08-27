@@ -135,7 +135,12 @@ def test_scaffold_has_one_strict_ordered_notebook_contract():
     ),
 )
 def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
-    rendered = scaffold_module._notebooks(
+    try:
+        from pricing_pipeline.scaffold.render import render_notebooks
+    except ModuleNotFoundError:
+        pytest.fail("the installed scaffold renderer is missing")
+
+    rendered = render_notebooks(
         package_name="claim_frequency",
         model_name="CLAIM_FREQUENCY",
         model_label="Claim frequency",
