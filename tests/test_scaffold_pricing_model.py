@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,25 @@ EXPECTED_NOTEBOOKS = (
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
 )
+
+V021_NOTEBOOK_DIGESTS = {
+    "local": {
+        "01_data_ingestion.ipynb": "6bbbe516361acca41e7790c32fbe7cfe0fde26db53612d481063adb3541a6a6a",
+        "02_model_exploration.ipynb": "d7c164dcb2d4bb61546ba8b67ae68541b95b60256b4d40b99b53193ab549579a",
+        "03_model_training.ipynb": "cde71cff84997de77336656ba17f7bcd61174c49aafdfad6604dc8b65527506c",
+        "04_model_editor.ipynb": "0a713df68f6827334b41554340c7ad6282254cada1136da77ed61ec98a5bbff1",
+        "05_manual_adjustment.ipynb": "ed030abf68e61daf70bba0483fd02c936a8fbda9ad3d0131c5ff6e8ec38885a9",
+        "06_model_deployment.ipynb": "bc4490a86f7e18851d782d79a8c6f7f3e74ee2b585a577babd81066ddf41ba50",
+    },
+    "remote": {
+        "01_data_ingestion.ipynb": "9347209858b4894b6414824b5d3fa0c7b36cfc1ebc6d0eabfcf9b4a8f66e963f",
+        "02_model_exploration.ipynb": "99aa5f64d138e52ad363ae48eee246e55a6485dd0beba78c401ce04e4e943c77",
+        "03_model_training.ipynb": "810ac83bcba5bae76138a3a20f26381447a509c59e1b2855372466cb071832ef",
+        "04_model_editor.ipynb": "9b337092cb7a1ae20cdb346bcaf7e8ca7714f21e538b348fc06634332a8c0960",
+        "05_manual_adjustment.ipynb": "943d703ceb5505c66744ac3124ea44f94b8f3a6185acb7d263e5e59f6e40b132",
+        "06_model_deployment.ipynb": "e36725cfe48fdac7f9da8d0277184e6c26eab84e5c024d3cb973ad4e873dcdda",
+    },
+}
 
 
 def _legacy_deployment_notebook(label: str) -> str:
@@ -85,6 +105,49 @@ def _scaffold(tmp_path: Path, **overrides) -> Path:
 def test_scaffold_has_one_strict_ordered_notebook_contract():
     assert _NOTEBOOK_NAMES == EXPECTED_NOTEBOOKS
     assert all(NOTEBOOK_NAME.fullmatch(name) for name in _NOTEBOOK_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("case", "settings"),
+    (
+        (
+            "local",
+            {
+                "deployment_slot": "CLAIM_FREQUENCY_UAT",
+                "database_mode": "local",
+                "runtime_module": None,
+                "expected_remote_database": "",
+                "manual_edit_source_selector": "deployed",
+                "manual_edit_carry_forward": True,
+            },
+        ),
+        (
+            "remote",
+            {
+                "deployment_slot": "CLAIM_FREQUENCY_PROD",
+                "database_mode": "remote",
+                "runtime_module": "work_runtime.database",
+                "expected_remote_database": "PricingAudit",
+                "manual_edit_source_selector": "latest",
+                "manual_edit_carry_forward": False,
+            },
+        ),
+    ),
+)
+def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
+    rendered = scaffold_module._notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="Claim frequency",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        **settings,
+    )
+
+    assert {
+        name: hashlib.sha256(source.encode("utf-8")).hexdigest()
+        for name, source in rendered.items()
+    } == V021_NOTEBOOK_DIGESTS[case]
 
 
 def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
