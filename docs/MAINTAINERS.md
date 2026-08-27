@@ -40,7 +40,7 @@ uv run python -m pytest -q tests/test_scaffold_pricing_model.py tests/cli/test_i
 Cross-domain integration:
 
 ```bash
-uv run python -m pytest -q tests/test_pricing_model_notebooks.py tests/test_offline_sqlite.py tests/test_model_monitoring.py
+uv run python -m pytest -q tests/test_notebook_workflow.py tests/test_offline_sqlite.py tests/test_model_monitoring.py
 ```
 
 Release gate:
@@ -48,13 +48,18 @@ Release gate:
 ```bash
 uv lock --check
 uv run --locked --all-extras python -m pytest -q
-uv run ruff check src tests scripts
+git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.py' |
+  xargs -r uv run ruff check
+git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.py' |
+  xargs -r uv run ruff format --check
 uv build
 uv run python -m pytest -q tests/packaging
 git diff --check
 ```
 
 Use the focused lane while editing. Run the release lane once before merging.
+The repository still has inherited Ruff debt outside the changed-file gate; do
+not mix mechanical whole-repository cleanup into a domain change.
 
 ## Confidentiality
 
