@@ -106,11 +106,6 @@ def render_notebooks(
                 + ", ".join(sorted(unknown))
             )
         notebook = _render(template, replacements)
-        unresolved = _tokens(notebook)
-        if unresolved:
-            raise RuntimeError(
-                "installed scaffold notebook contains unresolved template tokens: "
-                + ", ".join(sorted(unresolved))
-            )
+        # Validate before substitution: an analyst value may legitimately look like a token.
         rendered[filename] = json.dumps(notebook, indent=1, ensure_ascii=False) + "\n"
     return rendered

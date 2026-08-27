@@ -168,6 +168,26 @@ def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
     } == V021_NOTEBOOK_DIGESTS[case]
 
 
+def test_scaffold_renderer_preserves_token_shaped_user_values():
+    from pricing_pipeline.scaffold.render import render_notebooks
+
+    rendered = render_notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="__CUSTOM_LABEL__",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        deployment_slot="CLAIM_FREQUENCY_UAT",
+        database_mode="local",
+        runtime_module=None,
+        expected_remote_database="",
+        manual_edit_source_selector="deployed",
+        manual_edit_carry_forward=True,
+    )
+
+    assert "__CUSTOM_LABEL__" in rendered["01_data_ingestion.ipynb"]
+
+
 def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
     result = scaffold_pricing_model(
         ScaffoldOptions(
