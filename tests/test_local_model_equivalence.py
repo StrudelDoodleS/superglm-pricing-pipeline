@@ -42,7 +42,7 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
 ):
     model_root = tmp_path / "pricing_models" / "local_equivalence"
     model_root.mkdir(parents=True)
-    (model_root / "02_model_training.ipynb").write_text(
+    (model_root / "03_model_training.ipynb").write_text(
         json.dumps(
             {
                 "cells": [

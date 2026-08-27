@@ -9,18 +9,18 @@ writes, artifacts, publication, and deployment guards.
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified model-frame artifact | Fit or publish a model |
-| `02_model_training.ipynb` | Exact model frame; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
-| `03_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
-| `04_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
-| `05_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
-| `99_scratch_work.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `03_model_training.ipynb` | Exact model frame; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
+| `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
+| `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
+| `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
 
-Accepted scratch data work moves to notebook 01. Accepted model choices move to
-notebook 02. Scratch cells are excluded from model-source identity.
+Accepted exploration data work moves to notebook 01. Accepted model choices move to
+notebook 03. Exploration cells are excluded from model-source identity.
 
 ## Optional scratch benchmarks
 
-Notebook 99 includes two deliberately disposable benchmarks:
+Notebook 02 includes two deliberately disposable benchmarks:
 
 - `unconstrained_superglm_features(...)` keeps raw categorical levels and uses
   unconstrained, data-driven splines with REML-estimated lambdas. It applies no
@@ -53,7 +53,7 @@ uv sync --extra scratch
 
 These helpers return only in-memory Python objects. They have no SQL,
 publication, or deployment path; an accepted feature decision must still move
-into notebook 02 and the governed candidate workflow.
+into notebook 03 and the governed candidate workflow.
 
 ## Underwriter HTML review
 
@@ -291,7 +291,7 @@ Precedence is command line, explicit `--config`, auto-discovered
 `<root>/pricing_scaffold.toml`, then built-in local defaults. Unknown sections
 or keys fail fast. `ALLOW_REMOTE_WRITES` cannot be set in TOML.
 
-`source_selector = "deployed"` makes notebook 04 open the package currently
+`source_selector = "deployed"` makes notebook 05 open the package currently
 deployed in the model's configured slot. An exact `PACKAGE_VERSION` in the
 notebook overrides it. `carry_forward` is recorded in the canonical policy;
 it never causes an implicit publication or deployment.
@@ -450,7 +450,7 @@ Editor/manual publication and deployment require remote mode.
 
 ## Manual business adjustments
 
-Notebook 04 shows every published package with model kind, fit time,
+Notebook 05 shows every published package with model kind, fit time,
 data-as-at, parent and deployment state. It opens the current deployment by
 default. Each policy rule names a feature, either exact levels or a numeric
 range, a positive multiplier, and a reason. Python converts the multiplier to
@@ -490,11 +490,11 @@ set under the same manifest.
 Until SuperGLM provides a public grouping export API, the workbench owns one
 isolated compatibility bridge to its private grouping object:
 
-1. Publish the untouched `RAW` candidate in notebook 02.
-2. Open that published RAW candidate in notebook 99.
+1. Publish the untouched `RAW` candidate in notebook 03.
+2. Open that published RAW candidate in notebook 02.
 3. Use `EditorSession` to collapse any levels across any categorical features.
 4. Call `export_level_groupings(candidate, editor_session=..., path=...)`.
-5. Notebook 02 calls `load_level_groupings(...)` and
+5. Notebook 03 calls `load_level_groupings(...)` and
    `apply_level_groupings(...)`, then fits `ROUTINE_EDIT`.
 
 The ignored Joblib artifact stores the actual `dict[str, LevelGrouping]` Python
@@ -503,7 +503,7 @@ hand-edited grouping config. Loading checks SuperGLM/Python versions, model,
 source package, manifest, frame hash, data-as-at, feature names, levels, and the
 group partition. Missing or no-op groupings skip the routine-edit build.
 Grouping artifacts are deliberately tied to the exact SuperGLM version; after
-an upgrade, reopen the RAW candidate in notebook 99 and export them again.
+an upgrade, reopen the RAW candidate in notebook 02 and export them again.
 
 Grouping is Python model behaviour. SQL receives completed relativities and
 evidence; it does not execute grouping rules.

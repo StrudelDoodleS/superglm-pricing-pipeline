@@ -21,11 +21,11 @@ from scripts.scaffold_pricing_model import (
 NOTEBOOK_NAME = re.compile(r"^\d{2}_[a-z0-9]+(?:_[a-z0-9]+)*\.ipynb$")
 EXPECTED_NOTEBOOKS = (
     "01_data_ingestion.ipynb",
-    "02_model_training.ipynb",
-    "03_model_editor.ipynb",
-    "04_manual_adjustment.ipynb",
-    "05_model_deployment.ipynb",
-    "99_scratch_work.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
 )
 
 
@@ -130,11 +130,16 @@ def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(
 def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     package_dir = _scaffold(tmp_path)
     ingestion = _code(package_dir / "01_data_ingestion.ipynb")
-    training = _code(package_dir / "02_model_training.ipynb")
-    editor = _code(package_dir / "03_model_editor.ipynb")
-    manual = _code(package_dir / "04_manual_adjustment.ipynb")
-    deployment = _code(package_dir / "05_model_deployment.ipynb")
-    scratch = _code(package_dir / "99_scratch_work.ipynb")
+    exploration_path = package_dir / "02_model_exploration.ipynb"
+    exploration_notebook = _notebook(exploration_path)
+    exploration = _code(exploration_path)
+    exploration_text = "\n".join(
+        "".join(cell.get("source", [])) for cell in exploration_notebook["cells"]
+    )
+    training = _code(package_dir / "03_model_training.ipynb")
+    editor = _code(package_dir / "04_model_editor.ipynb")
+    manual = _code(package_dir / "05_manual_adjustment.ipynb")
+    deployment = _code(package_dir / "06_model_deployment.ipynb")
 
     assert "save_model_frame(" in ingestion
     assert 'DATA_AS_OF = ""' in ingestion
@@ -176,32 +181,34 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert "open_candidate(" in deployment
     assert "deploy_package(" in deployment
 
-    assert "save_model_frame(" not in scratch
-    assert "build_candidate(" not in scratch
-    assert "publish_candidate(" not in scratch
-    assert "deploy_package(" not in scratch
-    assert "scratch_raw = pd.DataFrame(" in scratch
-    assert "scratch_frame = scratch_raw.copy()" in scratch
-    assert "SCRATCH_FEATURES = {" in scratch
-    assert 'SCRATCH_FAMILY = "poisson"' in scratch
-    assert "scratch_model = SuperGLM(" in scratch
-    assert ").fit(scratch_X, scratch_y)" in scratch
-    assert "scratch_model.predict(" in scratch
-    assert "Blank ingestion area" in scratch
-    assert "Blank feature area" in scratch
-    assert "Blank modelling area" in scratch
-    assert "unconstrained_superglm_features(" in scratch
-    assert "unconstrained_model = SuperGLM(" in scratch
-    assert ").fit_reml(" in scratch
-    assert "superglm_edf_table(unconstrained_model)" in scratch
-    assert "fit_boosted_blend(" in scratch
-    assert "reference_superglm=unconstrained_model" in scratch
-    assert "boosted_blend.metrics" in scratch
-    assert "EditorSession.from_model(" in scratch
-    assert "list_candidate_versions(" in scratch
-    assert 'versions["Kind"].eq("RAW")' in scratch
-    assert "open_candidate(" in scratch
-    assert "export_level_groupings(" in scratch
+    assert "save_model_frame(" not in exploration
+    assert "build_candidate(" not in exploration
+    assert "publish_candidate(" not in exploration
+    assert "deploy_package(" not in exploration
+    assert "scratch_raw = pd.DataFrame(" in exploration
+    assert "scratch_frame = scratch_raw.copy()" in exploration
+    assert "SCRATCH_FEATURES = {" in exploration
+    assert 'SCRATCH_FAMILY = "poisson"' in exploration
+    assert "scratch_model = SuperGLM(" in exploration
+    assert ").fit(scratch_X, scratch_y)" in exploration
+    assert "scratch_model.predict(" in exploration
+    assert "Blank ingestion area" in exploration
+    assert "Blank feature area" in exploration
+    assert "Blank modelling area" in exploration
+    assert "unconstrained_superglm_features(" in exploration
+    assert "unconstrained_model = SuperGLM(" in exploration
+    assert ").fit_reml(" in exploration
+    assert "superglm_edf_table(unconstrained_model)" in exploration
+    assert "fit_boosted_blend(" in exploration
+    assert "reference_superglm=unconstrained_model" in exploration
+    assert "boosted_blend.metrics" in exploration
+    assert "EditorSession.from_model(" in exploration
+    assert "list_candidate_versions(" in exploration
+    assert 'versions["Kind"].eq("RAW")' in exploration
+    assert "open_candidate(" in exploration
+    assert "export_level_groupings(" in exploration
+    assert "Copy accepted choices into notebook 03." in exploration_text
+    assert "Copy accepted choices into notebook 02." not in exploration_text
 
 
 def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
@@ -216,7 +223,7 @@ def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
     )
 
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "99_scratch_work.ipynb")
+    notebook = _notebook(package_dir / "02_model_exploration.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -246,7 +253,7 @@ def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
     for marker in markers:
         source = next(cell for cell in cells if marker in cell)
         exec(  # noqa: S102 - execute the generated notebook cells as their contract test
-            compile(source, f"99_scratch_work.ipynb:{marker}", "exec"),
+            compile(source, f"02_model_exploration.ipynb:{marker}", "exec"),
             namespace,
         )
 
@@ -260,7 +267,7 @@ def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
 
 def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "03_model_editor.ipynb")
+    notebook = _notebook(package_dir / "04_model_editor.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -277,7 +284,7 @@ def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
 
 def test_scaffold_keeps_manual_preview_publish_and_deploy_separate(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "04_manual_adjustment.ipynb")
+    notebook = _notebook(package_dir / "05_manual_adjustment.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -327,7 +334,7 @@ def test_scaffold_preserves_existing_files_and_recreates_only_missing_files(tmp_
     options = ScaffoldOptions(model_name="MY_MODEL", target_name="target", root=tmp_path)
     scaffold_pricing_model(options)
     package_dir = tmp_path / "pricing_models" / "my_model"
-    training_path = package_dir / "02_model_training.ipynb"
+    training_path = package_dir / "03_model_training.ipynb"
     init_path = package_dir / "__init__.py"
     training_path.write_text(
         training_path.read_text(encoding="utf-8") + "\n",
@@ -347,7 +354,7 @@ def test_scaffold_force_overwrites_all_workflow_files(tmp_path):
     options = ScaffoldOptions(model_name="MY_MODEL", target_name="target", root=tmp_path)
     scaffold_pricing_model(options)
     package_dir = tmp_path / "pricing_models" / "my_model"
-    training_path = package_dir / "02_model_training.ipynb"
+    training_path = package_dir / "03_model_training.ipynb"
     training_path.write_text("stale", encoding="utf-8")
 
     result = scaffold_pricing_model(
@@ -379,21 +386,21 @@ def test_scaffold_migrates_legacy_deployment_before_creating_manual_step(tmp_pat
     )
 
     assert not legacy_path.exists()
-    assert (package_dir / "05_model_deployment.ipynb").read_text(encoding="utf-8") == legacy_content
-    _notebook(package_dir / "04_manual_adjustment.ipynb")
+    assert (package_dir / "06_model_deployment.ipynb").read_text(encoding="utf-8") == legacy_content
+    _notebook(package_dir / "05_manual_adjustment.ipynb")
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
 
 
 def test_scaffold_refuses_legacy_migration_to_a_dangling_symlink(tmp_path):
     package_dir = tmp_path / "pricing_models" / "my_model"
     legacy_path = package_dir / "04_model_deployment.ipynb"
-    deployment_path = package_dir / "05_model_deployment.ipynb"
+    deployment_path = package_dir / "06_model_deployment.ipynb"
     legacy_content = _legacy_deployment_notebook("Legacy deployment")
     package_dir.mkdir(parents=True)
     legacy_path.write_text(legacy_content, encoding="utf-8")
     deployment_path.symlink_to(package_dir / "missing-deployment.ipynb")
 
-    with pytest.raises(ValueError, match="05_model_deployment\\.ipynb.*symbolic link"):
+    with pytest.raises(ValueError, match="06_model_deployment\\.ipynb.*symbolic link"):
         scaffold_pricing_model(
             ScaffoldOptions(model_name="MY_MODEL", target_name="target", root=tmp_path, force=True)
         )
@@ -515,7 +522,7 @@ def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
 def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp_path):
     package_dir = tmp_path / "pricing_models" / "my_model"
     legacy_path = package_dir / "04_model_deployment.ipynb"
-    deployment_path = package_dir / "05_model_deployment.ipynb"
+    deployment_path = package_dir / "06_model_deployment.ipynb"
     legacy_content = _legacy_deployment_notebook("Legacy deployment")
     deployment_content = _legacy_deployment_notebook("Current deployment")
     package_dir.mkdir(parents=True)
@@ -525,7 +532,7 @@ def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp
     with pytest.raises(
         ValueError,
         match=(
-            "04_model_deployment\\.ipynb.*05_model_deployment\\.ipynb.*"
+            "04_model_deployment\\.ipynb.*06_model_deployment\\.ipynb.*"
             "Resolve the two deployment notebooks manually"
         ),
     ):
@@ -535,7 +542,7 @@ def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp
 
     assert legacy_path.read_text(encoding="utf-8") == legacy_content
     assert deployment_path.read_text(encoding="utf-8") == deployment_content
-    assert not (package_dir / "04_manual_adjustment.ipynb").exists()
+    assert not (package_dir / "05_manual_adjustment.ipynb").exists()
 
 
 def test_scaffold_accepts_explicit_model_identity(tmp_path):
@@ -580,7 +587,7 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
         manual_edit_carry_forward=False,
     )
 
-    source = _code(package_dir / "04_manual_adjustment.ipynb")
+    source = _code(package_dir / "05_manual_adjustment.ipynb")
     assert 'SOURCE_SELECTOR = "latest"' in source
     assert "CARRY_FORWARD = False" in source
 

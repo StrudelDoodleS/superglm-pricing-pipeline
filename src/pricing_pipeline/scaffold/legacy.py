@@ -28,14 +28,14 @@ _CONFIG_KEYS = frozenset(
 )
 _NOTEBOOK_NAMES = (
     "01_data_ingestion.ipynb",
-    "02_model_training.ipynb",
-    "03_model_editor.ipynb",
-    "04_manual_adjustment.ipynb",
-    "05_model_deployment.ipynb",
-    "99_scratch_work.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
 )
 _LEGACY_DEPLOYMENT_NOTEBOOK = "04_model_deployment.ipynb"
-_DEPLOYMENT_NOTEBOOK = "05_model_deployment.ipynb"
+_DEPLOYMENT_NOTEBOOK = "06_model_deployment.ipynb"
 
 
 @dataclass(frozen=True)
@@ -496,7 +496,7 @@ REPLACE_MODEL_FRAME = False
                 """
                 ## Optional routine edit: pre-applied simplifications
 
-                `99_scratch_work.ipynb` can export all interactive categorical
+                `02_model_exploration.ipynb` can export all interactive categorical
                 collapses from a reviewed RAW candidate. This cell loads the actual
                 `LevelGrouping` objects and automatically skips the routine model when
                 the artifact is absent or contains no real collapse.
@@ -878,7 +878,7 @@ DEPLOYMENT_REASON = ""
                     )
                     display(deployment)
                 else:
-                    display("Published only. Use notebook 05 when it is approved for deployment.")
+                    display("Published only. Use notebook 06 when it is approved for deployment.")
                 """
             ),
         ]
@@ -992,7 +992,7 @@ DEPLOYMENT_REASON = ""
         [
             _markdown(
                 """
-                # __MODEL_LABEL_MARKDOWN__: scratch work
+                # __MODEL_LABEL_MARKDOWN__: model exploration
 
                 Use this notebook for source exploration and disposable feature ideas.
                 The first section is a complete but disposable data-to-model sandbox:
@@ -1000,11 +1000,11 @@ DEPLOYMENT_REASON = ""
                 inspect predictions. It deliberately sorts last and never updates the
                 governed model-frame artifact. Move accepted data work into
                 `01_data_ingestion.ipynb` and accepted model choices into
-                `02_model_training.ipynb`.
+                `03_model_training.ipynb`.
 
                 It also provides the temporary grouping workflow: open a published RAW
                 candidate in SuperGLM's editor, collapse categorical levels, then export
-                the actual per-feature `LevelGrouping` objects for notebook 02.
+                the actual per-feature `LevelGrouping` objects for notebook 03.
                 """
             ),
             _code(
@@ -1121,7 +1121,7 @@ REPLACE_GROUPING_ARTIFACT = False
 
                 Use normal SuperGLM feature objects here. This fits only in memory: it
                 does not register a model, create a manifest, build a candidate, or
-                publish anything. Copy accepted choices into notebook 02.
+                publish anything. Copy accepted choices into notebook 03.
                 """
             ),
             _code(
@@ -1338,11 +1338,11 @@ REPLACE_GROUPING_ARTIFACT = False
 
     return {
         "01_data_ingestion.ipynb": ingestion,
-        "02_model_training.ipynb": training,
-        "03_model_editor.ipynb": editor,
-        "04_manual_adjustment.ipynb": manual_adjustment,
-        "05_model_deployment.ipynb": deployment,
-        "99_scratch_work.ipynb": scratch,
+        "02_model_exploration.ipynb": scratch,
+        "03_model_training.ipynb": training,
+        "04_model_editor.ipynb": editor,
+        "05_manual_adjustment.ipynb": manual_adjustment,
+        "06_model_deployment.ipynb": deployment,
     }
 
 
