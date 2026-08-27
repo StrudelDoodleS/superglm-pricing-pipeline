@@ -33,9 +33,9 @@ def test_windows_file_lock_uses_one_byte_lock_and_unlock(monkeypatch, tmp_path):
 def test_file_lock_consumers_do_not_import_fcntl_at_module_load():
     repository_root = Path(__file__).resolve().parents[1]
     consumer_paths = (
-        repository_root / "pricing_pipeline/infra/offline_sqlite.py",
-        repository_root / "pricing_pipeline/publishing/editor_candidate.py",
-        repository_root / "pricing_pipeline/workbench/submission.py",
+        repository_root / "src/pricing_pipeline/infra/offline_sqlite.py",
+        repository_root / "src/pricing_pipeline/publishing/editor_candidate.py",
+        repository_root / "src/pricing_pipeline/workbench/submission.py",
     )
 
     for path in consumer_paths:

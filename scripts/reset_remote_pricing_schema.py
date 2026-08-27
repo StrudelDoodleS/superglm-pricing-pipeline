@@ -10,11 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pricing_pipeline.infra.reset_schema import (  # noqa: E402
+from pricing_pipeline.infra.reset_schema import (
     CONFIRMATION_FLAG,
     reset_and_reseed_schema,
 )
-from scripts.pricing_db import get_runtime, load_env  # noqa: E402
+from pricing_pipeline.resources import materialized_migration_dir
+from scripts.pricing_db import get_runtime, load_env
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,12 +27,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Importable Python module that provides get_engine(database=None), "
             "get_schema_names(), and optional get_runtime_settings()."
         ),
-    )
-    parser.add_argument(
-        "--schema-dir",
-        type=Path,
-        default=Path("db/migrations"),
-        help="Directory containing versioned SQL Server migration files.",
     )
     parser.add_argument(
         "--expected-database",
@@ -92,16 +87,15 @@ def main() -> None:
     runtime = get_runtime(args.runtime_module)
     schema_names = schema_names_from_runtime(runtime, args.schemas)
     engine = runtime.get_engine()
-    result = reset_and_reseed_schema(
-        engine,
-        migrations_dir=(
-            args.schema_dir if args.schema_dir.is_absolute() else ROOT / args.schema_dir
-        ),
-        expected_database=args.expected_database,
-        schema_names=schema_names,
-        allowed_schema_names=schema_names,
-        execute=args.execute,
-    )
+    with materialized_migration_dir() as schema_dir:
+        result = reset_and_reseed_schema(
+            engine,
+            migrations_dir=schema_dir,
+            expected_database=args.expected_database,
+            schema_names=schema_names,
+            allowed_schema_names=schema_names,
+            execute=args.execute,
+        )
 
     print(f"dry_run={str(result.dry_run).lower()}")
     print(f"database={result.actual_database}")

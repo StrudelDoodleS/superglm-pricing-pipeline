@@ -110,6 +110,23 @@ def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
         _notebook(notebook_path)
 
 
+def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(tmp_path):
+    package_dir = _scaffold(tmp_path)
+
+    for name in EXPECTED_NOTEBOOKS:
+        setup = next(
+            cell
+            for cell in _notebook(package_dir / name)["cells"]
+            if cell["cell_type"] == "code" and "PROJECT_ROOT" in "".join(cell["source"])
+        )
+        setup = "".join(setup["source"])
+
+        assert '(candidate / "pyproject.toml").is_file()' in setup
+        assert '(candidate / "pricing_models").is_dir()' in setup
+        assert 'candidate / "pricing_pipeline"' not in setup
+        assert "sys.path.insert" not in setup
+
+
 def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     package_dir = _scaffold(tmp_path)
     ingestion = _code(package_dir / "01_data_ingestion.ipynb")

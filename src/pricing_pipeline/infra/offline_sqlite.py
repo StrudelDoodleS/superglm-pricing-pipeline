@@ -12,8 +12,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 
 from pricing_pipeline.infra.file_lock import exclusive_file_lock
+from pricing_pipeline.resources import offline_sqlite_root
 
-OFFLINE_DDL_DIR = Path(__file__).resolve().parents[2] / "db" / "offline_sqlite"
 COORDINATOR_DB_FILE = "coordinator.sqlite"
 SCHEMA_DB_FILES = {
     "pricing": "pricing.sqlite",
@@ -366,11 +366,13 @@ def _assert_offline_foreign_key_integrity(connection) -> None:
 
 def apply_offline_ddl(engine: Engine) -> None:
     """Create any missing local tables without deleting existing data."""
+    ddl_root = offline_sqlite_root()
     connection = engine.raw_connection()
     try:
         for schema in SCHEMA_DB_FILES:
-            ddl_path = OFFLINE_DDL_DIR / f"{schema}.sql"
-            connection.executescript(ddl_path.read_text(encoding="utf-8"))
+            connection.executescript(
+                ddl_root.joinpath(f"{schema}.sql").read_text(encoding="utf-8")
+            )
         _assert_canonical_monitoring_variant_policy(connection)
         for schema, table, column, column_type in _OFFLINE_COLUMN_UPGRADES:
             existing_columns = {
@@ -603,7 +605,7 @@ def apply_offline_ddl(engine: Engine) -> None:
             """
         )
         connection.executescript(
-            (OFFLINE_DDL_DIR / "pricing_views.sql").read_text(encoding="utf-8")
+            ddl_root.joinpath("pricing_views.sql").read_text(encoding="utf-8")
         )
         connection.commit()
     finally:

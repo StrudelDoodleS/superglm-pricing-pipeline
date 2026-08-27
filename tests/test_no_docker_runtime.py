@@ -12,6 +12,15 @@ from pricing_pipeline.infra.config import Settings
 from scripts import no_docker_services
 
 
+def test_no_maintained_duplicate_schema_sql_files():
+    for path in (
+        Path("docs/pricing_useful_tables_ddl.sql"),
+        Path("docs/pricing_useful_tables_full_ddl.sql"),
+        Path("tutorials/schema/pricing_useful_tables_ddl.sql"),
+    ):
+        assert not path.exists()
+
+
 def test_no_docker_env_example_targets_host_processes_and_external_sql():
     env_example = Path(".env.nodocker.example")
 
@@ -46,8 +55,7 @@ def test_no_docker_scripts_exist_without_compose_dependency():
     ]:
         assert script.exists(), f"{script} is missing"
         text = script.read_text(encoding="utf-8")
-        if script.name not in {"no_docker_services.py", "start_no_docker_stack.sh"}:
-            assert "docker compose" not in text.lower()
+        assert "docker compose" not in text.lower()
 
 
 def test_settings_can_skip_database_creation_for_hosted_targets():
@@ -59,10 +67,22 @@ def test_settings_can_skip_database_creation_for_hosted_targets():
 def test_apply_schema_script_starts_without_pythonpath(tmp_path):
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
-    env["PRICING_SCHEMA_DIR"] = str(tmp_path)
+    script_path = Path("scripts/apply_schema.py").resolve()
+    code = (
+        "from contextlib import nullcontext\n"
+        "from pathlib import Path\n"
+        "from unittest.mock import patch\n"
+        "import runpy\n"
+        f"schema_dir = Path({str(tmp_path)!r})\n"
+        "with patch(\n"
+        "    'pricing_pipeline.resources.materialized_migration_dir',\n"
+        "    return_value=nullcontext(schema_dir),\n"
+        "):\n"
+        f"    runpy.run_path({str(script_path)!r}, run_name='__main__')\n"
+    )
 
     result = subprocess.run(
-        [sys.executable, "scripts/apply_schema.py"],
+        [sys.executable, "-c", code],
         check=False,
         capture_output=True,
         env=env,
@@ -90,7 +110,6 @@ def test_no_docker_service_picker_lists_available_services_without_pythonpath():
     assert "mlflow" in result.stdout
     assert "apply-schema" in result.stdout
     assert "migrate" not in result.stdout
-    assert "cloudbeaver" in result.stdout
     assert "ModuleNotFoundError" not in result.stderr
 
 
@@ -111,9 +130,9 @@ def test_no_docker_service_picker_builds_python_commands():
 
 def test_runtime_manager_starts_and_stops_long_running_service(tmp_path):
     command = no_docker_services.ServiceCommand(
-        name="airflow",
-        description="Start Airflow",
-        argv=["python", "airflow.py"],
+        name="mlflow",
+        description="Start MLflow",
+        argv=["python", "mlflow.py"],
         long_running=True,
     )
     created_processes: list[FakeProcess] = []
@@ -129,23 +148,23 @@ def test_runtime_manager_starts_and_stops_long_running_service(tmp_path):
         popen_factory=fake_popen,
     )
 
-    manager.toggle("airflow")
+    manager.toggle("mlflow")
 
-    assert manager.status("airflow") == "running"
-    assert created_processes[0].argv == ["python", "airflow.py"]
-    assert Path(created_processes[0].kwargs["stdout"].name) == tmp_path / "airflow.log"
+    assert manager.status("mlflow") == "running"
+    assert created_processes[0].argv == ["python", "mlflow.py"]
+    assert Path(created_processes[0].kwargs["stdout"].name) == tmp_path / "mlflow.log"
 
-    manager.toggle("airflow")
+    manager.toggle("mlflow")
 
     assert created_processes[0].terminated is True
-    assert manager.status("airflow") == "stopped"
+    assert manager.status("mlflow") == "stopped"
 
 
 def test_runtime_manager_stops_long_running_service_process_group(monkeypatch, tmp_path):
     command = no_docker_services.ServiceCommand(
-        name="airflow",
-        description="Start Airflow",
-        argv=["python", "airflow.py"],
+        name="mlflow",
+        description="Start MLflow",
+        argv=["python", "mlflow.py"],
         long_running=True,
     )
     created_processes: list[FakeProcess] = []
@@ -175,15 +194,15 @@ def test_runtime_manager_stops_long_running_service_process_group(monkeypatch, t
         popen_factory=fake_popen,
     )
 
-    manager.toggle("airflow")
+    manager.toggle("mlflow")
 
     assert created_processes[0].kwargs["start_new_session"] is True
 
-    manager.toggle("airflow")
+    manager.toggle("mlflow")
 
     assert sent_signals == [(54321, signal.SIGTERM)]
     assert created_processes[0].terminated is False
-    assert manager.status("airflow") == "stopped"
+    assert manager.status("mlflow") == "stopped"
 
 
 def test_runtime_manager_runs_one_shot_service_to_log(tmp_path):
@@ -215,13 +234,13 @@ def test_runtime_manager_runs_one_shot_service_to_log(tmp_path):
 
 def test_runtime_manager_marks_missing_command_as_failed(tmp_path):
     command = no_docker_services.ServiceCommand(
-        name="cloudbeaver",
-        description="Start CloudBeaver",
-        argv=["docker", "compose"],
+        name="missing-service",
+        description="Start missing service",
+        argv=["missing-service-binary"],
     )
 
     def fake_run(argv, **kwargs):
-        raise FileNotFoundError("docker")
+        raise FileNotFoundError("missing-service-binary")
 
     manager = no_docker_services.RuntimeManager(
         [command],
@@ -229,10 +248,12 @@ def test_runtime_manager_marks_missing_command_as_failed(tmp_path):
         run_factory=fake_run,
     )
 
-    manager.toggle("cloudbeaver")
+    manager.toggle("missing-service")
 
-    assert manager.status("cloudbeaver") == "failed"
-    assert "docker" in (tmp_path / "cloudbeaver.log").read_text(encoding="utf-8")
+    assert manager.status("missing-service") == "failed"
+    assert "missing-service-binary" in (tmp_path / "missing-service.log").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_runtime_manager_screen_lines_show_status_and_logs(tmp_path):
@@ -275,7 +296,6 @@ def test_runtime_screen_groups_services_tasks_and_utilities():
     assert "Pipeline Tasks" in text
     assert "Utilities" in text
     assert text.index("Services") < text.index("mlflow")
-    assert text.index("Services") < text.index("cloudbeaver")
     assert text.index("Pipeline Tasks") < text.index("apply-schema")
     assert text.index("Pipeline Tasks") < text.index("load-fremtpl")
     assert text.index("Utilities") < text.index("bootstrap")
@@ -302,9 +322,9 @@ def test_runtime_screen_selected_row_index_skips_section_headers():
 
 def test_runtime_tui_handles_ctrl_c_without_traceback(monkeypatch):
     command = no_docker_services.ServiceCommand(
-        name="airflow",
-        description="Start Airflow",
-        argv=["python", "airflow.py"],
+        name="mlflow",
+        description="Start MLflow",
+        argv=["python", "mlflow.py"],
         long_running=True,
     )
     manager = no_docker_services.RuntimeManager([command])
@@ -528,22 +548,3 @@ def test_apply_schema_direct_script_import_resolves_repo_package():
     )
 
     assert result.returncode == 0, result.stderr
-
-
-def test_interactive_shell_launcher_cloudbeaver_is_explicitly_docker_backed():
-    result = subprocess.run(
-        [
-            "bash",
-            "scripts/start_no_docker_stack.sh",
-            "--dry-run",
-            "--services",
-            "cloudbeaver",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0
-    assert "cloudbeaver uses Docker Compose in this repo" in result.stdout
-    assert "docker compose --profile sql-ui up cloudbeaver" in result.stdout

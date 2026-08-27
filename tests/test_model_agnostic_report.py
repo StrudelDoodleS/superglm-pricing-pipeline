@@ -173,7 +173,7 @@ def test_html_owns_its_style_without_superglm_resources(tmp_path: Path):
     )
 
     html = result.output_path.read_text(encoding="utf-8")
-    source = Path("pricing_pipeline/reporting/_underwriter_html.py").read_text(encoding="utf-8")
+    source = Path("src/pricing_pipeline/reporting/_underwriter_html.py").read_text(encoding="utf-8")
 
     assert "superglm.editor.app" not in html
     assert "--yellow: #f4d35e" in html

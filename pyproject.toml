@@ -1,38 +1,56 @@
 [project]
-name = "airflow-superglm-builder"
-version = "0.1.0"
+name = "superglm-pricing-pipeline"
+version = "0.2.0"
 requires-python = ">=3.14"
 dependencies = [
-  "azure-identity",
   "joblib",
   "numpy",
   "openpyxl",
   "packaging",
   "pandas",
   "pyarrow>=23.0.1",
-  "plotly>=6.9",
   "pydantic>=2.13,<3",
-  "pyodbc",
   "python-dotenv",
   "scikit-learn",
   "sqlalchemy",
-  "superglm>=0.26",
+  "superglm>=0.26,<0.27",
 ]
 
+[project.scripts]
+pricing-pipeline = "pricing_pipeline.cli:main"
+
 [project.optional-dependencies]
+sqlserver = ["pyodbc"]
+azure = ["azure-identity", "pyodbc"]
+report = ["plotly>=6.9", "scipy"]
+notebook = ["ipykernel"]
+scratch = ["catboost", "lightgbm", "matplotlib", "scipy", "xgboost"]
 mlflow = ["mlflow"]
-scratch = [
-    "catboost",
-    "lightgbm",
-    "matplotlib",
-    "scipy",
-    "xgboost",
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pricing_pipeline"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/pricing_pipeline",
+  "/pyproject.toml",
+  "/README.md",
+]
+exclude = [
+  "/pricing_models",
+  "/state",
+  "/.venv",
+  "/dist",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
-addopts = "-q"
+addopts = "-q --import-mode=importlib"
+consider_namespace_packages = true
 
 [tool.ruff]
 target-version = "py314"
@@ -42,5 +60,6 @@ line-length = 100
 dev = [
     "matplotlib>=3.10.9",
     "pytest>=9.0.3",
+    "ruff",
     "sqlfluff>=4.2.1",
 ]

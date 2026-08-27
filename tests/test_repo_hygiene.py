@@ -15,8 +15,8 @@ def test_project_package_can_be_imported():
 
 def test_removed_validation_workaround_modules_do_not_return():
     for path in (
-        "pricing_pipeline/build_identity.py",
-        "pricing_pipeline/modeling/superglm_identity.py",
-        "pricing_pipeline/modeling/validation_curves.py",
+        "src/pricing_pipeline/build_identity.py",
+        "src/pricing_pipeline/modeling/superglm_identity.py",
+        "src/pricing_pipeline/modeling/validation_curves.py",
     ):
         assert not Path(path).exists()

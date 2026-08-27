@@ -16,18 +16,18 @@ PORTABILITY_REWRITES = (("except TypeError, ValueError:", "except (TypeError, Va
 SOURCE_MODULES = (
     (
         "reporting._underwriter_styles",
-        ROOT / "pricing_pipeline/reporting/_underwriter_styles.py",
+        ROOT / "src/pricing_pipeline/reporting/_underwriter_styles.py",
     ),
-    ("reporting.evidence", ROOT / "pricing_pipeline/reporting/evidence.py"),
+    ("reporting.evidence", ROOT / "src/pricing_pipeline/reporting/evidence.py"),
     (
         "reporting._underwriter_movement",
-        ROOT / "pricing_pipeline/reporting/_underwriter_movement.py",
+        ROOT / "src/pricing_pipeline/reporting/_underwriter_movement.py",
     ),
     (
         "reporting._underwriter_html",
-        ROOT / "pricing_pipeline/reporting/_underwriter_html.py",
+        ROOT / "src/pricing_pipeline/reporting/_underwriter_html.py",
     ),
-    ("reporting._core", ROOT / "pricing_pipeline/reporting/_core.py"),
+    ("reporting._core", ROOT / "src/pricing_pipeline/reporting/_core.py"),
 )
 
 

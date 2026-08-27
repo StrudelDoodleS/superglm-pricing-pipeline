@@ -364,7 +364,8 @@ def _create_legacy_effective_date_store(offline_sqlite, tmp_path):
     connection = legacy_engine.raw_connection()
     try:
         legacy_ddl = (
-            (offline_sqlite.OFFLINE_DDL_DIR / "pricing.sql")
+            offline_sqlite.offline_sqlite_root()
+            .joinpath("pricing.sql")
             .read_text(encoding="utf-8")
             .replace("effective_from TEXT,", "effective_from TEXT NOT NULL,")
             .replace(

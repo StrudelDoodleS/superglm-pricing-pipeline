@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -112,12 +114,55 @@ def test_cli_accepts_dry_run_without_confirmation():
     reset_remote_pricing_schema.validate_args(args)
 
 
-def test_cli_uses_default_migration_dir():
+def test_cli_does_not_offer_a_migration_directory_override():
     parser = reset_remote_pricing_schema.build_parser()
 
     args = parser.parse_args(["--expected-database", "MVA"])
 
-    assert args.schema_dir == Path("db/migrations")
+    assert not hasattr(args, "schema_dir")
+
+
+def test_cli_uses_materialized_packaged_migrations_by_default(monkeypatch, tmp_path):
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(
+            pricing_schema="pricing",
+            pricing_staging_schema="pricing_stg",
+            mlops_schema="mlops",
+        ),
+        get_engine=lambda: "engine",
+    )
+    observed: list[Path] = []
+
+    monkeypatch.setenv("PRICING_SCHEMA_DIR", str(tmp_path / "poison"))
+    monkeypatch.setattr(reset_remote_pricing_schema, "load_env", lambda: None)
+    monkeypatch.setattr(reset_remote_pricing_schema, "get_runtime", lambda _module: runtime)
+    monkeypatch.setattr(
+        reset_remote_pricing_schema,
+        "materialized_migration_dir",
+        lambda: nullcontext(tmp_path),
+    )
+    monkeypatch.setattr(
+        reset_remote_pricing_schema,
+        "reset_and_reseed_schema",
+        lambda _engine, *, migrations_dir, **_kwargs: (
+            observed.append(migrations_dir)
+            or SimpleNamespace(
+                dry_run=True,
+                actual_database="MVA",
+                schemas=("pricing", "pricing_stg", "mlops"),
+                drop_batch_count=0,
+                applied_migrations=(),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["reset_remote_pricing_schema.py", "--expected-database", "MVA"],
+    )
+
+    reset_remote_pricing_schema.main()
+
+    assert observed == [tmp_path]
 
 
 def test_cli_uses_runtime_schema_names_by_default():

@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import sys
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pricing_pipeline.infra.migrations import (  # noqa: E402
+from pricing_pipeline.infra.migrations import (
     migration_checksum,
     migration_files,
     render_migration_sql,
 )
-from pricing_pipeline.infra.schema import SchemaNames, validate_schema_name  # noqa: E402
+from pricing_pipeline.infra.schema import SchemaNames, validate_schema_name
+from pricing_pipeline.resources import migration_root
 
 
 def _sql_string(value: str) -> str:
@@ -95,7 +97,7 @@ GO
 
 
 def render_schema_sql(
-    migrations_dir: Path,
+    migrations_dir: Path | Traversable | None = None,
     *,
     pricing_schema: str,
     pricing_staging_schema: str,
@@ -109,9 +111,10 @@ def render_schema_sql(
         ),
         mlops=validate_schema_name(mlops_schema, "mlops_schema"),
     )
-    files = migration_files(migrations_dir)
+    root = migration_root() if migrations_dir is None else migrations_dir
+    files = migration_files(root)
     if not files:
-        raise RuntimeError(f"No schema DDL files found in {migrations_dir}")
+        raise RuntimeError(f"No schema DDL files found in {root}")
 
     parts = [
         "-- Rendered SuperGLM pricing audit schema DDL.",
@@ -130,11 +133,13 @@ def render_schema_sql(
                 rendered.rstrip(),
                 "",
                 f"IF NOT EXISTS (SELECT 1 FROM dbo.SCHEMA_MIGRATION WHERE version_file = {_sql_string(migration_name)})",
-                "    INSERT INTO dbo.SCHEMA_MIGRATION("
-                "version_file, checksum_sha256, applied_by, status"
-                ") VALUES ("
-                f"{_sql_string(migration_name)}, {_sql_string(checksum)}, "
-                "SUSER_SNAME(), N'APPLIED');",
+                (
+                    "    INSERT INTO dbo.SCHEMA_MIGRATION("
+                    "version_file, checksum_sha256, applied_by, status"
+                    ") VALUES ("
+                    f"{_sql_string(migration_name)}, {_sql_string(checksum)}, "
+                    "SUSER_SNAME(), N'APPLIED');"
+                ),
                 "GO",
             ]
         )
