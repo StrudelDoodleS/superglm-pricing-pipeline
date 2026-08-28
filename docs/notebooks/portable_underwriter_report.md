@@ -106,3 +106,34 @@ written into the HTML. Do not also list an identifier column in `features`.
 
 The executable tutorial is
 [`tutorials/01_portable_underwriter_report.ipynb`](../../tutorials/01_portable_underwriter_report.ipynb).
+
+## Direct execution traces
+
+```text
+Generic report:
+  reporting.build_scored_model_report
+  -> reporting.report.build_scored_model_report
+  -> reporting.inputs.normalize_report_inputs
+  -> reporting.evidence.collect_model_evidence
+  -> reporting.diagnostics.calculate_diagnostics
+  -> reporting._underwriter_html.render_underwriter_html
+
+Convenience report:
+  reporting.build_underwriter_report
+  -> reporting.report.build_underwriter_report
+  -> optional evidence adapters
+  -> the generic report path above
+
+Scaffold:
+  cli.main
+  -> scaffold.commands
+  -> scaffold.config.resolve_scaffold_options
+  -> scaffold.service.scaffold_pricing_model
+  -> scaffold.render and packaged notebook resources
+```
+
+The final reporting owners are `reporting.inputs` for input contracts and
+normalization, `reporting.evidence` for neutral evidence, `reporting.movement`
+for movement calculations, `reporting.diagnostics` for diagnostic assembly,
+and `reporting.report` for both supported workflows. The HTML and style modules
+render only and are intentionally excluded from functional-flow simplification.
