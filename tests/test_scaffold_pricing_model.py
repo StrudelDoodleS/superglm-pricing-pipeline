@@ -758,6 +758,67 @@ carry_forward = false
                 "target",
                 "--root",
                 str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    assert len(resolutions) == 1
+    discovered_raw, discovered_resolved = resolutions[0]
+    assert discovered_raw.database_mode == "remote"
+    assert discovered_raw.runtime_module == "work_runtime.database"
+    assert discovered_raw.expected_remote_database == "PricingAudit"
+    assert discovered_raw.manual_edit_source_selector == "latest"
+    assert discovered_raw.manual_edit_carry_forward is False
+    assert discovered_resolved.database_mode == "remote"
+    assert discovered_resolved.runtime_module == "work_runtime.database"
+    assert discovered_resolved.expected_remote_database == "PricingAudit"
+    assert discovered_resolved.manual_edit_source_selector == "latest"
+    assert discovered_resolved.manual_edit_carry_forward is False
+
+    explicit_root = tmp_path / "another-root"
+    explicit_root.mkdir()
+    (explicit_root / "pyproject.toml").write_text(
+        '[project]\nname = "another-consumer"\n', encoding="utf-8"
+    )
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(explicit_root),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert len(resolutions) == 2
+    explicit_raw, explicit_resolved = resolutions[1]
+    assert explicit_raw.database_mode == "remote"
+    assert explicit_raw.runtime_module == "work_runtime.database"
+    assert explicit_raw.expected_remote_database == "PricingAudit"
+    assert explicit_raw.manual_edit_source_selector == "latest"
+    assert explicit_raw.manual_edit_carry_forward is False
+    assert explicit_resolved.database_mode == "remote"
+    assert explicit_resolved.runtime_module == "work_runtime.database"
+    assert explicit_resolved.expected_remote_database == "PricingAudit"
+    assert explicit_resolved.manual_edit_source_selector == "latest"
+    assert explicit_resolved.manual_edit_carry_forward is False
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(tmp_path),
                 "--database-mode",
                 "local",
                 "--runtime-module",
@@ -772,18 +833,18 @@ carry_forward = false
         == 0
     )
 
-    assert len(resolutions) == 1
-    raw, resolved = resolutions[0]
-    assert raw.database_mode == "local"
-    assert raw.runtime_module == "another_runtime.database"
-    assert raw.expected_remote_database == "AnotherAudit"
-    assert raw.manual_edit_source_selector == "deployed"
-    assert raw.manual_edit_carry_forward is True
-    assert resolved.database_mode == "local"
-    assert resolved.runtime_module == "another_runtime.database"
-    assert resolved.expected_remote_database == "AnotherAudit"
-    assert resolved.manual_edit_source_selector == "deployed"
-    assert resolved.manual_edit_carry_forward is True
+    assert len(resolutions) == 3
+    overridden_raw, overridden_resolved = resolutions[2]
+    assert overridden_raw.database_mode == "local"
+    assert overridden_raw.runtime_module == "another_runtime.database"
+    assert overridden_raw.expected_remote_database == "AnotherAudit"
+    assert overridden_raw.manual_edit_source_selector == "deployed"
+    assert overridden_raw.manual_edit_carry_forward is True
+    assert overridden_resolved.database_mode == "local"
+    assert overridden_resolved.runtime_module == "another_runtime.database"
+    assert overridden_resolved.expected_remote_database == "AnotherAudit"
+    assert overridden_resolved.manual_edit_source_selector == "deployed"
+    assert overridden_resolved.manual_edit_carry_forward is True
 
 
 def test_scaffold_config_is_strict_and_example_is_valid(tmp_path):
