@@ -18,6 +18,7 @@ SOURCE_MODULES = (
         "reporting._underwriter_styles",
         ROOT / "src/pricing_pipeline/reporting/_underwriter_styles.py",
     ),
+    ("reporting.inputs", ROOT / "src/pricing_pipeline/reporting/inputs.py"),
     ("reporting.evidence", ROOT / "src/pricing_pipeline/reporting/evidence.py"),
     (
         "reporting._underwriter_movement",
