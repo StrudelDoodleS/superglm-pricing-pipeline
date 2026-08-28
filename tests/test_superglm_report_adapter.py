@@ -51,9 +51,10 @@ def _context(
     )
 
 
-def test_adapter_package_lazily_exports_public_adapters():
+def test_adapter_package_exports_public_adapters_without_dynamic_attributes():
     from pricing_pipeline.reporting import adapters
 
+    assert "__getattr__" not in adapters.__dict__
     assert adapters.RatingWorkbookAdapter is RatingWorkbookAdapter
     assert adapters.SuperGLMReportAdapter is SuperGLMReportAdapter
     assert adapters.SuppliedTweedieLikelihoodAdapter is SuppliedTweedieLikelihoodAdapter

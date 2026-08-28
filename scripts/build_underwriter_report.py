@@ -19,6 +19,7 @@ from pricing_pipeline.reporting import (
     ModelLikelihoodSpec,
     UnderwriterReportOptions,
     build_scored_model_report,
+    build_underwriter_report,
 )
 
 _ALLOWED_SECTIONS = {
@@ -371,8 +372,6 @@ def build_report_from_config(
         models = {}
 
     if models or config.rating_workbooks or config.model_likelihoods:
-        from pricing_pipeline.reporting import build_underwriter_report
-
         return build_underwriter_report(
             frame,
             actual=config.actual,

@@ -131,32 +131,43 @@ def _headless_chromium() -> Path | None:
     return cached[0] if cached else None
 
 
-def test_prediction_only_core_never_imports_superglm_or_joblib(tmp_path):
+def test_prediction_only_report_never_imports_superglm_or_joblib(tmp_path):
     script = f"""\
 import builtins
+import importlib.util
 import pandas as pd
+import sys
 original = builtins.__import__
 def guarded(name, *args, **kwargs):
     if name == "joblib" or name.startswith("superglm"):
         raise AssertionError(f"forbidden import: {{name}}")
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
-from pricing_pipeline.reporting import UnderwriterReportOptions, build_scored_model_report
+import pricing_pipeline.reporting
+reporting_prefix = "pricing_pipeline.reporting."
+assert importlib.util.find_spec(reporting_prefix + "_" + "core") is None
+assert importlib.util.find_spec(reporting_prefix + "under" + "writer") is None
+assert importlib.util.find_spec(reporting_prefix + "_underwriter_" + "movement") is None
+assert "__getattr__" not in vars(pricing_pipeline.reporting)
 frame = pd.DataFrame({{
     "actual": [0.0, 1.0, 0.0, 2.0],
     "weight": [1.0, 1.0, 1.0, 1.0],
     "feature": ["A", "A", "B", "B"],
     "prediction": [0.2, 0.8, 0.3, 1.4],
 }})
-build_scored_model_report(
+pricing_pipeline.reporting.build_scored_model_report(
     frame,
     actual="actual",
     predictions={{"Model": "prediction"}},
     sample_weight="weight",
     features=["feature"],
     output_path={str(tmp_path / "agnostic.html")!r},
-    options=UnderwriterReportOptions(problem_type="frequency", minimum_cell_size=2),
+    options=pricing_pipeline.reporting.UnderwriterReportOptions(
+        problem_type="frequency",
+        minimum_cell_size=2,
+    ),
 )
+assert not any(name == "joblib" or name.startswith("superglm") for name in sys.modules)
 """
     subprocess.run([sys.executable, "-c", script], check=True)
 

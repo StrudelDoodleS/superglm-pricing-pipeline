@@ -106,7 +106,7 @@ def test_lorenz_curve_does_not_resolve_below_minimum_comparison_units():
     assert first == redistributed
 
 
-def test_rating_workbook_adapter_imports_without_superglm():
+def test_report_owner_imports_without_superglm():
     script = """\
 import builtins
 original = builtins.__import__
@@ -116,9 +116,8 @@ def guarded(name, *args, **kwargs):
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
 import pricing_pipeline.reporting.evidence
-import pricing_pipeline.reporting._core
+import pricing_pipeline.reporting.report
 import pricing_pipeline.reporting._underwriter_html
-import pricing_pipeline.reporting.adapters.rating_workbook
 """
 
     subprocess.run([sys.executable, "-c", script], check=True)
