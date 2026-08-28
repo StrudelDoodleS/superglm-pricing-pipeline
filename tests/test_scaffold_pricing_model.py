@@ -713,7 +713,7 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
 
 def test_scaffold_cli_auto_discovers_toml_and_cli_values_win(tmp_path, monkeypatch):
     from pricing_pipeline import cli
-    from pricing_pipeline.scaffold import config
+    from pricing_pipeline.scaffold import config, service
 
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "consumer"\n', encoding="utf-8")
     config_path = tmp_path / "pricing_scaffold.toml"
@@ -733,13 +733,19 @@ carry_forward = false
     )
     original_resolve = config.resolve_scaffold_options
     resolutions = []
+    service_options = []
 
     def record_resolution(options):
         resolved = original_resolve(options)
         resolutions.append((options, resolved))
         return resolved
 
+    def record_service(options):
+        service_options.append(options)
+        return service.ScaffoldResult(package_name=options.package_name, created_files=())
+
     monkeypatch.setattr(config, "resolve_scaffold_options", record_resolution)
+    monkeypatch.setattr(service, "scaffold_resolved_pricing_model", record_service)
 
     assert (
         cli.main(
@@ -756,6 +762,8 @@ carry_forward = false
         == 0
     )
     assert len(resolutions) == 1
+    assert len(service_options) == 1
+    assert isinstance(service_options[0], config.ResolvedScaffoldOptions)
     discovered_raw, discovered_resolved = resolutions[0]
     assert discovered_raw.database_mode == "remote"
     assert discovered_raw.runtime_module == "work_runtime.database"
@@ -790,6 +798,8 @@ carry_forward = false
         == 0
     )
     assert len(resolutions) == 2
+    assert len(service_options) == 2
+    assert isinstance(service_options[1], config.ResolvedScaffoldOptions)
     explicit_raw, explicit_resolved = resolutions[1]
     assert explicit_raw.database_mode == "remote"
     assert explicit_raw.runtime_module == "work_runtime.database"
@@ -827,6 +837,8 @@ carry_forward = false
     )
 
     assert len(resolutions) == 3
+    assert len(service_options) == 3
+    assert isinstance(service_options[2], config.ResolvedScaffoldOptions)
     overridden_raw, overridden_resolved = resolutions[2]
     assert overridden_raw.database_mode == "local"
     assert overridden_raw.runtime_module == "another_runtime.database"

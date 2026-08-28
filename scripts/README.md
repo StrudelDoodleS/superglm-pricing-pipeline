@@ -8,7 +8,12 @@ those stable entry points.
 
 | Script | Purpose |
 |---|---|
-| `scaffold_pricing_model.py` | Create the six-notebook model workspace; reads optional scaffold TOML defaults. |
+| `scaffold_pricing_model.py` | Source checkout wrapper for the installed scaffold command; requires an initialized project and `pricing_scaffold.toml`. |
+
+The scaffold workflow is `pricing-pipeline init` (or
+`python -m pricing_pipeline init`), edit `pricing_scaffold.toml`, then
+`pricing-pipeline scaffold`. `uv run python scripts/scaffold_pricing_model.py`
+is only an equivalent source-checkout wrapper for that final command.
 
 ## SQL schema and inspection
 

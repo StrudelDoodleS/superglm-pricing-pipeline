@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-27
 **Baseline:** `superglm-pricing-pipeline` v0.2.1
+**Status:** Historical. The temporary `scaffold.legacy` design was superseded by
+the trace-first scaffold consolidation and the module has been deleted.
 
 ## Purpose
 
@@ -124,7 +126,7 @@ pricing_pipeline/
     config.py               TOML parsing and validated options
     render.py               token validation and deterministic rendering
     service.py              safe filesystem creation and upgrade handling
-    legacy.py               temporary compatibility re-exports
+    legacy.py               historical temporary facade; superseded and deleted
   resources/scaffold/
     pricing_scaffold.toml
     notebooks/
@@ -167,8 +169,9 @@ filesystem service contains no notebook-cell definitions or TOML parsing. It
 retains the current ancestor/leaf symlink checks, no-follow writes, collision
 handling, legacy deployment-notebook migration, and `--force` semantics.
 
-The existing `scaffold.legacy` module becomes a thin compatibility facade for
-one release. New code imports the focused modules.
+The temporary `scaffold.legacy` facade described by this original slice was
+later superseded and deleted. The current path is CLI to commands to config
+resolution to the resolved-only service core, then rendering and resources.
 
 Acceptance criteria:
 
@@ -177,7 +180,7 @@ Acceptance criteria:
   v0.2.1 output for representative local and remote configurations;
 - the installed wheel contains exactly the six templates and no generated
   model workspace;
-- `legacy.py` contains no notebook cell body and is below 250 lines; and
+- the historical `legacy.py` compatibility facade is absent; and
 - each new scaffold module has one stated responsibility and remains below
   500 lines, excluding data-only notebook resources.
 

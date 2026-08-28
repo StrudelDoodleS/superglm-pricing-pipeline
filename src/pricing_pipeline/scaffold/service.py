@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pricing_pipeline.scaffold import config
-from pricing_pipeline.scaffold.config import ScaffoldOptions
+from pricing_pipeline.scaffold.config import ResolvedScaffoldOptions, ScaffoldOptions
 from pricing_pipeline.scaffold.render import render_notebooks
 
 _LEGACY_DEPLOYMENT_NOTEBOOK = "04_model_deployment.ipynb"
@@ -101,26 +101,25 @@ def _write_scaffold_output(path: Path, source: str) -> None:
         handle.write(source)
 
 
-def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
-    resolved = config.resolve_scaffold_options(options)
-    pricing_models_dir = resolved.root / "pricing_models"
-    package_dir = pricing_models_dir / resolved.package_name
+def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> ScaffoldResult:
+    pricing_models_dir = options.root / "pricing_models"
+    package_dir = pricing_models_dir / options.package_name
     _reject_managed_ancestor_symlinks(pricing_models_dir, package_dir)
     notebooks = render_notebooks(
-        package_name=resolved.package_name,
-        model_name=resolved.model_name,
-        model_label=resolved.model_label,
-        target_name=resolved.target_name,
-        model_type=resolved.model_type,
-        deployment_slot=resolved.deployment_slot,
-        database_mode=resolved.database_mode,
-        runtime_module=resolved.runtime_module,
-        expected_remote_database=resolved.expected_remote_database,
-        manual_edit_source_selector=resolved.manual_edit_source_selector,
-        manual_edit_carry_forward=resolved.manual_edit_carry_forward,
+        package_name=options.package_name,
+        model_name=options.model_name,
+        model_label=options.model_label,
+        target_name=options.target_name,
+        model_type=options.model_type,
+        deployment_slot=options.deployment_slot,
+        database_mode=options.database_mode,
+        runtime_module=options.runtime_module,
+        expected_remote_database=options.expected_remote_database,
+        manual_edit_source_selector=options.manual_edit_source_selector,
+        manual_edit_carry_forward=options.manual_edit_carry_forward,
     )
     content = {
-        package_dir / "__init__.py": f'"""Pricing notebook package for {resolved.model_name}."""\n',
+        package_dir / "__init__.py": f'"""Pricing notebook package for {options.model_name}."""\n',
         **{package_dir / filename: source for filename, source in notebooks.items()},
     }
     _reject_output_symlinks(content)
@@ -130,9 +129,13 @@ def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
     for path, source in content.items():
         if path == migrated_deployment:
             continue
-        if path.exists() and not resolved.force:
+        if path.exists() and not options.force:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_scaffold_output(path, source)
         created.append(path)
-    return ScaffoldResult(package_name=resolved.package_name, created_files=tuple(created))
+    return ScaffoldResult(package_name=options.package_name, created_files=tuple(created))
+
+
+def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
+    return scaffold_resolved_pricing_model(config.resolve_scaffold_options(options))

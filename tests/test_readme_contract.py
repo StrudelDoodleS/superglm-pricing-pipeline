@@ -22,7 +22,7 @@ def test_root_readme_is_a_concise_entry_point():
     for expected in (
         "notebook-first",
         "scripts/scaffold_pricing_model.py",
-        "pricing_scaffold.example.toml",
+        "pricing_scaffold.toml",
         "01_data_ingestion.ipynb",
         "02_model_exploration.ipynb",
         "03_model_training.ipynb",
@@ -67,7 +67,7 @@ def test_root_readme_documents_the_installed_scaffold_flow_and_dependency_owners
         "installed private Python module",
         "get_engine(database=None)",
         "contains no credentials",
-        "legacy checkout command",
+        "source checkout wrapper",
     ):
         assert expected in readme
 

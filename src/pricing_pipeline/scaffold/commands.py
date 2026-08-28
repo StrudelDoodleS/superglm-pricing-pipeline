@@ -139,7 +139,8 @@ def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
     scaffold_config = _load_installed_config(namespace, root)
     options = _raw_scaffold_options(namespace, root, scaffold_config)
     try:
-        result = service.scaffold_pricing_model(options)
+        resolved = config.resolve_scaffold_options(options)
+        result = service.scaffold_resolved_pricing_model(resolved)
     except IsADirectoryError as exc:
         managed_root = root / "pricing_models"
         raise UserCommandError(
