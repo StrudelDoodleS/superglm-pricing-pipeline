@@ -50,7 +50,7 @@ Scaffold:
   cli.main
   -> scaffold.commands
   -> scaffold.config.resolve_scaffold_options
-  -> scaffold.service.scaffold_pricing_model
+  -> scaffold.service.scaffold_resolved_pricing_model
   -> scaffold.render and packaged notebook resources
 ```
 
