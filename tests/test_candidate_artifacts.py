@@ -238,7 +238,7 @@ def test_edited_model_rejects_different_superglm_minor_before_deserializing(
 
 
 def test_candidate_bundle_round_trip_verifies_hash_and_lineage(tmp_path):
-    from pricing_pipeline.publishing.superglm_publication_receipt import (
+    from pricing_pipeline.publishing.metadata import (
         OffsetExportContract,
     )
 
@@ -306,7 +306,7 @@ def test_exported_offset_bundle_rejects_missing_or_invalid_source(
     message,
 ):
     CandidateArtifactError, _, _, _ = _artifact_api()
-    from pricing_pipeline.publishing.superglm_publication_receipt import (
+    from pricing_pipeline.publishing.metadata import (
         OffsetExportContract,
     )
 
@@ -328,7 +328,7 @@ def test_exported_offset_bundle_rejects_missing_or_invalid_source(
 
 def test_exported_offset_bundle_rejects_source_name_that_conflicts_with_contract():
     CandidateArtifactError, _, _, _ = _artifact_api()
-    from pricing_pipeline.publishing.superglm_publication_receipt import (
+    from pricing_pipeline.publishing.metadata import (
         OffsetExportContract,
     )
 

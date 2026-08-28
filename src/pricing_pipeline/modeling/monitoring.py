@@ -39,12 +39,10 @@ from superglm.types import LambdaPolicy
 
 from pricing_pipeline.data.manifest import model_frame_evidence
 from pricing_pipeline.infra.schema import schema_names_from_connectable
-from pricing_pipeline.publishing.superglm_metadata import (
+from pricing_pipeline.publishing.metadata import (
+    OffsetExportContract,
     _spline_kind,
     build_superglm_publication_receipt,
-)
-from pricing_pipeline.publishing.superglm_publication_receipt import (
-    OffsetExportContract,
     canonical_receipt_bytes,
 )
 from pricing_pipeline.workbench.artifacts import (
