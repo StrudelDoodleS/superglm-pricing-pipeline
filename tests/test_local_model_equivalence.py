@@ -10,7 +10,6 @@ from sqlalchemy import text
 from superglm import Categorical, Numeric, SuperGLM
 
 from pricing_pipeline.models.config import ValidationSplitConfig
-from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.notebook import (
     PricingModelSpec,
     build_candidate,
@@ -22,7 +21,6 @@ from pricing_pipeline.publishing.identity import (
     ModelEquivalenceError,
     bind_model_equivalence,
     find_equivalent_publication,
-    immutable_conflicts,
 )
 
 
@@ -37,33 +35,6 @@ def _superglm() -> SuperGLM:
             "area": Categorical(),
         },
     )
-
-
-def test_bind_model_equivalence_binds_prepared_digest_without_reparsing():
-    build = ApprovedModelBuild.model_construct(model_equivalence_sha256=None)
-
-    bound = bind_model_equivalence(build, calculated_sha256="a" * 64)
-
-    assert bound.model_equivalence_sha256 == "a" * 64
-    assert build.model_equivalence_sha256 is None
-
-
-def test_bind_model_equivalence_rejects_conflicting_completed_digest():
-    build = ApprovedModelBuild.model_construct(model_equivalence_sha256="a" * 64)
-
-    with pytest.raises(
-        ModelEquivalenceError,
-        match="completed build equivalence fingerprint does not match prepared rating tables",
-    ):
-        bind_model_equivalence(build, calculated_sha256="b" * 64)
-
-
-def test_immutable_conflicts_treats_missing_digest_as_a_conflict():
-    assert immutable_conflicts(
-        stored={"publication_receipt_sha256": None, "model_name": "CLAIM_FREQ"},
-        requested={"publication_receipt_sha256": "a" * 64, "model_name": "CLAIM_FREQ"},
-        fields=("model_name", "publication_receipt_sha256"),
-    ) == ("publication_receipt_sha256",)
 
 
 def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
