@@ -19,6 +19,8 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     CompletedModelPublishResult,
     publish_completed_model_build,
 )
+from pricing_pipeline.publishing import publish as publication
+from pricing_pipeline.publishing import sqlserver
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
 
@@ -251,12 +253,12 @@ def test_model_export_publisher_returns_typed_result(monkeypatch, tmp_path):
     prepared_tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     calls = []
     monkeypatch.setattr(
-        pipeline,
+        publication,
         "prepare_rating_tables",
         lambda **kwargs: calls.append(("prepare", kwargs)) or prepared_tables,
     )
     monkeypatch.setattr(
-        pipeline,
+        sqlserver,
         "publish_sqlserver",
         lambda engine, prepared, tables: (
             calls.append(("publish", engine, prepared, tables))
@@ -309,12 +311,12 @@ def test_model_export_publisher_returns_existing_result_unchanged(
     existing = _completed_publish_result(export, was_existing=True)
     tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     monkeypatch.setattr(
-        pipeline,
+        publication,
         "prepare_rating_tables",
         lambda **kwargs: tables,
     )
     monkeypatch.setattr(
-        pipeline,
+        sqlserver,
         "publish_sqlserver",
         lambda engine, prepared, prepared_tables: existing,
     )

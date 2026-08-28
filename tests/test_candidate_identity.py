@@ -7,14 +7,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pricing_pipeline.models.spec import CompletedModelBuild, CompletedModelBuildError
+from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.models.spec import (
+    CompletedModelBuild,
+    CompletedModelBuildError,
+    ModelExportResult,
+)
+from pricing_pipeline.orchestration import pipeline
 from pricing_pipeline.orchestration.publish_completed_build import (
     CandidateSQLLineage,
     _verify_candidate_artifact,
 )
-from pricing_pipeline.models.config import ModelBuildConfig
-from pricing_pipeline.models.spec import ModelExportResult
-from pricing_pipeline.orchestration import pipeline
 from pricing_pipeline.publishing.sqlite_notebook import _publish_sqlite_candidate_locked
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
@@ -163,6 +166,8 @@ def test_local_publication_rejects_model_frame_digest_mismatch_before_staging(
     tmp_path,
     monkeypatch,
 ):
+    from pricing_pipeline.publishing import publish as publication
+
     bundle, build = _candidate(tmp_path)
     workbook = tmp_path / "rating.xlsx"
     workbook.write_bytes(b"rating workbook")
@@ -184,8 +189,9 @@ def test_local_publication_rejects_model_frame_digest_mismatch_before_staging(
         ),
     )
     monkeypatch.setattr(
-        "pricing_pipeline.publishing.sqlite_notebook.stage_rating_export",
-        lambda *args, **kwargs: pytest.fail("staging ran before digest verification"),
+        publication,
+        "prepare_rating_tables",
+        lambda *args, **kwargs: pytest.fail("preparation ran before digest verification"),
     )
 
     with pytest.raises(CompletedModelBuildError, match="model_frame_sha256"):

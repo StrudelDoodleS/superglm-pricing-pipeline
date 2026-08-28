@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from sqlalchemy import text
@@ -8,15 +7,12 @@ from sqlalchemy import text
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.identity import bind_model_equivalence
 from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
 from pricing_pipeline.publishing.model_registry import (
     ModelRegistryError,
     validate_registered_model,
 )
-from pricing_pipeline.publishing.publish import PublicationRequest, prepare_publication
-from pricing_pipeline.publishing.rating_tables import prepare_rating_tables
-from pricing_pipeline.publishing.sqlserver import publish_sqlserver
+from pricing_pipeline.publishing.publish import PublicationRequest, publish_candidate
 from pricing_pipeline.workbench.submission import sha256_file
 
 
@@ -58,28 +54,7 @@ def publish_model_export(
             None if allowed_artifact_root is None else Path(allowed_artifact_root)
         ),
     )
-    prepared = prepare_publication(request)
-    tables = prepare_rating_tables(
-        workbook_path=Path(prepared.build.rating_workbook_path),
-        build=prepared.build,
-        model_config=prepared.model_config,
-        effective_to=prepared.effective_to,
-    )
-    prepared_workbook_sha256 = sha256_file(workbook_path)
-    if prepared_workbook_sha256 != export.rating_workbook_sha256:
-        raise PublishedRunIntegrityError(
-            "rating workbook changed during preparation: "
-            f"expected={export.rating_workbook_sha256!r}, "
-            f"actual={prepared_workbook_sha256!r}"
-        )
-    prepared = replace(
-        prepared,
-        build=bind_model_equivalence(
-            prepared.build,
-            calculated_sha256=tables.model_equivalence_sha256,
-        ),
-    )
-    return publish_sqlserver(engine, prepared, tables)
+    return publish_candidate(engine, request)
 
 
 def _validate_export_matches_config(

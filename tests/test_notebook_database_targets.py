@@ -7,6 +7,7 @@ from platform import python_version
 from threading import Event, Thread
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 from sqlalchemy import text
 
@@ -419,7 +420,9 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
     tmp_path,
 ):
     from pricing_pipeline import notebook as api
+    from pricing_pipeline.publishing import publish as publication
     from pricing_pipeline.publishing import sqlite_notebook
+    from pricing_pipeline.publishing.rating_tables import RatingTables
 
     model_root = tmp_path / "pricing_models" / "claim_frequency"
     model_root.mkdir(parents=True)
@@ -465,59 +468,49 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         )
 
     staging_digest = {"value": "d" * 64}
-    staged_digests = []
+    prepared_digests = []
 
-    def stage(engine, **kwargs):
-        assert kwargs["model_id"] == model.model_id
-        assert kwargs["replace"] is True
-        staged_digests.append(staging_digest["value"])
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    """
-                        INSERT OR REPLACE INTO pricing_stg.STG_RATING_EXPORT (
-                            export_id, model_id, model_name, model_version,
-                            base_rate, effective_from_date, source_file,
-                            publication_receipt_json, publication_receipt_sha256,
-                            package_metadata_json, offset_handling,
-                            metadata_origin, staging_content_sha256,
-                            model_equivalence_sha256, created_by
-                        ) VALUES (
-                            :export_id, :model_id, :model_name, :model_version,
-                            0.25, NULL, :source_file,
-                            '{}', :receipt_sha, '{}', 'NONE',
-                            'SUPERGLM_EXPORTER', :staging_digest,
-                            :model_equivalence_sha256, 'test'
-                        )
-                    """
-                ),
+    def prepare_tables(*, workbook_path, build, model_config, effective_to):
+        assert workbook_path == workbook
+        assert model_config is model.config
+        assert effective_to is None
+        prepared_digests.append(staging_digest["value"])
+        export_frame = pd.DataFrame(
+            [
                 {
-                    "export_id": kwargs["export_id"],
-                    "model_id": kwargs["model_id"],
+                    "export_id": build.export_id,
                     "model_name": (
                         "WRONG_MODEL"
-                        if kwargs["export_id"].endswith("__mismatch")
-                        else kwargs["model_name"]
+                        if build.export_id.endswith("__mismatch")
+                        else model_config.model_name
                     ),
-                    "model_version": kwargs["model_version"],
-                    "source_file": str(kwargs["workbook_path"]),
-                    "receipt_sha": kwargs["publication_receipt_sha256"],
-                    "staging_digest": staging_digest["value"],
-                    "model_equivalence_sha256": "9" * 64,
-                },
-            )
+                    "model_version": build.model_version,
+                    "base_rate": 0.25,
+                    "effective_from_date": build.effective_from,
+                    "effective_to_date": None,
+                    "source_file": str(workbook.resolve()),
+                    "publication_receipt_json": "{}",
+                    "publication_receipt_sha256": build.publication_receipt_sha256,
+                    "package_metadata_json": "{}",
+                    "offset_handling": "NONE",
+                    "offset_factor_name": None,
+                    "offset_source_name": None,
+                    "offset_label": None,
+                    "metadata_origin": "SUPERGLM_EXPORTER",
+                    "created_by": build.created_by,
+                }
+            ]
+        )
+        return RatingTables(
+            export_frame=export_frame,
+            rate_cells=pd.DataFrame(),
+            cell_levels=pd.DataFrame(),
+            term_metadata=pd.DataFrame(),
+            staging_content_sha256=staging_digest["value"],
+            model_equivalence_sha256="9" * 64,
+        )
 
-    monkeypatch.setattr(
-        sqlite_notebook,
-        "ensure_model_equivalence",
-        lambda build: build.model_copy(update={"model_equivalence_sha256": "9" * 64}),
-    )
-    monkeypatch.setattr(
-        sqlite_notebook,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(sqlite_notebook, "stage_rating_export", stage)
+    monkeypatch.setattr(publication, "prepare_rating_tables", prepare_tables)
     monkeypatch.setattr(
         sqlite_notebook,
         "_verify_candidate_artifact",
@@ -592,7 +585,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
     assert second.model_run_id == first.model_run_id
     assert second.mlflow_run_id == "mlflow-old"
     assert second.was_existing is True
-    assert staged_digests == ["d" * 64, "d" * 64]
+    assert prepared_digests == ["d" * 64, "d" * 64]
 
     workbook.write_bytes(b"mutated local workbook")
     with pytest.raises(CompletedModelBuildError, match="rating workbook SHA-256"):
@@ -659,13 +652,6 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
                 "pricing.CV_FOLD_METRIC",
             )
         }
-        staged_receipt_sha256 = connection.execute(
-            text(
-                "SELECT publication_receipt_sha256 "
-                "FROM pricing_stg.STG_RATING_EXPORT "
-                "WHERE export_id = 'claim-frequency__run-1'"
-            )
-        ).scalar_one()
         stored_workbook_sha256 = connection.execute(
             text(
                 "SELECT rating_workbook_sha256 "
@@ -680,6 +666,9 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
                 "WHERE source_export_id = 'claim-frequency__run-1'"
             )
         ).scalar_one()
+        staging_rows = connection.execute(
+            text("SELECT COUNT(*) FROM pricing_stg.STG_RATING_EXPORT")
+        ).scalar_one()
     assert counts == {
         "pricing.PRICING_RATE_PACKAGE": 1,
         "pricing.MODEL_RUN": 1,
@@ -688,7 +677,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         "mlops.MODEL_RUN_METRIC": 1,
         "pricing.CV_FOLD_METRIC": 1,
     }
-    assert staged_receipt_sha256 == "b" * 64
+    assert staging_rows == 0
     assert stored_workbook_sha256 == completed_build.rating_workbook_sha256
     assert stored_package_status == "LOCAL_AUDIT"
 
@@ -707,7 +696,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
             }
         ),
     )
-    with pytest.raises(ValueError, match="incompatible staged evidence"):
+    with pytest.raises(ValueError, match="incompatible prepared evidence"):
         api.publish_candidate(
             context,
             mismatch_candidate,
@@ -743,6 +732,7 @@ def test_local_publication_verifies_candidate_artifact_before_staging(
     tmp_path,
 ):
     from pricing_pipeline import notebook as api
+    from pricing_pipeline.publishing import publish as publication
     from pricing_pipeline.publishing import sqlite_notebook
     from pricing_pipeline.workbench.artifacts import BUNDLE_FORMAT
 
@@ -772,9 +762,9 @@ def test_local_publication_verifies_candidate_artifact_before_staging(
             {"frame_sha": "f" * 64},
         )
     monkeypatch.setattr(
-        sqlite_notebook,
-        "stage_rating_export",
-        lambda *args, **kwargs: pytest.fail("staging ran before artifact verification"),
+        publication,
+        "prepare_rating_tables",
+        lambda *args, **kwargs: pytest.fail("preparation ran before artifact verification"),
     )
     missing_artifact = (
         context.settings.workbench_artifact_root / "CLAIM_FREQUENCY" / "missing.joblib"

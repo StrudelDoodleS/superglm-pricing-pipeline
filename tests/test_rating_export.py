@@ -18,7 +18,8 @@ from pricing_pipeline.infra.offline_sqlite import (
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild, ModelExportResult
 from pricing_pipeline.orchestration import pipeline
-from pricing_pipeline.publishing import lineage, rating_export, staging
+from pricing_pipeline.publishing import lineage, rating_export, sqlserver, staging
+from pricing_pipeline.publishing import publish as publication
 from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
 from pricing_pipeline.publishing.rating_tables import RatingTables, prepare_rating_tables
 from pricing_pipeline.publishing.superglm_publication_receipt import (
@@ -1158,7 +1159,7 @@ def test_publish_model_export_stages_packages_and_records_lineage(
     export = _retry_export(tmp_path)
     tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     monkeypatch.setattr(
-        pipeline,
+        publication,
         "prepare_rating_tables",
         lambda **kwargs: calls.append(("prepare", kwargs)) or tables,
     )
@@ -1181,7 +1182,7 @@ def test_publish_model_export_stages_packages_and_records_lineage(
             model_equivalence_sha256="f" * 64,
         )
 
-    monkeypatch.setattr(pipeline, "publish_sqlserver", publish)
+    monkeypatch.setattr(sqlserver, "publish_sqlserver", publish)
 
     result = pipeline.publish_model_export(
         object(),
@@ -1223,12 +1224,12 @@ def test_publish_model_export_returns_verified_existing_result_without_rewriting
         was_existing=True,
     )
     monkeypatch.setattr(
-        pipeline,
+        publication,
         "prepare_rating_tables",
         lambda **kwargs: tables,
     )
     monkeypatch.setattr(
-        pipeline,
+        sqlserver,
         "publish_sqlserver",
         lambda engine, prepared, prepared_tables: existing,
     )
@@ -1269,12 +1270,12 @@ def test_publish_model_export_reuses_equivalent_run_before_any_staging_write(
     )
     calls = []
     monkeypatch.setattr(
-        pipeline,
+        publication,
         "prepare_rating_tables",
         lambda **kwargs: calls.append("prepare") or tables,
     )
     monkeypatch.setattr(
-        pipeline,
+        sqlserver,
         "publish_sqlserver",
         lambda engine, prepared, prepared_tables: (
             calls.append("publish")

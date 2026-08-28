@@ -288,7 +288,7 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
         "manifests": 1,
         "packages": 2,
         "runs": 2,
-        "staged": 2,
+        "staged": 0,
         "reservations": 2,
     }
     assert [row["model_kind"] for row in final_lineage] == [

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.identity import bind_model_equivalence
+from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
 from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
+from pricing_pipeline.publishing.rating_tables import prepare_rating_tables
 from pricing_pipeline.workbench.artifacts import CandidateBundle
+from pricing_pipeline.workbench.submission import sha256_file
 
 
 @dataclass(frozen=True)
@@ -69,3 +73,50 @@ def prepare_publication(request: PublicationRequest) -> PreparedPublication:
         revision_metadata=request.revision_metadata,
         verification=request.verification,
     )
+
+
+def publish_candidate(
+    engine,
+    request: PublicationRequest,
+) -> CompletedModelPublishResult:
+    """Prepare one request once and dispatch to its concrete database writer."""
+    prepared = prepare_publication(request)
+    workbook_path = Path(prepared.build.rating_workbook_path)
+    if not workbook_path.is_file():
+        raise ValueError(f"rating workbook does not exist: {workbook_path.as_posix()}")
+    initial_workbook_sha256 = sha256_file(workbook_path)
+    if initial_workbook_sha256 != prepared.build.rating_workbook_sha256:
+        raise ValueError(
+            "rating workbook SHA-256 does not match the publication request: "
+            f"expected={prepared.build.rating_workbook_sha256!r}, "
+            f"actual={initial_workbook_sha256!r}"
+        )
+    tables = prepare_rating_tables(
+        workbook_path=workbook_path,
+        build=prepared.build,
+        model_config=prepared.model_config,
+        effective_to=prepared.effective_to,
+    )
+    prepared_workbook_sha256 = sha256_file(workbook_path)
+    if prepared_workbook_sha256 != prepared.build.rating_workbook_sha256:
+        raise ValueError(
+            "rating workbook changed during publication preparation: "
+            f"expected={prepared.build.rating_workbook_sha256!r}, "
+            f"actual={prepared_workbook_sha256!r}"
+        )
+    prepared = replace(
+        prepared,
+        build=bind_model_equivalence(
+            prepared.build,
+            calculated_sha256=tables.model_equivalence_sha256,
+        ),
+    )
+    dialect_name = getattr(getattr(engine, "dialect", None), "name", None)
+    if dialect_name == "sqlite":
+        from pricing_pipeline.publishing.sqlite import publish_sqlite
+
+        return publish_sqlite(engine, prepared, tables)
+
+    from pricing_pipeline.publishing.sqlserver import publish_sqlserver
+
+    return publish_sqlserver(engine, prepared, tables)
