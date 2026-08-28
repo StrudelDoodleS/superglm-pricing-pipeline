@@ -74,11 +74,6 @@ def _existing_export_conflicts(
         staged_value = _identity_text(meta[field_name])
         if field_name == "source_file" and (existing_value is None or staged_value is None):
             continue
-        if field_name == "staging_content_sha256" and existing_value is None:
-            # V028 intentionally left pre-migration packages without a digest.
-            # Their remaining immutable metadata and model-run lineage still
-            # provide the compatibility check available when they were written.
-            continue
         if existing_value != staged_value:
             conflicts.append(
                 f"{field_name} existing={existing_package[field_name]!r} "
@@ -447,8 +442,8 @@ def _completed_package(
     row = rows[0]
     build = prepared.build
     package_status = str(row["package_status"]).upper()
-    if package_status not in {"DRAFT", "PUBLISHED"}:
-        raise RuntimeError("published package has unusable package status")
+    if package_status != "PUBLISHED":
+        raise RuntimeError("existing model package is not PUBLISHED")
     mismatches = []
     for field, value in (
         ("model_id", build.model_id),
@@ -679,6 +674,8 @@ def _resolve_existing_or_equivalent(
                 f"export_id {build.export_id!r} is already published with "
                 "incompatible metadata: " + "; ".join(conflicts)
             )
+        if str(existing["package_status"]).upper() != "PUBLISHED":
+            raise RuntimeError("existing model package is not PUBLISHED")
         return _completed_package(
             connection,
             prepared=prepared,

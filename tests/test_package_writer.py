@@ -415,6 +415,32 @@ def _new_package_args(**overrides):
     return args
 
 
+def _prepared_sqlserver_publication():
+    build = SimpleNamespace(
+        model_id=17,
+        model_name="MTPL_FREQ",
+        model_version="20260529",
+        export_id="export-1",
+        effective_from="2026-05-29",
+        rating_workbook_path="/tmp/export/rating_tables.xlsx",
+        publication_receipt_sha256=None,
+        manifest_id="manifest-1",
+        model_kind="RAW",
+    )
+    prepared = SimpleNamespace(
+        build=build,
+        model_config=SimpleNamespace(model_name=build.model_name),
+        effective_to=None,
+        parent_rate_package_id=None,
+        revision_metadata=None,
+    )
+    tables = SimpleNamespace(
+        staging_content_sha256="a" * 64,
+        model_equivalence_sha256="b" * 64,
+    )
+    return prepared, tables
+
+
 def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypatch):
     engine = _FakeNewPackageEngine()
     events = []
@@ -597,6 +623,14 @@ def test_existing_draft_package_retains_staging_payload_for_recovery():
         "DELETE FROM pricing_stg." in sql for sql, _params in engine.connection.statements
     )
 
+    prepared, tables = _prepared_sqlserver_publication()
+    with pytest.raises(RuntimeError, match="existing model package is not PUBLISHED"):
+        sqlserver._resolve_existing_or_equivalent(
+            engine.connection,
+            prepared,
+            tables,
+        )
+
 
 def test_equivalent_published_package_cleans_rejected_attempt_payload():
     engine = _FakeNewPackageEngine()
@@ -652,7 +686,7 @@ def test_package_writer_rejects_existing_package_built_from_other_rate_content()
         load_staging_to_rating_package(engine, args)
 
 
-def test_package_writer_reuses_legacy_package_without_staging_digest():
+def test_package_writer_and_sqlserver_reject_missing_staging_digest():
     engine = _FakeExistingPackageEngine(
         existing_package=_existing_package(staging_content_sha256=None),
     )
@@ -660,8 +694,19 @@ def test_package_writer_reuses_legacy_package_without_staging_digest():
         expected_staged_metadata={"staging_content_sha256": "a" * 64},
     )
 
-    assert load_staging_to_rating_package(engine, args) == 42
-    assert args.was_existing is True
+    with pytest.raises(ValueError, match="incompatible metadata.*staging_content_sha256"):
+        load_staging_to_rating_package(engine, args)
+
+    prepared, tables = _prepared_sqlserver_publication()
+    engine = _FakeExistingPackageEngine(
+        existing_package=_existing_package(staging_content_sha256=None),
+    )
+    with pytest.raises(ValueError, match="incompatible metadata.*staging_content_sha256"):
+        sqlserver._resolve_existing_or_equivalent(
+            engine.connection,
+            prepared,
+            tables,
+        )
 
 
 def test_package_writer_reserves_staged_version_for_direct_root_publication():
