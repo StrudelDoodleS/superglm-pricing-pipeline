@@ -26,7 +26,6 @@ from superglm import (
 
 import pricing_pipeline.reporting.adapters.superglm as superglm_adapter
 from pricing_pipeline.reporting import UnderwriterReportOptions, build_scored_model_report
-from pricing_pipeline.reporting._core import UnderwriterReportError
 from pricing_pipeline.reporting.adapters.superglm import SuperGLMReportAdapter
 from pricing_pipeline.reporting.evidence import (
     EvidenceFact,
@@ -34,6 +33,7 @@ from pricing_pipeline.reporting.evidence import (
     ReportContext,
     normalize_model_evidence,
 )
+from pricing_pipeline.reporting.inputs import UnderwriterReportError
 
 
 def _named(spec: object) -> object:

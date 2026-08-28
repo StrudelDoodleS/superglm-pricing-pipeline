@@ -17,7 +17,6 @@ from superglm.editor import EditorSession
 from superglm.editor.payloads import session_payload
 from superglm.profiling.tweedie import tweedie_logpdf
 
-from pricing_pipeline.reporting._core import UnderwriterReportError
 from pricing_pipeline.reporting.evidence import (
     MAX_INTERACTION_ROWS,
     MAX_MAIN_EFFECT_GRID_POINTS,
@@ -31,6 +30,7 @@ from pricing_pipeline.reporting.evidence import (
     ModelEvidence,
     ReportContext,
 )
+from pricing_pipeline.reporting.inputs import UnderwriterReportError
 
 _MODEL_SOURCE = "SuperGLM object"
 _LIKELIHOOD_SOURCE = "fitted SuperGLM object"

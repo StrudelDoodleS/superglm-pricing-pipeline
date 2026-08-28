@@ -15,13 +15,13 @@ from superglm import Categorical, Numeric, Spline, SuperGLM
 from pricing_pipeline.modeling.scratch_diagnostics import weighted_quantile_bins
 from pricing_pipeline.reporting import (
     ModelLikelihoodSpec,
-    UnderwriterReportOptions,
     build_scored_model_report,
     build_underwriter_report,
 )
 from pricing_pipeline.reporting._core import _sampled_curve
 from pricing_pipeline.reporting.adapters.superglm import SuperGLMReportAdapter
 from pricing_pipeline.reporting.evidence import EvidenceRequest
+from pricing_pipeline.reporting.inputs import UnderwriterReportOptions
 
 
 class _PrintPageParser(HTMLParser):

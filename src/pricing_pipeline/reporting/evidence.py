@@ -16,6 +16,11 @@ from typing import Literal, Protocol
 import numpy as np
 import pandas as pd
 
+from pricing_pipeline.reporting.inputs import (
+    MAX_MAIN_EFFECT_GRID_POINTS,
+    MAX_SURFACE_AXIS_POINTS,
+)
+
 EvidenceSemantic = Literal[
     "native_component",
     "partial_dependence",
@@ -36,8 +41,6 @@ SuppressionStatus = Literal["partial", "all"]
 SuppressionReason = Literal["minimum_support"]
 SuppressionPresentation = Literal["curve_omitted"]
 
-MAX_MAIN_EFFECT_GRID_POINTS = 512
-MAX_SURFACE_AXIS_POINTS = 160
 MAX_SURFACE_CELLS = 25_600
 MAX_INTERACTION_ROWS = 25_600
 
