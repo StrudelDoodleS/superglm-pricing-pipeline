@@ -2,22 +2,12 @@ from __future__ import annotations
 
 import errno
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from pricing_pipeline.scaffold.config import (
-    ScaffoldOptions,
-    _database_mode,
-    _expected_remote_database,
-    _manual_edit_carry_forward,
-    _manual_edit_source_selector,
-    _model_name,
-    _package_name,
-    _required,
-    _runtime_module,
-)
+from pricing_pipeline.scaffold import config
+from pricing_pipeline.scaffold.config import ScaffoldOptions
 from pricing_pipeline.scaffold.render import render_notebooks
 
 _LEGACY_DEPLOYMENT_NOTEBOOK = "04_model_deployment.ipynb"
@@ -112,46 +102,25 @@ def _write_scaffold_output(path: Path, source: str) -> None:
 
 
 def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
-    model_name = _model_name(options.model_name)
-    package_name = _package_name(
-        options.package_name or re.sub(r"_+", "_", model_name.lower()).strip("_")
-    )
-    target_name = _required(options.target_name, "target_name")
-    model_label = _required(
-        options.model_label or model_name.replace("_", " ").title(), "model_label"
-    )
-    model_type = _required(options.model_type, "model_type")
-    deployment_slot = _required(
-        options.deployment_slot or f"{model_name}_UAT",
-        "deployment_slot",
-    )
-    database_mode = _database_mode(options.database_mode)
-    runtime_module = _runtime_module(options.runtime_module)
-    expected_remote_database = _expected_remote_database(options.expected_remote_database)
-    manual_edit_source_selector = _manual_edit_source_selector(options.manual_edit_source_selector)
-    manual_edit_carry_forward = _manual_edit_carry_forward(options.manual_edit_carry_forward)
-    if database_mode == "remote" and not expected_remote_database:
-        raise ValueError("expected_remote_database is required when database_mode='remote'")
-
-    root = Path(options.root).resolve()
-    pricing_models_dir = root / "pricing_models"
-    package_dir = pricing_models_dir / package_name
+    resolved = config.resolve_scaffold_options(options)
+    pricing_models_dir = resolved.root / "pricing_models"
+    package_dir = pricing_models_dir / resolved.package_name
     _reject_managed_ancestor_symlinks(pricing_models_dir, package_dir)
     notebooks = render_notebooks(
-        package_name=package_name,
-        model_name=model_name,
-        model_label=model_label,
-        target_name=target_name,
-        model_type=model_type,
-        deployment_slot=deployment_slot,
-        database_mode=database_mode,
-        runtime_module=runtime_module,
-        expected_remote_database=expected_remote_database,
-        manual_edit_source_selector=manual_edit_source_selector,
-        manual_edit_carry_forward=manual_edit_carry_forward,
+        package_name=resolved.package_name,
+        model_name=resolved.model_name,
+        model_label=resolved.model_label,
+        target_name=resolved.target_name,
+        model_type=resolved.model_type,
+        deployment_slot=resolved.deployment_slot,
+        database_mode=resolved.database_mode,
+        runtime_module=resolved.runtime_module,
+        expected_remote_database=resolved.expected_remote_database,
+        manual_edit_source_selector=resolved.manual_edit_source_selector,
+        manual_edit_carry_forward=resolved.manual_edit_carry_forward,
     )
     content = {
-        package_dir / "__init__.py": f'"""Pricing notebook package for {model_name}."""\n',
+        package_dir / "__init__.py": f'"""Pricing notebook package for {resolved.model_name}."""\n',
         **{package_dir / filename: source for filename, source in notebooks.items()},
     }
     _reject_output_symlinks(content)
@@ -161,9 +130,9 @@ def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
     for path, source in content.items():
         if path == migrated_deployment:
             continue
-        if path.exists() and not options.force:
+        if path.exists() and not resolved.force:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_scaffold_output(path, source)
         created.append(path)
-    return ScaffoldResult(package_name=package_name, created_files=tuple(created))
+    return ScaffoldResult(package_name=resolved.package_name, created_files=tuple(created))

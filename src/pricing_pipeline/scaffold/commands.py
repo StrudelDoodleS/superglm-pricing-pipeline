@@ -91,41 +91,11 @@ def _load_installed_config(namespace: argparse.Namespace, root: Path) -> config.
         raise UserCommandError(str(exc)) from exc
 
 
-def _scaffold_options(
+def _raw_scaffold_options(
     namespace: argparse.Namespace,
     root: Path,
     scaffold_config: config.ScaffoldConfig,
 ) -> config.ScaffoldOptions:
-    try:
-        database_mode = config._database_mode(
-            namespace.database_mode
-            if namespace.database_mode is not None
-            else scaffold_config.database_mode
-        )
-        runtime_module = config._runtime_module(
-            namespace.runtime_module
-            if namespace.runtime_module is not None
-            else scaffold_config.runtime_module
-        )
-        expected_remote_database = config._expected_remote_database(
-            namespace.expected_remote_database
-            if namespace.expected_remote_database is not None
-            else scaffold_config.expected_remote_database
-        )
-        if database_mode == "remote" and not expected_remote_database:
-            raise ValueError("expected_remote_database is required when database_mode='remote'")
-        manual_edit_source = config._manual_edit_source_selector(
-            namespace.manual_edit_source
-            if namespace.manual_edit_source is not None
-            else scaffold_config.manual_edit_source_selector
-        )
-        manual_edit_carry_forward = config._manual_edit_carry_forward(
-            namespace.manual_edit_carry_forward
-            if namespace.manual_edit_carry_forward is not None
-            else scaffold_config.manual_edit_carry_forward
-        )
-    except (TypeError, ValueError) as exc:
-        raise UserCommandError(str(exc)) from exc
     return config.ScaffoldOptions(
         model_name=namespace.model_name,
         target_name=namespace.target_name,
@@ -133,11 +103,31 @@ def _scaffold_options(
         model_type=namespace.model_type,
         deployment_slot=namespace.deployment_slot,
         package_name=namespace.package_name,
-        database_mode=database_mode,
-        runtime_module=runtime_module,
-        expected_remote_database=expected_remote_database,
-        manual_edit_source_selector=manual_edit_source,
-        manual_edit_carry_forward=manual_edit_carry_forward,
+        database_mode=(
+            namespace.database_mode
+            if namespace.database_mode is not None
+            else scaffold_config.database_mode
+        ),
+        runtime_module=(
+            namespace.runtime_module
+            if namespace.runtime_module is not None
+            else scaffold_config.runtime_module
+        ),
+        expected_remote_database=(
+            namespace.expected_remote_database
+            if namespace.expected_remote_database is not None
+            else scaffold_config.expected_remote_database
+        ),
+        manual_edit_source_selector=(
+            namespace.manual_edit_source
+            if namespace.manual_edit_source is not None
+            else scaffold_config.manual_edit_source_selector
+        ),
+        manual_edit_carry_forward=(
+            namespace.manual_edit_carry_forward
+            if namespace.manual_edit_carry_forward is not None
+            else scaffold_config.manual_edit_carry_forward
+        ),
         root=root,
         force=namespace.force,
     )
@@ -147,7 +137,7 @@ def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
     root = _root(namespace.root)
     _require_project_root(root)
     scaffold_config = _load_installed_config(namespace, root)
-    options = _scaffold_options(namespace, root, scaffold_config)
+    options = _raw_scaffold_options(namespace, root, scaffold_config)
     try:
         result = service.scaffold_pricing_model(options)
     except IsADirectoryError as exc:

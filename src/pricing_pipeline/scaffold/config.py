@@ -39,6 +39,23 @@ class ScaffoldOptions:
 
 
 @dataclass(frozen=True)
+class ResolvedScaffoldOptions:
+    model_name: str
+    target_name: str
+    model_label: str
+    model_type: str
+    deployment_slot: str
+    package_name: str
+    database_mode: str
+    runtime_module: str | None
+    expected_remote_database: str
+    manual_edit_source_selector: str
+    manual_edit_carry_forward: bool
+    root: Path
+    force: bool
+
+
+@dataclass(frozen=True)
 class ScaffoldConfig:
     database_mode: str = "local"
     runtime_module: str | None = None
@@ -111,6 +128,45 @@ def _manual_edit_carry_forward(value: object) -> bool:
     if not isinstance(value, bool):
         raise TypeError("carry_forward must be true or false")
     return value
+
+
+def resolve_scaffold_options(options: ScaffoldOptions) -> ResolvedScaffoldOptions:
+    model_name = _model_name(options.model_name)
+    package_name = _package_name(
+        options.package_name or re.sub(r"_+", "_", model_name.lower()).strip("_")
+    )
+    target_name = _required(options.target_name, "target_name")
+    model_label = _required(
+        options.model_label or model_name.replace("_", " ").title(), "model_label"
+    )
+    model_type = _required(options.model_type, "model_type")
+    deployment_slot = _required(
+        options.deployment_slot or f"{model_name}_UAT",
+        "deployment_slot",
+    )
+    database_mode = _database_mode(options.database_mode)
+    runtime_module = _runtime_module(options.runtime_module)
+    expected_remote_database = _expected_remote_database(options.expected_remote_database)
+    manual_edit_source_selector = _manual_edit_source_selector(options.manual_edit_source_selector)
+    manual_edit_carry_forward = _manual_edit_carry_forward(options.manual_edit_carry_forward)
+    if database_mode == "remote" and not expected_remote_database:
+        raise ValueError("expected_remote_database is required when database_mode='remote'")
+
+    return ResolvedScaffoldOptions(
+        model_name=model_name,
+        target_name=target_name,
+        model_label=model_label,
+        model_type=model_type,
+        deployment_slot=deployment_slot,
+        package_name=package_name,
+        database_mode=database_mode,
+        runtime_module=runtime_module,
+        expected_remote_database=expected_remote_database,
+        manual_edit_source_selector=manual_edit_source_selector,
+        manual_edit_carry_forward=manual_edit_carry_forward,
+        root=Path(options.root).resolve(),
+        force=options.force,
+    )
 
 
 def load_scaffold_config(path: str | Path) -> ScaffoldConfig:

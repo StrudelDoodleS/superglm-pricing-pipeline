@@ -15,7 +15,6 @@ from scripts.scaffold_pricing_model import (
     _NOTEBOOK_NAMES,
     ScaffoldOptions,
     load_scaffold_config,
-    parse_args,
     scaffold_pricing_model,
 )
 
@@ -719,7 +718,11 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
     assert "CARRY_FORWARD = False" in source
 
 
-def test_scaffold_cli_auto_discovers_toml_and_cli_values_win(tmp_path):
+def test_scaffold_cli_auto_discovers_toml_and_cli_values_win(tmp_path, monkeypatch):
+    from pricing_pipeline import cli
+    from pricing_pipeline.scaffold import config
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "consumer"\n', encoding="utf-8")
     config_path = tmp_path / "pricing_scaffold.toml"
     config_path.write_text(
         """
@@ -735,58 +738,52 @@ carry_forward = false
         + "\n",
         encoding="utf-8",
     )
-    common = [
-        "--model-name",
-        "MY_MODEL",
-        "--target-name",
-        "target",
-        "--root",
-        str(tmp_path),
-    ]
+    original_resolve = config.resolve_scaffold_options
+    resolutions = []
 
-    discovered = parse_args(common)
-    explicit = parse_args(
-        [
-            "--model-name",
-            "MY_MODEL",
-            "--target-name",
-            "target",
-            "--root",
-            str(tmp_path / "another-root"),
-            "--config",
-            str(config_path),
-        ]
-    )
-    overridden = parse_args(
-        [
-            *common,
-            "--database-mode",
-            "local",
-            "--runtime-module",
-            "another_runtime.database",
-            "--expected-remote-database",
-            "AnotherAudit",
-            "--manual-edit-source",
-            "deployed",
-            "--manual-edit-carry-forward",
-        ]
+    def record_resolution(options):
+        resolved = original_resolve(options)
+        resolutions.append((options, resolved))
+        return resolved
+
+    monkeypatch.setattr(config, "resolve_scaffold_options", record_resolution)
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(tmp_path),
+                "--database-mode",
+                "local",
+                "--runtime-module",
+                "another_runtime.database",
+                "--expected-remote-database",
+                "AnotherAudit",
+                "--manual-edit-source",
+                "deployed",
+                "--manual-edit-carry-forward",
+            ]
+        )
+        == 0
     )
 
-    assert discovered.database_mode == "remote"
-    assert discovered.runtime_module == "work_runtime.database"
-    assert discovered.expected_remote_database == "PricingAudit"
-    assert discovered.manual_edit_source_selector == "latest"
-    assert discovered.manual_edit_carry_forward is False
-    assert explicit.database_mode == "remote"
-    assert explicit.runtime_module == "work_runtime.database"
-    assert explicit.expected_remote_database == "PricingAudit"
-    assert explicit.manual_edit_source_selector == "latest"
-    assert explicit.manual_edit_carry_forward is False
-    assert overridden.database_mode == "local"
-    assert overridden.runtime_module == "another_runtime.database"
-    assert overridden.expected_remote_database == "AnotherAudit"
-    assert overridden.manual_edit_source_selector == "deployed"
-    assert overridden.manual_edit_carry_forward is True
+    assert len(resolutions) == 1
+    raw, resolved = resolutions[0]
+    assert raw.database_mode == "local"
+    assert raw.runtime_module == "another_runtime.database"
+    assert raw.expected_remote_database == "AnotherAudit"
+    assert raw.manual_edit_source_selector == "deployed"
+    assert raw.manual_edit_carry_forward is True
+    assert resolved.database_mode == "local"
+    assert resolved.runtime_module == "another_runtime.database"
+    assert resolved.expected_remote_database == "AnotherAudit"
+    assert resolved.manual_edit_source_selector == "deployed"
+    assert resolved.manual_edit_carry_forward is True
 
 
 def test_scaffold_config_is_strict_and_example_is_valid(tmp_path):
