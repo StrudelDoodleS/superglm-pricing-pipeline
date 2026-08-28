@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -23,7 +24,18 @@ def clean_identifier(value: str) -> str:
     return text or "unknown"
 
 
-def _identity_value(value: object) -> str | None:
+def canonical_json(value: object) -> str:
+    """Serialize identity-bearing JSON with one stable representation."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def identity_value(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
@@ -38,7 +50,7 @@ def immutable_conflicts(
     return tuple(
         field
         for field in fields
-        if _identity_value(stored.get(field)) != _identity_value(requested.get(field))
+        if identity_value(stored.get(field)) != identity_value(requested.get(field))
     )
 
 
@@ -76,7 +88,7 @@ class EquivalentModelPublication:
     publication_receipt_sha256: str | None
 
 
-def _date_identity(value: object) -> str | None:
+def date_identity(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -195,8 +207,8 @@ def find_equivalent_publication(
         raise ModelEquivalenceError(
             "equivalent model run split lineage points at a different manifest"
         )
-    stored_effective_from = _date_identity(row["effective_from_date"])
-    requested_effective_from = _date_identity(build.effective_from)
+    stored_effective_from = date_identity(row["effective_from_date"])
+    requested_effective_from = date_identity(build.effective_from)
     if stored_effective_from != requested_effective_from:
         raise ModelEquivalenceError(
             "an equivalent model build already exists under a different "
@@ -262,12 +274,47 @@ def release_unused_model_version_reservation(
         )
 
 
+def canonical_revision_metadata(value: Mapping[str, object] | None) -> str | None:
+    """Return the one canonical JSON identity accepted by both backends."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("revision_metadata must be a mapping")  # noqa: TRY004
+
+    def normalise(item: object) -> object:
+        if isinstance(item, Mapping):
+            if not all(isinstance(key, str) for key in item):
+                raise ValueError("revision_metadata keys must be strings")
+            return {key: normalise(nested) for key, nested in item.items()}
+        if isinstance(item, list | tuple):
+            return [normalise(nested) for nested in item]
+        return item
+
+    normalised = normalise(value)
+    try:
+        return json.dumps(
+            normalised,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except ValueError as exc:
+        raise ValueError("revision_metadata must contain only finite numbers") from exc
+    except TypeError as exc:
+        raise ValueError("revision_metadata must contain only JSON-serializable values") from exc
+
+
 __all__ = [
     "EquivalentModelPublication",
     "ModelEquivalenceError",
     "bind_model_equivalence",
+    "canonical_json",
+    "canonical_revision_metadata",
     "clean_identifier",
+    "date_identity",
     "find_equivalent_publication",
+    "identity_value",
     "immutable_conflicts",
     "release_unused_model_version_reservation",
 ]

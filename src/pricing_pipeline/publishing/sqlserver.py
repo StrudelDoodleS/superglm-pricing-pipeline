@@ -6,11 +6,8 @@ maintainers can audit transaction order without following a repository abstracti
 
 from __future__ import annotations
 
-import json
 import math
 import re
-from collections.abc import Mapping
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,31 +18,188 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
-from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.lifecycle import (
-    CompletedModelPublishResult,
-    PublishResult,
-)
+from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.publishing.identity import canonical_json, canonical_revision_metadata
+from pricing_pipeline.publishing.lineage import record_model_run
 from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
-from pricing_pipeline.publishing.model_registry import ModelRegistryError
-from pricing_pipeline.publishing.publish import DraftVerification, PreparedPublication
+from pricing_pipeline.publishing.publish import (
+    CompletedModelPublishResult,
+    DraftVerification,
+    ModelRegistryError,
+    PreparedPublication,
+    PricingModelRecord,
+)
 from pricing_pipeline.publishing.rating_tables import RatingTables
-from pricing_pipeline.publishing.staging_lock import acquire_staging_export_lock
 from pricing_pipeline.workbench.artifacts import CandidateBundle
 from pricing_pipeline.workbench.submission import EditorSubmissionError, sha256_file
 
-_STAGED_IDENTITY_FIELDS = (
-    "export_id",
-    "model_id",
-    "model_name",
-    "model_version",
-    "effective_from_date",
-    "effective_to_date",
-    "source_file",
-    "publication_receipt_sha256",
-    "staging_content_sha256",
-    "model_equivalence_sha256",
-)
+_VERSION_PATTERN = re.compile(r"^v([0-9]+)$")
+_LOCK_TIMEOUT_MS = 10_000
+_LOCK_RESOURCE_PREFIX = "pricing_staging_export:"
+
+
+def get_pricing_model(connection, model_name: str) -> PricingModelRecord | None:
+    row = (
+        connection.execute(
+            text(
+                """
+                SELECT model_id, model_name, model_label, target_name, model_type, model_status
+                FROM pricing.PRICING_MODEL
+                WHERE model_name = :model_name
+                """
+            ),
+            {"model_name": model_name},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    return None if row is None else PricingModelRecord(**dict(row))
+
+
+def validate_registered_model(connection, config: ModelBuildConfig) -> PricingModelRecord:
+    record = get_pricing_model(connection, config.model_name)
+    if record is None:
+        raise ModelRegistryError(
+            f"model_name {config.model_name!r} is not registered; "
+            "run explicit model registration first"
+        )
+    mismatches = [
+        f"{field} db={getattr(record, field)!r} config={expected!r}"
+        for field, expected in (
+            ("model_label", config.model_label),
+            ("target_name", config.target_name),
+            ("model_type", config.model_type),
+        )
+        if getattr(record, field) != expected
+    ]
+    if record.model_status != "ACTIVE":
+        mismatches.append(f"model_status db={record.model_status!r} expected='ACTIVE'")
+    if mismatches:
+        raise ModelRegistryError(
+            f"registered model {config.model_name!r} does not match config: "
+            + "; ".join(mismatches)
+        )
+    return record
+
+
+def register_pricing_model(
+    connection,
+    config: ModelBuildConfig,
+    *,
+    created_by: str,
+) -> PricingModelRecord:
+    connection.execute(
+        text(
+            """
+            INSERT INTO pricing.PRICING_MODEL (
+                model_name, model_label, target_name, model_type, model_status, created_by
+            )
+            SELECT :model_name, :model_label, :target_name, :model_type, 'ACTIVE', :created_by
+            WHERE NOT EXISTS (
+                SELECT 1 FROM pricing.PRICING_MODEL WITH (UPDLOCK, HOLDLOCK)
+                WHERE model_name = :model_name
+            );
+            """
+        ),
+        {
+            "model_name": config.model_name,
+            "model_label": config.model_label,
+            "target_name": config.target_name,
+            "model_type": config.model_type,
+            "created_by": created_by,
+        },
+    )
+    return validate_registered_model(connection, config)
+
+
+def _required_text(value: str, field_name: str) -> str:
+    cleaned = "" if value is None else str(value).strip()
+    if not cleaned:
+        raise ValueError(f"{field_name} is required")
+    return cleaned
+
+
+def resolve_model_version_for_export(
+    engine,
+    *,
+    model_name: str,
+    export_id: str,
+) -> str:
+    model_name = _required_text(model_name, "model_name")
+    export_id = _required_text(export_id, "export_id")
+    schemas = schema_names_from_connectable(engine)
+    with engine.begin() as connection:
+        model_id = connection.execute(
+            text(
+                f"""
+                SELECT pm.model_id
+                FROM {schemas.pricing}.PRICING_MODEL AS pm WITH (UPDLOCK, HOLDLOCK)
+                WHERE pm.model_name = :model_name
+                """
+            ),
+            {"model_name": model_name},
+        ).scalar_one_or_none()
+        if model_id is None:
+            raise ValueError(f"pricing model is not registered: {model_name}")
+        params = {"model_id": int(model_id), "export_id": export_id}
+        existing_versions = list(
+            connection.execute(
+                text(
+                    f"""
+                    SELECT existing.model_version
+                    FROM (
+                        SELECT rp.model_version
+                        FROM {schemas.pricing}.PRICING_RATE_PACKAGE AS rp
+                        WHERE rp.model_id = :model_id AND rp.source_export_id = :export_id
+                        UNION
+                        SELECT reservation.model_version
+                        FROM {schemas.pricing}.PRICING_MODEL_VERSION_RESERVATION AS reservation
+                        WHERE reservation.model_id = :model_id
+                          AND reservation.export_id = :export_id
+                    ) AS existing
+                    """
+                ),
+                params,
+            ).scalars()
+        )
+        if len(existing_versions) > 1:
+            raise RuntimeError(
+                "published package and model-version reservation disagree for "
+                f"model={model_name!r}, export_id={export_id!r}"
+            )
+        if existing_versions:
+            return str(existing_versions[0])
+        versions = connection.execute(
+            text(
+                f"""
+                SELECT rp.model_version
+                FROM {schemas.pricing}.PRICING_RATE_PACKAGE AS rp
+                WHERE rp.model_id = :model_id AND rp.parent_rate_package_id IS NULL
+                UNION ALL
+                SELECT reservation.model_version
+                FROM {schemas.pricing}.PRICING_MODEL_VERSION_RESERVATION AS reservation
+                WHERE reservation.model_id = :model_id
+                """
+            ),
+            params,
+        ).scalars()
+        numbers = [
+            int(match.group(1))
+            for value in versions
+            if (match := _VERSION_PATTERN.match(str(value))) is not None
+        ]
+        reserved = f"v{max(numbers, default=0) + 1}"
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO {schemas.pricing}.PRICING_MODEL_VERSION_RESERVATION (
+                    model_id, export_id, model_version
+                ) VALUES (:model_id, :export_id, :model_version)
+                """
+            ),
+            {**params, "model_version": reserved},
+        )
+        return reserved
 
 
 def _identity_text(value) -> str | None:
@@ -92,65 +246,6 @@ def _existing_export_conflicts(
     return conflicts
 
 
-def _staged_export_conflicts(
-    meta,
-    expected: Mapping[str, object] | None,
-) -> list[str]:
-    if expected is None:
-        return []
-    unknown_fields = set(expected) - set(_STAGED_IDENTITY_FIELDS)
-    if unknown_fields:
-        raise ValueError(
-            "expected_staged_metadata contains unsupported fields: "
-            + ", ".join(sorted(unknown_fields))
-        )
-
-    conflicts: list[str] = []
-    for field_name in _STAGED_IDENTITY_FIELDS:
-        if field_name not in expected:
-            continue
-        staged_value = meta[field_name]
-        expected_value = expected[field_name]
-        if _identity_text(staged_value) != _identity_text(expected_value):
-            conflicts.append(f"{field_name} expected={expected_value!r} staged={staged_value!r}")
-    return conflicts
-
-
-def _canonical_revision_metadata(value: Mapping[str, object] | None) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, Mapping):
-        raise ValueError("revision_metadata must be a mapping")  # noqa: TRY004
-
-    def normalise(item: object) -> object:
-        if isinstance(item, Mapping):
-            normalised: dict[str, object] = {}
-            for key, nested_value in item.items():
-                if not isinstance(key, str):
-                    raise ValueError(  # noqa: TRY004
-                        "revision_metadata keys must be strings"
-                    )
-                normalised[key] = normalise(nested_value)
-            return normalised
-        if isinstance(item, list | tuple):
-            return [normalise(nested_value) for nested_value in item]
-        return item
-
-    normalised_value = normalise(value)
-    try:
-        return json.dumps(
-            normalised_value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-    except ValueError as exc:
-        raise ValueError("revision_metadata must contain only finite numbers") from exc
-    except TypeError as exc:
-        raise ValueError("revision_metadata must contain only JSON-serializable values") from exc
-
-
 def _delete_staging_children(
     connection: Connection,
     *,
@@ -175,7 +270,33 @@ class _DraftPackage:
 
 
 def _lock_export(connection: Connection, export_id: str) -> None:
-    acquire_staging_export_lock(connection, export_id)
+    dialect = getattr(connection, "dialect", None)
+    if dialect is None:
+        dialect = getattr(getattr(connection, "engine", None), "dialect", None)
+    if getattr(dialect, "name", None) != "mssql":
+        return
+    export_id = _required_text(export_id, "export_id")
+    result = connection.execute(
+        text(
+            """
+            DECLARE @lock_result INT;
+            EXEC @lock_result = sys.sp_getapplock
+                @Resource = :lock_resource,
+                @LockMode = 'Exclusive',
+                @LockOwner = 'Transaction',
+                @LockTimeout = :lock_timeout_ms;
+            SELECT @lock_result;
+            """
+        ),
+        {
+            "lock_resource": f"{_LOCK_RESOURCE_PREFIX}{export_id}",
+            "lock_timeout_ms": _LOCK_TIMEOUT_MS,
+        },
+    ).scalar_one()
+    if int(result) < 0:
+        raise RuntimeError(
+            f"could not acquire staging publication lock for export_id={export_id!r}"
+        )
 
 
 def _prepared_staged_metadata(
@@ -632,7 +753,7 @@ def _resolve_existing_or_equivalent(
     tables: RatingTables,
 ) -> CompletedModelPublishResult | None:
     build = prepared.build
-    revision_metadata_json = _canonical_revision_metadata(prepared.revision_metadata)
+    revision_metadata_json = canonical_revision_metadata(prepared.revision_metadata)
     existing = (
         connection.execute(
             text(
@@ -851,406 +972,149 @@ def _insert_draft_package(
     connection: Connection,
     prepared: PreparedPublication,
     tables: RatingTables,
-) -> _DraftPackage | PublishResult:
-    return _insert_staged_draft(
-        connection,
-        export_id=prepared.build.export_id,
-        created_by=prepared.build.created_by,
-        parent_rate_package_id=prepared.parent_rate_package_id,
-        revision_metadata_json=_canonical_revision_metadata(prepared.revision_metadata),
-        expected_staged_metadata=_prepared_staged_metadata(prepared, tables),
-        equivalence_key={
-            "manifest_id": prepared.build.manifest_id,
-            "model_kind": prepared.build.model_kind,
-            "model_equivalence_sha256": tables.model_equivalence_sha256,
-        },
-    )
-
-
-def _insert_staged_draft(
-    connection: Connection,
-    *,
-    export_id: str,
-    created_by: str,
-    parent_rate_package_id: int | None,
-    revision_metadata_json: str | None,
-    expected_staged_metadata: Mapping[str, object] | None,
-    equivalence_key: Mapping[str, object] | None,
-) -> _DraftPackage | PublishResult:
-    con = connection
-    meta = (
-        con.execute(
-            text("""
-        SELECT
-            export_id,
-            model_id,
-            model_name,
-            model_version,
-            base_rate,
-            effective_from_date,
-            effective_to_date,
-            source_file,
-            publication_receipt_json,
-            publication_receipt_sha256,
-            package_metadata_json,
-            offset_handling,
-            offset_factor_name,
-            offset_source_name,
-            offset_label,
-            metadata_origin,
-            staging_content_sha256,
-            model_equivalence_sha256
-        FROM pricing_stg.STG_RATING_EXPORT
-        WHERE export_id = :export_id
-    """),
-            {"export_id": export_id},
-        )
-        .mappings()
-        .one()
-    )
-
-    staged_conflicts = _staged_export_conflicts(
-        meta,
-        expected_staged_metadata,
-    )
-    if staged_conflicts:
-        raise ValueError(
-            f"staged export changed before package publication for "
-            f"export_id={export_id!r}: " + "; ".join(staged_conflicts)
-        )
-
-    model_id = meta["model_id"]
+) -> _DraftPackage:
+    """Validate release intent and insert the one prepared DRAFT package."""
+    build = prepared.build
+    export_id = build.export_id
+    meta = {
+        name: None if pd.isna(value) else value
+        for name, value in tables.export_frame.iloc[0].items()
+    }
+    model_id = build.model_id
     if model_id is None:
-        raise ModelRegistryError(
-            "staged rating export is missing model_id; validate/register the "
-            f"model before staging export_id={export_id!r}"
-        )
+        raise ModelRegistryError(f"prepared export {export_id!r} is missing a registered model_id")
+    if int(meta["model_id"]) != int(model_id):
+        raise ModelRegistryError("prepared rating-table model_id changed before publication")
 
-    existing_package = (
-        con.execute(
-            text("""
-        SELECT
-            rate_package_id,
-            package_version,
-            model_id,
-            model_name,
-            model_version,
-            effective_from_date,
-            effective_to_date,
-            package_status,
-            source_export_id,
-            source_file,
-            publication_receipt_sha256,
-            staging_content_sha256,
-            parent_rate_package_id,
-            revision_metadata_json
-        FROM pricing.PRICING_RATE_PACKAGE WITH (UPDLOCK, HOLDLOCK)
-        WHERE model_id = :model_id
-          AND source_export_id = :export_id
-    """),
-            {
-                "model_id": model_id,
-                "export_id": export_id,
-            },
-        )
-        .mappings()
-        .one_or_none()
-    )
-    if existing_package is not None:
-        conflicts = _existing_export_conflicts(
-            existing_package,
-            meta,
-            parent_rate_package_id=parent_rate_package_id,
-            revision_metadata_json=revision_metadata_json,
-        )
-        if conflicts:
-            raise ValueError(
-                f"export_id {export_id!r} is already published with "
-                "incompatible metadata: " + "; ".join(conflicts)
-            )
-        if str(existing_package["package_status"]).upper() == "PUBLISHED":
-            _delete_staging_children(con, export_id=export_id)
-        return PublishResult(
-            mlflow_run_id="",
-            export_id=export_id,
-            rate_package_id=int(existing_package["rate_package_id"]),
-            package_version=int(existing_package["package_version"]),
-            rating_workbook_path="",
-            package_status=str(existing_package["package_status"]),
-            was_existing=True,
-        )
-
-    if equivalence_key is not None:
-        equivalent_package = (
-            con.execute(
-                text(
-                    """
-                    SELECT TOP (1)
-                        rp.rate_package_id,
-                        rp.package_version,
-                        rp.package_status,
-                        rp.source_export_id,
-                        rp.source_file,
-                        mr.model_run_id
-                    FROM pricing.MODEL_RUN AS mr WITH (UPDLOCK, HOLDLOCK)
-                    JOIN pricing.PRICING_RATE_PACKAGE AS rp
-                      ON rp.rate_package_id = mr.rate_package_id
-                    WHERE mr.model_id = :model_id
-                      AND mr.manifest_id = :manifest_id
-                      AND mr.model_kind = :model_kind
-                      AND mr.model_equivalence_sha256 =
-                          :model_equivalence_sha256
-                      AND mr.run_status = 'SUCCESS'
-                    ORDER BY rp.package_version
-                    """
-                ),
-                {
-                    "model_id": model_id,
-                    **dict(equivalence_key),
-                },
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if equivalent_package is not None:
-            con.execute(
-                text(
-                    """
-                    DELETE FROM pricing.PRICING_MODEL_VERSION_RESERVATION
-                    WHERE model_id = :model_id
-                      AND export_id = :export_id
-                    """
-                ),
-                {"model_id": model_id, "export_id": export_id},
-            )
-            if str(equivalent_package["package_status"]).upper() == "PUBLISHED":
-                _delete_staging_children(con, export_id=export_id)
-            return PublishResult(
-                mlflow_run_id="",
-                export_id=str(equivalent_package["source_export_id"]),
-                rate_package_id=int(equivalent_package["rate_package_id"]),
-                package_version=int(equivalent_package["package_version"]),
-                rating_workbook_path=str(equivalent_package["source_file"] or ""),
-                package_status=str(equivalent_package["package_status"]),
-                was_existing=True,
-                model_run_id=int(equivalent_package["model_run_id"]),
-                deduplicated=True,
-            )
-
-    if parent_rate_package_id is not None:
+    parent_id = prepared.parent_rate_package_id
+    if parent_id is not None:
         parent = (
-            con.execute(
-                text("""
-                SELECT
-                    rate_package_id,
-                    model_id,
-                    model_version,
-                    effective_from_date,
-                    effective_to_date,
-                    package_status
-                FROM pricing.PRICING_RATE_PACKAGE WITH (UPDLOCK, HOLDLOCK)
-                WHERE rate_package_id = :parent_rate_package_id
-                """),
-                {"parent_rate_package_id": parent_rate_package_id},
+            connection.execute(
+                text(
+                    """
+                    SELECT model_id, model_version, effective_from_date,
+                           effective_to_date, package_status
+                    FROM pricing.PRICING_RATE_PACKAGE WITH (UPDLOCK, HOLDLOCK)
+                    WHERE rate_package_id = :parent_rate_package_id
+                    """
+                ),
+                {"parent_rate_package_id": parent_id},
             )
             .mappings()
             .one_or_none()
         )
         if parent is None:
-            raise ValueError(f"parent rate package {parent_rate_package_id} does not exist")
+            raise ValueError(f"parent rate package {parent_id} does not exist")
         if int(parent["model_id"]) != int(model_id):
             raise ValueError("parent rate package belongs to a different model")
         if str(parent["package_status"]) != "PUBLISHED":
             raise ValueError("parent rate package must have PUBLISHED status")
-        for field_name in (
-            "model_version",
-            "effective_from_date",
-            "effective_to_date",
-        ):
-            if _identity_text(parent[field_name]) != _identity_text(meta[field_name]):
+        for field in ("model_version", "effective_from_date", "effective_to_date"):
+            if _identity_text(parent[field]) != _identity_text(meta[field]):
                 raise ValueError(
-                    f"parent {field_name}={parent[field_name]!r} does not match "
-                    f"staged {field_name}={meta[field_name]!r}"
+                    f"parent {field}={parent[field]!r} does not match "
+                    f"prepared {field}={meta[field]!r}"
                 )
-
-    if parent_rate_package_id is None:
-        staged_version = _identity_text(meta["model_version"])
-        if staged_version is None:
+    else:
+        model_version = _identity_text(meta["model_version"])
+        if model_version is None:
             raise ValueError("root package publication requires model_version")
         reservation = (
-            con.execute(
-                text("""
-                SELECT
-                    model_id,
-                    export_id,
-                    model_version
-                FROM pricing.PRICING_MODEL_VERSION_RESERVATION
-                    WITH (UPDLOCK, HOLDLOCK)
-                WHERE model_id = :model_id
-                  AND export_id = :export_id
-                """),
+            connection.execute(
+                text(
+                    """
+                    SELECT model_version
+                    FROM pricing.PRICING_MODEL_VERSION_RESERVATION WITH (UPDLOCK, HOLDLOCK)
+                    WHERE model_id = :model_id AND export_id = :export_id
+                    """
+                ),
                 {"model_id": model_id, "export_id": export_id},
             )
             .mappings()
             .one_or_none()
         )
         if reservation is None:
-            con.execute(
-                text("""
-                INSERT INTO pricing.PRICING_MODEL_VERSION_RESERVATION (
-                    model_id,
-                    export_id,
-                    model_version
-                ) VALUES (
-                    :model_id,
-                    :export_id,
-                    :model_version
-                )
-                """),
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO pricing.PRICING_MODEL_VERSION_RESERVATION (
+                        model_id, export_id, model_version
+                    ) VALUES (:model_id, :export_id, :model_version)
+                    """
+                ),
                 {
                     "model_id": model_id,
                     "export_id": export_id,
-                    "model_version": staged_version,
+                    "model_version": model_version,
                 },
             )
-        else:
-            reserved_version = _identity_text(reservation["model_version"])
-            if reserved_version != staged_version:
-                raise ValueError(
-                    f"reserved model_version {reserved_version!r} does not match "
-                    f"staged model_version {staged_version!r} for "
-                    f"export_id={export_id!r}"
-                )
+        elif _identity_text(reservation["model_version"]) != model_version:
+            raise ValueError(
+                f"reserved model_version {reservation['model_version']!r} does not match "
+                f"prepared model_version {model_version!r} for export_id={export_id!r}"
+            )
 
     offset_handling = meta["offset_handling"] or "UNKNOWN"
     offset_factor_name = meta["offset_factor_name"]
-    if offset_handling == "EXPORTED_FACTOR":
-        if not offset_factor_name:
-            raise ValueError(
-                "staged export declares EXPORTED_FACTOR offset handling but "
-                "does not include offset_factor_name"
-            )
-        offset_factor_exists = con.execute(
-            text("""
-            SELECT TOP 1 1
-            FROM pricing_stg.STG_RATE_CELL
-            WHERE export_id = :export_id
-              AND term_name = :offset_factor_name
-              AND term_type = 'OFFSET_FACTOR'
-        """),
-            {
-                "export_id": export_id,
-                "offset_factor_name": offset_factor_name,
-            },
-        ).scalar_one_or_none()
-        if offset_factor_exists is None:
-            raise ValueError(
-                "staged export declares EXPORTED_FACTOR offset handling but "
-                f"has no OFFSET_FACTOR term named {offset_factor_name!r}"
-            )
-    elif offset_handling == "ALREADY_APPLIED_SQL_EXPOSURE":
-        staged_offset_factor = con.execute(
-            text("""
-            SELECT TOP 1 1
-            FROM pricing_stg.STG_RATE_CELL
-            WHERE export_id = :export_id
-              AND term_type = 'OFFSET_FACTOR'
-        """),
-            {"export_id": export_id},
-        ).scalar_one_or_none()
-        if staged_offset_factor is not None:
-            raise ValueError(
-                "staged export declares ALREADY_APPLIED_SQL_EXPOSURE but "
-                "also contains an OFFSET_FACTOR term"
-            )
+    offset_terms = tables.rate_cells.loc[
+        tables.rate_cells["term_type"] == "OFFSET_FACTOR", "term_name"
+    ]
+    if offset_handling == "EXPORTED_FACTOR" and (
+        not offset_factor_name or str(offset_factor_name) not in set(offset_terms)
+    ):
+        raise ValueError("prepared EXPORTED_FACTOR publication has no matching OFFSET_FACTOR term")
+    if offset_handling == "ALREADY_APPLIED_SQL_EXPOSURE" and not offset_terms.empty:
+        raise ValueError(
+            "prepared ALREADY_APPLIED_SQL_EXPOSURE publication contains an OFFSET_FACTOR term"
+        )
 
-    package_version = con.execute(
-        text("""
-        SELECT ISNULL(MAX(package_version), 0) + 1
-        FROM pricing.PRICING_RATE_PACKAGE WITH (UPDLOCK, HOLDLOCK)
-        WHERE model_id = :model_id
-    """),
+    package_version = connection.execute(
+        text(
+            """
+            SELECT ISNULL(MAX(package_version), 0) + 1
+            FROM pricing.PRICING_RATE_PACKAGE WITH (UPDLOCK, HOLDLOCK)
+            WHERE model_id = :model_id
+            """
+        ),
         {"model_id": model_id},
     ).scalar_one()
-
-    rate_package_id = con.execute(
-        text("""
-        INSERT INTO pricing.PRICING_RATE_PACKAGE (
-            parent_rate_package_id,
-            model_id,
-            model_name,
-            model_version,
-            package_version,
-            base_rate,
-            effective_from_date,
-            effective_to_date,
-            package_status,
-            source_export_id,
-            source_file,
-            publication_receipt_json,
-            publication_receipt_sha256,
-            staging_content_sha256,
-            package_metadata_json,
-            revision_metadata_json,
-            offset_handling,
-            offset_factor_name,
-            offset_source_name,
-            offset_label,
-            metadata_origin,
-            created_by
-        )
-        OUTPUT INSERTED.rate_package_id
-        VALUES (
-            :parent_rate_package_id,
-            :model_id,
-            :model_name,
-            :model_version,
-            :package_version,
-            :base_rate,
-            :effective_from_date,
-            :effective_to_date,
-            :package_status,
-            :source_export_id,
-            :source_file,
-            :publication_receipt_json,
-            :publication_receipt_sha256,
-            :staging_content_sha256,
-            :package_metadata_json,
-            :revision_metadata_json,
-            :offset_handling,
-            :offset_factor_name,
-            :offset_source_name,
-            :offset_label,
-            :metadata_origin,
-            :created_by
-        )
-    """),
-        {
-            "model_id": model_id,
-            "parent_rate_package_id": parent_rate_package_id,
-            "model_name": meta["model_name"],
-            "model_version": meta["model_version"],
-            "package_version": package_version,
-            "base_rate": meta["base_rate"],
-            "effective_from_date": meta["effective_from_date"],
-            "effective_to_date": meta["effective_to_date"],
-            "package_status": "DRAFT",
-            "source_export_id": export_id,
-            "source_file": meta["source_file"],
-            "publication_receipt_json": meta["publication_receipt_json"],
-            "publication_receipt_sha256": meta["publication_receipt_sha256"],
-            "staging_content_sha256": meta["staging_content_sha256"],
-            "package_metadata_json": meta["package_metadata_json"],
-            "revision_metadata_json": revision_metadata_json,
-            "offset_handling": offset_handling,
-            "offset_factor_name": offset_factor_name,
-            "offset_source_name": meta["offset_source_name"],
-            "offset_label": meta["offset_label"],
-            "metadata_origin": meta["metadata_origin"],
-            "created_by": created_by,
-        },
+    params = {
+        **meta,
+        "model_id": model_id,
+        "parent_rate_package_id": parent_id,
+        "package_version": package_version,
+        "package_status": "DRAFT",
+        "source_export_id": export_id,
+        "revision_metadata_json": canonical_revision_metadata(prepared.revision_metadata),
+        "offset_handling": offset_handling,
+        "created_by": build.created_by,
+    }
+    rate_package_id = connection.execute(
+        text(
+            """
+            INSERT INTO pricing.PRICING_RATE_PACKAGE (
+                parent_rate_package_id, model_id, model_name, model_version,
+                package_version, base_rate, effective_from_date, effective_to_date,
+                package_status, source_export_id, source_file,
+                publication_receipt_json, publication_receipt_sha256,
+                staging_content_sha256, package_metadata_json, revision_metadata_json,
+                offset_handling, offset_factor_name, offset_source_name, offset_label,
+                metadata_origin, created_by
+            )
+            OUTPUT INSERTED.rate_package_id
+            VALUES (
+                :parent_rate_package_id, :model_id, :model_name, :model_version,
+                :package_version, :base_rate, :effective_from_date, :effective_to_date,
+                :package_status, :source_export_id, :source_file,
+                :publication_receipt_json, :publication_receipt_sha256,
+                :staging_content_sha256, :package_metadata_json, :revision_metadata_json,
+                :offset_handling, :offset_factor_name, :offset_source_name, :offset_label,
+                :metadata_origin, :created_by
+            )
+            """
+        ),
+        params,
     ).scalar_one()
-
     return _DraftPackage(
         rate_package_id=int(rate_package_id),
         package_version=int(package_version),
@@ -1265,13 +1129,9 @@ def _insert_rating_tables(
     tables: RatingTables | None,
 ) -> None:
     del tables
-    con = connection
-    export_id = package.export_id
-    rate_package_id = package.rate_package_id
-    model_id = package.model_id
-    # Features
-    con.execute(
+    connection.execute(
         text("""
+        -- Features
         INSERT INTO pricing.PRICING_FEATURE (
             feature_name,
             feature_value_type,
@@ -1288,13 +1148,7 @@ def _insert_rating_tables(
               FROM pricing.PRICING_FEATURE f
               WHERE f.feature_name = s.feature_name
           );
-    """),
-        {"export_id": export_id},
-    )
-
-    # Level sets
-    con.execute(
-        text("""
+        -- Level sets
         INSERT INTO pricing.PRICING_FEATURE_LEVEL_SET (
             feature_id,
             model_id,
@@ -1325,13 +1179,7 @@ def _insert_rating_tables(
                 AND ls.feature_id = f.feature_id
                 AND ls.level_set_name = s.level_set_name
           );
-    """),
-        {"export_id": export_id, "model_id": model_id},
-    )
-
-    # Levels
-    con.execute(
-        text("""
+        -- Levels
         INSERT INTO pricing.PRICING_FEATURE_LEVEL (
             level_set_id,
             level_code,
@@ -1373,13 +1221,7 @@ def _insert_rating_tables(
             s.lower_bound,
             s.upper_bound,
             s.level_code;
-    """),
-        {"export_id": export_id, "model_id": model_id},
-    )
-
-    # Terms
-    con.execute(
-        text("""
+        -- Terms
         INSERT INTO pricing.PRICING_TERM (
             rate_package_id,
             term_name,
@@ -1398,13 +1240,7 @@ def _insert_rating_tables(
           ON tm.export_id = c.export_id
          AND tm.term_name = c.term_name
         WHERE c.export_id = :export_id;
-    """),
-        {"export_id": export_id, "rate_package_id": rate_package_id},
-    )
-
-    # Term features
-    con.execute(
-        text("""
+        -- Term features
         INSERT INTO pricing.PRICING_TERM_FEATURE (
             term_id,
             position_no,
@@ -1432,17 +1268,7 @@ def _insert_rating_tables(
          AND ls.feature_id = f.feature_id
          AND ls.level_set_name = s.level_set_name
         WHERE s.export_id = :export_id;
-    """),
-        {
-            "export_id": export_id,
-            "rate_package_id": rate_package_id,
-            "model_id": model_id,
-        },
-    )
-
-    # Cells
-    con.execute(
-        text("""
+        -- Cells
         INSERT INTO pricing.PRICING_RATE_CELL (
             term_id,
             cell_key_text,
@@ -1469,13 +1295,7 @@ def _insert_rating_tables(
           ON t.rate_package_id = :rate_package_id
          AND t.term_name = c.term_name
         WHERE c.export_id = :export_id;
-    """),
-        {"export_id": export_id, "rate_package_id": rate_package_id},
-    )
-
-    # Cell-level mapping
-    con.execute(
-        text("""
+        -- Cell-level mapping
         INSERT INTO pricing.PRICING_RATE_CELL_LEVEL (
             cell_id,
             position_no,
@@ -1505,17 +1325,7 @@ def _insert_rating_tables(
           ON fl.level_set_id = ls.level_set_id
          AND fl.level_code = s.level_code
         WHERE s.export_id = :export_id;
-    """),
-        {
-            "export_id": export_id,
-            "rate_package_id": rate_package_id,
-            "model_id": model_id,
-        },
-    )
-
-    # Minimal compile step: flat rate cells
-    con.execute(
-        text("""
+        -- Minimal compile step: flat rate cells
         INSERT INTO pricing.PRICING_COMPILED_RATE_CELL (
             rate_package_id,
             term_id,
@@ -1550,13 +1360,7 @@ def _insert_rating_tables(
           ON c.term_id = t.term_id
         WHERE t.rate_package_id = :rate_package_id
           AND c.is_deleted = 0;
-    """),
-        {"rate_package_id": rate_package_id},
-    )
-
-    # Compile 1D bands for spline/numeric-band terms
-    con.execute(
-        text("""
+        -- Compile 1D bands for spline/numeric-band terms
         INSERT INTO pricing.PRICING_COMPILED_1D_RATE_BAND (
             rate_package_id,
             term_id,
@@ -1621,762 +1425,13 @@ def _insert_rating_tables(
             fl.lower_bound,
             fl.upper_bound,
             fl.level_code;
-    """),
-        {"rate_package_id": rate_package_id},
+        """),
+        {
+            "export_id": package.export_id,
+            "rate_package_id": package.rate_package_id,
+            "model_id": package.model_id,
+        },
     )
-
-
-class ModelRunIdentityError(RuntimeError):
-    """Raised when a successful model-run identity is reused inconsistently."""
-
-
-_DATASET_ROLE = "training"
-_SPLIT_ROLE = "validation"
-
-
-_IMMUTABLE_MODEL_RUN_FIELDS = (
-    "dag_id",
-    "airflow_run_id",
-    "mlflow_run_id",
-    "manifest_id",
-    "export_id",
-    "model_id",
-    "model_name",
-    "model_version",
-    "model_kind",
-    "model_equivalence_sha256",
-    "rate_package_id",
-    "rating_workbook_path",
-    "rating_workbook_sha256",
-    "run_status",
-    "created_by",
-    "publication_receipt_path",
-    "publication_receipt_sha256",
-    "candidate_artifact_path",
-    "candidate_artifact_sha256",
-    "candidate_artifact_format",
-    "candidate_artifact_size_bytes",
-    "candidate_python_version",
-    "candidate_superglm_version",
-    "model_source_sha256",
-    "parent_model_run_id",
-)
-
-
-def _identity_value(value):
-    if value is None:
-        return None
-    return str(value)
-
-
-def _record_model_run(
-    engine: Engine | None,
-    *,
-    build: ApprovedModelBuild,
-    dag_id: str,
-    airflow_run_id: str,
-    rate_package_id: int | None,
-    parent_model_run_id: int | None = None,
-    connection=None,
-) -> int:
-    manifest_id = build.manifest_id
-    split_set_id = build.split_set_id
-    metrics = build.metrics
-    metric_scopes = build.metric_scopes
-    fold_metrics = build.fold_metrics
-    if fold_metrics and split_set_id is None:
-        raise ValueError("fold_metrics require split_set_id")
-    params = {
-        "dag_id": dag_id,
-        "airflow_run_id": airflow_run_id,
-        "mlflow_run_id": build.mlflow_run_id,
-        "manifest_id": manifest_id,
-        "split_set_id": split_set_id,
-        "export_id": build.export_id,
-        "model_id": build.model_id,
-        "model_name": build.model_name,
-        "model_version": build.model_version,
-        "model_kind": build.model_kind,
-        "model_equivalence_sha256": build.model_equivalence_sha256,
-        "rate_package_id": rate_package_id,
-        "rating_workbook_path": build.rating_workbook_path,
-        "rating_workbook_sha256": build.rating_workbook_sha256,
-        "run_status": "SUCCESS",
-        "created_by": build.created_by,
-        "publication_receipt_path": build.publication_receipt_path,
-        "publication_receipt_sha256": build.publication_receipt_sha256,
-        "candidate_artifact_path": build.candidate_artifact_path,
-        "candidate_artifact_sha256": build.candidate_artifact_sha256,
-        "candidate_artifact_format": build.candidate_artifact_format,
-        "candidate_artifact_size_bytes": build.candidate_artifact_size_bytes,
-        "candidate_python_version": build.candidate_python_version,
-        "candidate_superglm_version": build.candidate_superglm_version,
-        "model_source_sha256": build.model_source_sha256,
-        "dataset_role": _DATASET_ROLE,
-        "split_role": _SPLIT_ROLE,
-        "parent_model_run_id": parent_model_run_id,
-    }
-    transaction = engine.begin() if connection is None else nullcontext(connection)
-    with transaction as con:
-        existing_successful_run = (
-            con.execute(
-                text(
-                    """
-                    SELECT TOP (1)
-                        mr.model_run_id,
-                        mr.dag_id,
-                        mr.airflow_run_id,
-                        mr.mlflow_run_id,
-                        mr.manifest_id,
-                        mr.export_id,
-                        mr.model_id,
-                        mr.model_name,
-                        mr.model_version,
-                        mr.model_kind,
-                        mr.model_equivalence_sha256,
-                        mr.rate_package_id,
-                        mr.rating_workbook_path,
-                        mr.rating_workbook_sha256,
-                        mr.run_status,
-                        mr.created_by,
-                        mr.publication_receipt_path,
-                        mr.publication_receipt_sha256,
-                        mr.candidate_artifact_path,
-                        mr.candidate_artifact_sha256,
-                        mr.candidate_artifact_format,
-                        mr.candidate_artifact_size_bytes,
-                        mr.candidate_python_version,
-                        mr.candidate_superglm_version,
-                        mr.model_source_sha256,
-                        mr.parent_model_run_id
-                    FROM pricing.MODEL_RUN AS mr WITH (UPDLOCK, HOLDLOCK)
-                    WHERE mr.run_status = 'SUCCESS'
-                      AND (
-                          (
-                              mr.dag_id = :dag_id
-                              AND mr.airflow_run_id = :airflow_run_id
-                              AND (
-                                  mr.model_id = :model_id
-                                  OR mr.model_name = :model_name
-                              )
-                          )
-                          OR (
-                              :rate_package_id IS NOT NULL
-                              AND mr.rate_package_id = :rate_package_id
-                          )
-                      )
-                    ORDER BY
-                        CASE
-                            WHEN mr.dag_id = :dag_id
-                             AND mr.airflow_run_id = :airflow_run_id
-                             AND mr.model_id = :model_id
-                            THEN 0
-                            WHEN mr.rate_package_id = :rate_package_id
-                            THEN 1
-                            ELSE 2
-                        END,
-                        mr.model_run_id
-                    """
-                ),
-                params,
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if existing_successful_run is not None:
-            mismatched_fields = [
-                field_name
-                for field_name in _IMMUTABLE_MODEL_RUN_FIELDS
-                if _identity_value(
-                    existing_successful_run.get(
-                        field_name,
-                        "RAW" if field_name == "model_kind" else None,
-                    )
-                )
-                != _identity_value(params[field_name])
-            ]
-            if mismatched_fields:
-                raise ModelRunIdentityError(
-                    "Existing successful model run has different immutable lineage: "
-                    + ", ".join(mismatched_fields)
-                )
-            association_rows = (
-                con.execute(
-                    text(
-                        """
-                        SELECT
-                            'actual_dataset' AS lineage_source,
-                            dataset_link.manifest_id,
-                            CAST(NULL AS NVARCHAR(128)) AS split_set_id,
-                            dataset_link.dataset_role,
-                            CAST(NULL AS NVARCHAR(64)) AS split_role
-                        FROM mlops.MODEL_RUN_DATASET AS dataset_link
-                            WITH (UPDLOCK, HOLDLOCK)
-                        WHERE dataset_link.model_run_id = :model_run_id
-
-                        UNION ALL
-
-                        SELECT
-                            'actual_split' AS lineage_source,
-                            split_link.manifest_id,
-                            split_link.split_set_id,
-                            split_link.dataset_role,
-                            split_link.split_role
-                        FROM mlops.MODEL_RUN_SPLIT_SET AS split_link
-                            WITH (UPDLOCK, HOLDLOCK)
-                        WHERE split_link.model_run_id = :model_run_id
-
-                        UNION ALL
-
-                        SELECT
-                            'parent_dataset' AS lineage_source,
-                            parent_dataset.manifest_id,
-                            CAST(NULL AS NVARCHAR(128)) AS split_set_id,
-                            parent_dataset.dataset_role,
-                            CAST(NULL AS NVARCHAR(64)) AS split_role
-                        FROM mlops.MODEL_RUN_DATASET AS parent_dataset
-                            WITH (UPDLOCK, HOLDLOCK)
-                        WHERE parent_dataset.model_run_id = :parent_model_run_id
-
-                        UNION ALL
-
-                        SELECT
-                            'parent_split' AS lineage_source,
-                            parent_split.manifest_id,
-                            parent_split.split_set_id,
-                            parent_split.dataset_role,
-                            parent_split.split_role
-                        FROM mlops.MODEL_RUN_SPLIT_SET AS parent_split
-                            WITH (UPDLOCK, HOLDLOCK)
-                        WHERE parent_split.model_run_id = :parent_model_run_id
-                        """
-                    ),
-                    {
-                        "model_run_id": existing_successful_run["model_run_id"],
-                        "parent_model_run_id": existing_successful_run["parent_model_run_id"],
-                    },
-                )
-                .mappings()
-                .all()
-            )
-            dataset_sets = {
-                "actual_dataset": set(),
-                "parent_dataset": set(),
-            }
-            split_sets = {
-                "actual_split": set(),
-                "parent_split": set(),
-            }
-            for row in association_rows:
-                lineage_source = str(row["lineage_source"])
-                if lineage_source in dataset_sets:
-                    dataset_sets[lineage_source].add(
-                        (str(row["manifest_id"]), str(row["dataset_role"]))
-                    )
-                elif lineage_source in split_sets:
-                    split_sets[lineage_source].add(
-                        (
-                            str(row["manifest_id"]),
-                            str(row["split_set_id"]),
-                            str(row["dataset_role"]),
-                            str(row["split_role"]),
-                        )
-                    )
-                else:
-                    raise ModelRunIdentityError(
-                        f"Unknown model-run lineage source {lineage_source!r}"
-                    )
-
-            expected_datasets = set(dataset_sets["parent_dataset"])
-            expected_datasets.add((manifest_id, _DATASET_ROLE))
-            expected_splits = set(split_sets["parent_split"])
-            if split_set_id is not None:
-                expected_splits.add((manifest_id, split_set_id, _DATASET_ROLE, _SPLIT_ROLE))
-
-            association_mismatches = []
-            if dataset_sets["actual_dataset"] != expected_datasets:
-                association_mismatches.append(
-                    "dataset associations "
-                    f"stored={sorted(dataset_sets['actual_dataset'])!r} "
-                    f"expected={sorted(expected_datasets)!r}"
-                )
-            if split_sets["actual_split"] != expected_splits:
-                association_mismatches.append(
-                    "split associations "
-                    f"stored={sorted(split_sets['actual_split'])!r} "
-                    f"expected={sorted(expected_splits)!r}"
-                )
-            if association_mismatches:
-                raise ModelRunIdentityError(
-                    "Existing successful model run has different immutable lineage: "
-                    + "; ".join(association_mismatches)
-                )
-            return int(existing_successful_run["model_run_id"])
-
-        if parent_model_run_id is not None:
-            parent_matches_package = con.execute(
-                text(
-                    """
-                    SELECT TOP (1) 1
-                    FROM pricing.PRICING_RATE_PACKAGE AS child_package
-                        WITH (UPDLOCK, HOLDLOCK)
-                    JOIN pricing.MODEL_RUN AS parent_run
-                        WITH (UPDLOCK, HOLDLOCK)
-                      ON parent_run.model_run_id = :parent_model_run_id
-                     AND parent_run.rate_package_id = child_package.parent_rate_package_id
-                    WHERE child_package.rate_package_id = :rate_package_id
-                      AND child_package.model_id = :model_id
-                      AND parent_run.model_id = :model_id
-                      AND parent_run.run_status = 'SUCCESS'
-                    """
-                ),
-                params,
-            ).scalar_one_or_none()
-            if parent_matches_package is None:
-                raise ModelRunIdentityError(
-                    "parent_model_run_id does not match the package parent, model, "
-                    "or a successful parent run"
-                )
-
-        con.execute(
-            text(
-                """
-                MERGE pricing.MODEL_RUN WITH (HOLDLOCK) AS tgt
-                USING (
-                    SELECT
-                        :dag_id AS dag_id,
-                        :airflow_run_id AS airflow_run_id,
-                        :model_id AS model_id,
-                        :model_name AS model_name
-                ) AS src
-                ON tgt.dag_id = src.dag_id
-                   AND tgt.airflow_run_id = src.airflow_run_id
-                   AND tgt.model_id = src.model_id
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        mlflow_run_id = :mlflow_run_id,
-                        manifest_id = :manifest_id,
-                        export_id = :export_id,
-                        model_id = :model_id,
-                        model_name = :model_name,
-                        model_version = :model_version,
-                        model_kind = :model_kind,
-                        model_equivalence_sha256 = :model_equivalence_sha256,
-                        rate_package_id = :rate_package_id,
-                        rating_workbook_path = :rating_workbook_path,
-                        rating_workbook_sha256 = :rating_workbook_sha256,
-                        publication_receipt_path = :publication_receipt_path,
-                        publication_receipt_sha256 = :publication_receipt_sha256,
-                        candidate_artifact_path = :candidate_artifact_path,
-                        candidate_artifact_sha256 = :candidate_artifact_sha256,
-                        candidate_artifact_format = :candidate_artifact_format,
-                        candidate_artifact_size_bytes = :candidate_artifact_size_bytes,
-                        candidate_python_version = :candidate_python_version,
-                        candidate_superglm_version = :candidate_superglm_version,
-                        model_source_sha256 = :model_source_sha256,
-                        parent_model_run_id = :parent_model_run_id,
-                        run_status = :run_status,
-                        completed_ts = SYSUTCDATETIME(),
-                        created_by = :created_by
-                WHEN NOT MATCHED THEN
-                    INSERT (
-                        dag_id,
-                        airflow_run_id,
-                        mlflow_run_id,
-                        manifest_id,
-                        export_id,
-                        model_id,
-                        model_name,
-                        model_version,
-                        model_kind,
-                        model_equivalence_sha256,
-                        rate_package_id,
-                        rating_workbook_path,
-                        rating_workbook_sha256,
-                        publication_receipt_path,
-                        publication_receipt_sha256,
-                        candidate_artifact_path,
-                        candidate_artifact_sha256,
-                        candidate_artifact_format,
-                        candidate_artifact_size_bytes,
-                        candidate_python_version,
-                        candidate_superglm_version,
-                        model_source_sha256,
-                        parent_model_run_id,
-                        run_status,
-                        completed_ts,
-                        created_by
-                    )
-                    VALUES (
-                        :dag_id,
-                        :airflow_run_id,
-                        :mlflow_run_id,
-                        :manifest_id,
-                        :export_id,
-                        :model_id,
-                        :model_name,
-                        :model_version,
-                        :model_kind,
-                        :model_equivalence_sha256,
-                        :rate_package_id,
-                        :rating_workbook_path,
-                        :rating_workbook_sha256,
-                        :publication_receipt_path,
-                        :publication_receipt_sha256,
-                        :candidate_artifact_path,
-                        :candidate_artifact_sha256,
-                        :candidate_artifact_format,
-                        :candidate_artifact_size_bytes,
-                        :candidate_python_version,
-                        :candidate_superglm_version,
-                        :model_source_sha256,
-                        :parent_model_run_id,
-                        :run_status,
-                        SYSUTCDATETIME(),
-                        :created_by
-                    );
-                """
-            ),
-            params,
-        )
-        model_run_id = con.execute(
-            text(
-                """
-                SELECT model_run_id
-                FROM pricing.MODEL_RUN
-                WHERE dag_id = :dag_id
-                  AND airflow_run_id = :airflow_run_id
-                  AND model_id = :model_id
-                """
-            ),
-            params,
-        ).scalar_one()
-        split_lineage_params = {
-            "model_run_id": model_run_id,
-            "manifest_id": manifest_id,
-            "split_set_id": split_set_id,
-            "dataset_role": _DATASET_ROLE,
-            "split_role": _SPLIT_ROLE,
-            "parent_model_run_id": parent_model_run_id,
-        }
-        con.execute(
-            text(
-                """
-                DELETE split_link
-                FROM mlops.MODEL_RUN_SPLIT_SET AS split_link
-                WHERE split_link.model_run_id = :model_run_id
-                  AND NOT (
-                      (
-                          :split_set_id IS NOT NULL
-                          AND split_link.manifest_id = :manifest_id
-                          AND split_link.split_set_id = :split_set_id
-                          AND split_link.dataset_role = :dataset_role
-                          AND split_link.split_role = :split_role
-                      )
-                      OR EXISTS (
-                          SELECT 1
-                          FROM mlops.MODEL_RUN_SPLIT_SET AS parent_split
-                          WHERE parent_split.model_run_id = :parent_model_run_id
-                            AND parent_split.manifest_id = split_link.manifest_id
-                            AND parent_split.split_set_id = split_link.split_set_id
-                            AND parent_split.dataset_role = split_link.dataset_role
-                            AND parent_split.split_role = split_link.split_role
-                      )
-                  );
-                """
-            ),
-            split_lineage_params,
-        )
-        con.execute(
-            text(
-                """
-                DELETE fold_metric
-                FROM pricing.CV_FOLD_METRIC AS fold_metric
-                WHERE fold_metric.model_run_id = :model_run_id
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM mlops.MODEL_RUN_SPLIT_SET AS split_reference
-                      WHERE split_reference.model_run_id = fold_metric.model_run_id
-                        AND split_reference.split_set_id = fold_metric.split_set_id
-                  );
-                """
-            ),
-            {"model_run_id": model_run_id},
-        )
-        con.execute(
-            text(
-                """
-                DELETE dataset_link
-                FROM mlops.MODEL_RUN_DATASET AS dataset_link
-                WHERE dataset_link.model_run_id = :model_run_id
-                  AND NOT (
-                      (
-                          dataset_link.manifest_id = :manifest_id
-                          AND dataset_link.dataset_role = :dataset_role
-                      )
-                      OR EXISTS (
-                          SELECT 1
-                          FROM mlops.MODEL_RUN_DATASET AS parent_dataset
-                          WHERE parent_dataset.model_run_id = :parent_model_run_id
-                            AND parent_dataset.manifest_id = dataset_link.manifest_id
-                            AND parent_dataset.dataset_role = dataset_link.dataset_role
-                      )
-                  );
-                """
-            ),
-            {
-                "model_run_id": model_run_id,
-                "manifest_id": manifest_id,
-                "dataset_role": _DATASET_ROLE,
-                "parent_model_run_id": parent_model_run_id,
-            },
-        )
-        con.execute(
-            text(
-                """
-                MERGE mlops.MODEL_RUN_DATASET WITH (HOLDLOCK) AS tgt
-                USING (
-                    SELECT
-                        :model_run_id AS model_run_id,
-                        :manifest_id AS manifest_id,
-                        :dataset_role AS dataset_role
-                ) AS src
-                ON tgt.model_run_id = src.model_run_id
-                   AND tgt.manifest_id = src.manifest_id
-                   AND tgt.dataset_role = src.dataset_role
-                WHEN NOT MATCHED THEN
-                    INSERT (
-                        model_run_id,
-                        manifest_id,
-                        dataset_role
-                    )
-                    VALUES (
-                        src.model_run_id,
-                        src.manifest_id,
-                        src.dataset_role
-                    );
-                """
-            ),
-            {
-                "model_run_id": model_run_id,
-                "manifest_id": manifest_id,
-                "dataset_role": _DATASET_ROLE,
-            },
-        )
-        if split_set_id is not None:
-            con.execute(
-                text(
-                    """
-                    MERGE mlops.MODEL_RUN_SPLIT_SET WITH (HOLDLOCK) AS tgt
-                    USING (
-                        SELECT
-                            :model_run_id AS model_run_id,
-                            :manifest_id AS manifest_id,
-                            :split_set_id AS split_set_id,
-                            :dataset_role AS dataset_role,
-                            :split_role AS split_role
-                    ) AS src
-                    ON tgt.model_run_id = src.model_run_id
-                       AND tgt.split_set_id = src.split_set_id
-                       AND tgt.split_role = src.split_role
-                    WHEN NOT MATCHED THEN
-                        INSERT (
-                            model_run_id,
-                            manifest_id,
-                            split_set_id,
-                            dataset_role,
-                            split_role
-                        )
-                        VALUES (
-                            src.model_run_id,
-                            src.manifest_id,
-                            src.split_set_id,
-                            src.dataset_role,
-                            src.split_role
-                        );
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "manifest_id": manifest_id,
-                    "split_set_id": split_set_id,
-                    "dataset_role": _DATASET_ROLE,
-                    "split_role": _SPLIT_ROLE,
-                },
-            )
-        if parent_model_run_id is not None:
-            con.execute(
-                text(
-                    """
-                    MERGE mlops.MODEL_RUN_DATASET WITH (HOLDLOCK) AS tgt
-                    USING (
-                        SELECT
-                            :model_run_id AS model_run_id,
-                            parent_link.manifest_id,
-                            parent_link.dataset_role
-                        FROM mlops.MODEL_RUN_DATASET AS parent_link
-                        WHERE parent_link.model_run_id = :parent_model_run_id
-                    ) AS src
-                    ON tgt.model_run_id = src.model_run_id
-                       AND tgt.manifest_id = src.manifest_id
-                       AND tgt.dataset_role = src.dataset_role
-                    WHEN NOT MATCHED THEN
-                        INSERT (
-                            model_run_id,
-                            manifest_id,
-                            dataset_role
-                        )
-                        VALUES (
-                            src.model_run_id,
-                            src.manifest_id,
-                            src.dataset_role
-                        );
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "parent_model_run_id": parent_model_run_id,
-                },
-            )
-            con.execute(
-                text(
-                    """
-                    MERGE mlops.MODEL_RUN_SPLIT_SET WITH (HOLDLOCK) AS tgt
-                    USING (
-                        SELECT
-                            :model_run_id AS model_run_id,
-                            parent_link.manifest_id,
-                            parent_link.split_set_id,
-                            parent_link.dataset_role,
-                            parent_link.split_role
-                        FROM mlops.MODEL_RUN_SPLIT_SET AS parent_link
-                        WHERE parent_link.model_run_id = :parent_model_run_id
-                    ) AS src
-                    ON tgt.model_run_id = src.model_run_id
-                       AND tgt.split_set_id = src.split_set_id
-                       AND tgt.split_role = src.split_role
-                    WHEN NOT MATCHED THEN
-                        INSERT (
-                            model_run_id,
-                            manifest_id,
-                            split_set_id,
-                            dataset_role,
-                            split_role
-                        )
-                        VALUES (
-                            src.model_run_id,
-                            src.manifest_id,
-                            src.split_set_id,
-                            src.dataset_role,
-                            src.split_role
-                        );
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "parent_model_run_id": parent_model_run_id,
-                },
-            )
-        con.execute(
-            text(
-                """
-                DELETE FROM mlops.MODEL_RUN_METRIC
-                WHERE model_run_id = :model_run_id;
-                """
-            ),
-            {"model_run_id": model_run_id},
-        )
-        if split_set_id is not None:
-            con.execute(
-                text(
-                    """
-                    DELETE FROM pricing.CV_FOLD_METRIC
-                    WHERE model_run_id = :model_run_id
-                      AND split_set_id = :split_set_id;
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "split_set_id": split_set_id,
-                },
-            )
-        for metric_name in sorted(metrics or {}):
-            con.execute(
-                text(
-                    """
-                    MERGE mlops.MODEL_RUN_METRIC WITH (HOLDLOCK) AS tgt
-                    USING (
-                        SELECT
-                            :model_run_id AS model_run_id,
-                            :metric_name AS metric_name
-                    ) AS src
-                    ON tgt.model_run_id = src.model_run_id
-                       AND tgt.metric_name = src.metric_name
-                    WHEN MATCHED THEN
-                        UPDATE SET
-                            metric_value = :metric_value,
-                            metric_scope = :metric_scope
-                    WHEN NOT MATCHED THEN
-                        INSERT (model_run_id, metric_name, metric_value, metric_scope)
-                        VALUES (
-                            :model_run_id,
-                            :metric_name,
-                            :metric_value,
-                            :metric_scope
-                        );
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "metric_name": metric_name,
-                    "metric_value": float((metrics or {})[metric_name]),
-                    "metric_scope": (metric_scopes or {}).get(metric_name),
-                },
-            )
-        for metric in fold_metrics:
-            con.execute(
-                text(
-                    """
-                    MERGE pricing.CV_FOLD_METRIC WITH (HOLDLOCK) AS tgt
-                    USING (
-                        SELECT
-                            :model_run_id AS model_run_id,
-                            :split_set_id AS split_set_id,
-                            :fold_no AS fold_no,
-                            :metric_name AS metric_name
-                    ) AS src
-                    ON tgt.model_run_id = src.model_run_id
-                       AND tgt.split_set_id = src.split_set_id
-                       AND tgt.fold_no = src.fold_no
-                       AND tgt.metric_name = src.metric_name
-                    WHEN MATCHED THEN
-                        UPDATE SET metric_value = :metric_value
-                    WHEN NOT MATCHED THEN
-                        INSERT (
-                            model_run_id,
-                            split_set_id,
-                            fold_no,
-                            metric_name,
-                            metric_value
-                        )
-                        VALUES (
-                            :model_run_id,
-                            :split_set_id,
-                            :fold_no,
-                            :metric_name,
-                            :metric_value
-                        );
-                    """
-                ),
-                {
-                    "model_run_id": model_run_id,
-                    "split_set_id": split_set_id,
-                    "fold_no": int(metric["fold_no"]),
-                    "metric_name": str(metric["metric_name"]),
-                    "metric_value": float(metric["metric_value"]),
-                },
-            )
-    return int(model_run_id)
 
 
 def _insert_lineage(
@@ -2384,7 +1439,7 @@ def _insert_lineage(
     package: _DraftPackage,
     prepared: PreparedPublication,
 ) -> int:
-    return _record_model_run(
+    return record_model_run(
         None,
         build=prepared.build,
         dag_id=prepared.execution_name,
@@ -2407,16 +1462,6 @@ def _json_value(value: Any) -> Any:
     if pd.isna(value):
         return None
     return str(value)
-
-
-def _canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
 
 
 def verify_package_sql_parity(
@@ -2497,7 +1542,7 @@ def verify_package_sql_parity(
             exposure = float(np.exp(sample_offset[position]))
         params = {
             "rate_package_id": int(rate_package_id),
-            "features_json": _canonical_json(features),
+            "features_json": canonical_json(features),
             "exposure": exposure,
         }
         actual = float(connection.execute(statement, params).mappings().one()["prediction"])
@@ -2577,14 +1622,6 @@ def publish_sqlserver(
             return existing
         _replace_staging_frames(connection, prepared, tables)
         package = _insert_draft_package(connection, prepared, tables)
-        if isinstance(package, PublishResult):
-            return _completed_package(
-                connection,
-                prepared=prepared,
-                rate_package_id=package.rate_package_id,
-                was_existing=True,
-                deduplicated=package.deduplicated,
-            )
         _insert_rating_tables(connection, package, tables)
         model_run_id = _insert_lineage(connection, package, prepared)
         _verify_draft(connection, package, prepared.verification)
@@ -2594,7 +1631,6 @@ def publish_sqlserver(
 
 
 __all__ = [
-    "ModelRunIdentityError",
     "publish_sqlserver",
     "verify_package_sql_parity",
 ]

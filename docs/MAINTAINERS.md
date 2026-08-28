@@ -35,11 +35,43 @@ workspace scaffold -> scheduled execution
 |---|---|
 | source data -> verified frame and manifest | `data/`, `pricing_pipeline.notebook` |
 | manifest -> fitted candidate | `modeling/standard_superglm.py` |
-| candidate -> immutable published package | `publishing/`, `orchestration/pipeline.py` |
-| published package -> editor/manual child | `workbench/`, `publishing/editor_candidate.py`, `modeling/manual_adjustment.py` |
+| candidate -> immutable published package | `publishing/publish.py`, `publishing/sqlserver.py`, `publishing/sqlite.py` |
+| published package -> editor/manual child | `workbench/`, `publishing/editor.py`, `modeling/manual_adjustment.py` |
 | published package -> deployment | `publishing/deployment.py` |
 | deployment -> monitoring evidence | `modeling/monitoring.py` |
 | schema version -> migrated/seeded/reset database | `infra/`, packaged SQL resources |
+
+## Publication module map
+
+The supported boundary is `pricing_pipeline.notebook`; the nine publishing
+modules are internal owners with no compatibility facades:
+
+| Module | Purpose |
+|---|---|
+| `publish.py` | immutable request, common validation, backend dispatch, and publication result types |
+| `identity.py` | identifiers, equivalence fingerprints, conflict comparison, and equivalent-publication lookup |
+| `rating_tables.py` | workbook export/parsing, normalized rating frames, and canonical content hashes |
+| `metadata.py` | SuperGLM receipt models, canonical receipt bytes, and term metadata extraction |
+| `lineage.py` | durable model-run, dataset, split, metric, fold, and parent evidence |
+| `sqlserver.py` | SQL Server registration, version reservation, locking, package transaction, and persisted parity verification |
+| `sqlite.py` | local registration, version reservation, locking, package transaction, and local audit lineage |
+| `editor.py` | signed editor/manual loading, trusted replay, edited artifact export, and publication request construction |
+| `deployment.py` | explicit deployment transition and stale-champion protection |
+
+Every RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT publication follows one
+linear sequence:
+
+```text
+ApprovedModelBuild
+-> PublicationRequest
+-> validate immutable artifacts and identity
+-> prepare RatingTables and canonical digests once
+-> resolve exact retry or semantic equivalent
+-> run one concrete SQLite or SQL Server transaction
+-> write package and lineage
+-> verify persisted output
+-> return CompletedModelPublishResult
+```
 
 ## Test lanes
 

@@ -5,10 +5,10 @@ import pytest
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.publishing.deployment import (
     DeploymentError,
+    DeploymentResult,
     StaleChampionError,
     deploy_rate_package,
 )
-from pricing_pipeline.publishing.lifecycle import DeploymentResult
 
 
 class FakeMappingsResult:

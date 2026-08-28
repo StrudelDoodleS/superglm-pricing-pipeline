@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
 
 from pricing_pipeline.models.config import ModelBuildConfig
-from pricing_pipeline.publishing.lifecycle import DeploymentResult
+
+
+@dataclass(frozen=True)
+class DeploymentResult:
+    model_id: int
+    deployment_slot: str
+    previous_rate_package_id: int | None
+    rate_package_id: int
+    package_version: int
+    deployed_by: str
+    deployment_reason: str
 
 
 _DEPLOYMENT_LOCK_TIMEOUT_MS = 10_000

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,8 +19,8 @@ from pricing_pipeline.models.spec import (
 from pricing_pipeline.orchestration.publish_completed_build import (
     publish_completed_model_build,
 )
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
-from pricing_pipeline.publishing.sqlite_notebook import _publish_sqlite_candidate_locked
+from pricing_pipeline.publishing.publish import CompletedModelPublishResult
+from pricing_pipeline.publishing.sqlite import _publish_sqlite_candidate_locked
 
 
 class _Engine:
@@ -123,7 +123,7 @@ def test_approved_build_requires_all_audit_artifacts(tmp_path: Path, field_name:
     ("raw_value", "expected"),
     [
         (date(2026, 6, 3), "2026-06-03"),
-        (datetime(2026, 6, 3, 14, 30), "2026-06-03"),
+        (datetime(2026, 6, 3, 14, 30, tzinfo=UTC), "2026-06-03"),
         ("2026-06-03T14:30:00", "2026-06-03"),
     ],
 )

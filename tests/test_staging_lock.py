@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pricing_pipeline.publishing.staging_lock import acquire_staging_export_lock
+from pricing_pipeline.publishing.sqlserver import _lock_export
 
 
 class _ScalarResult:
@@ -30,7 +30,7 @@ class _Connection:
 def test_staging_export_lock_is_transaction_owned_and_export_scoped():
     connection = _Connection()
 
-    acquire_staging_export_lock(connection, "export-1")
+    _lock_export(connection, "export-1")
 
     sql, params = connection.calls[0]
     assert "sys.sp_getapplock" in sql
@@ -44,13 +44,13 @@ def test_staging_export_lock_is_transaction_owned_and_export_scoped():
 
 def test_staging_export_lock_rejects_sql_server_lock_failure():
     with pytest.raises(RuntimeError, match="export-1"):
-        acquire_staging_export_lock(_Connection(result=-1), "export-1")
+        _lock_export(_Connection(result=-1), "export-1")
 
 
 def test_staging_export_lock_is_noop_for_non_sql_server_connections():
     connection = _Connection()
     connection.dialect = SimpleNamespace(name="sqlite")
 
-    acquire_staging_export_lock(connection, "export-1")
+    _lock_export(connection, "export-1")
 
     assert connection.calls == []

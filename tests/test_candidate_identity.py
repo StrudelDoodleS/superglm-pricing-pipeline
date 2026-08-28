@@ -18,7 +18,7 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     CandidateSQLLineage,
     _verify_candidate_artifact,
 )
-from pricing_pipeline.publishing.sqlite_notebook import _publish_sqlite_candidate_locked
+from pricing_pipeline.publishing.sqlite import _publish_sqlite_candidate_locked
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
 
@@ -178,7 +178,7 @@ def test_local_publication_rejects_model_frame_digest_mismatch_before_staging(
         }
     )
     monkeypatch.setattr(
-        "pricing_pipeline.publishing.sqlite_notebook.load_candidate_sql_lineage",
+        "pricing_pipeline.publishing.sqlite.load_candidate_sql_lineage",
         lambda *args, **kwargs: CandidateSQLLineage(
             manifest_id=bundle.manifest_id,
             row_count=1,

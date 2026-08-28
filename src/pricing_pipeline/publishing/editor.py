@@ -31,7 +31,7 @@ from pricing_pipeline.modeling.manual_adjustment import (
 )
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
+from pricing_pipeline.publishing.identity import canonical_json
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
     SuperGLMPublicationReceipt,
@@ -40,6 +40,7 @@ from pricing_pipeline.publishing.metadata import (
     write_publication_receipt,
 )
 from pricing_pipeline.publishing.publish import (
+    CompletedModelPublishResult,
     DraftVerification,
     PublicationRequest,
     publish_candidate,
@@ -518,7 +519,7 @@ def _manual_policy_provenance_identity(value: object) -> str | None:
         return None
     try:
         manual_adjustment_policy_from_metadata(value)
-        return _canonical_json(dict(value))
+        return canonical_json(dict(value))
     except (TypeError, ValueError):  # fmt: skip
         return None
 
@@ -656,10 +657,10 @@ def _require_existing_submission_revision(
         requested_edit_identity = (
             None
             if requested_edit_metadata is None
-            else _canonical_json(dict(requested_edit_metadata))
+            else canonical_json(dict(requested_edit_metadata))
         )
         stored_edit_identity = (
-            None if stored_edit_metadata is None else _canonical_json(dict(stored_edit_metadata))
+            None if stored_edit_metadata is None else canonical_json(dict(stored_edit_metadata))
         )
     except (TypeError, ValueError):  # fmt: skip
         requested_edit_identity = None
@@ -1038,6 +1039,14 @@ def _load_champion_bundle(
     allowed_root: Path,
     parent_bundle: CandidateBundle,
 ) -> ChampionSnapshot:
+    def unavailable(rate_package_id: int | None, reason: str) -> ChampionSnapshot:
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason=reason,
+        )
+
     schemas = schema_names_from_connectable(engine)
     query = text(
         f"""
@@ -1068,12 +1077,7 @@ def _load_champion_bundle(
             .all()
         )
     if not rows:
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=None,
-            bundle=None,
-            unavailable_reason=f"no champion is deployed in {deployment_slot}",
-        )
+        return unavailable(None, f"no champion is deployed in {deployment_slot}")
     if len(rows) != 1:
         raise EditorSubmissionError(
             f"{len(rows)} current champion runs resolved in {deployment_slot}; "
@@ -1082,12 +1086,7 @@ def _load_champion_bundle(
     row = dict(rows[0])
     rate_package_id = int(row["rate_package_id"])
     if str(row.get("run_status") or "").upper() != "SUCCESS":
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason="the deployed champion has no successful candidate run",
-        )
+        return unavailable(rate_package_id, "the deployed champion has no successful candidate run")
     required = (
         "candidate_artifact_path",
         "candidate_artifact_sha256",
@@ -1097,12 +1096,7 @@ def _load_champion_bundle(
         "candidate_superglm_version",
     )
     if any(row.get(name) is None for name in required):
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason="the deployed champion has no candidate artifact",
-        )
+        return unavailable(rate_package_id, "the deployed champion has no candidate artifact")
     try:
         champion = load_candidate_bundle(
             row["candidate_artifact_path"],
@@ -1114,35 +1108,23 @@ def _load_champion_bundle(
             allowed_root=allowed_root,
         )
     except CandidateArtifactError as exc:
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason=f"the deployed champion artifact could not be verified: {exc}",
+        return unavailable(
+            rate_package_id,
+            f"the deployed champion artifact could not be verified: {exc}",
         )
     if list(champion.X.columns) != list(parent_bundle.X.columns):
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason="the deployed champion uses a different prepared feature frame",
+        return unavailable(
+            rate_package_id,
+            "the deployed champion uses a different prepared feature frame",
         )
     try:
         champion_contract = OffsetExportContract.model_validate(champion.offset_contract)
         parent_contract = OffsetExportContract.model_validate(parent_bundle.offset_contract)
     except ValueError:
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason="the deployed champion has an invalid offset contract",
-        )
+        return unavailable(rate_package_id, "the deployed champion has an invalid offset contract")
     if champion_contract != parent_contract:
-        return ChampionSnapshot(
-            deployment_slot=deployment_slot,
-            rate_package_id=rate_package_id,
-            bundle=None,
-            unavailable_reason="the deployed champion uses a different offset contract",
+        return unavailable(
+            rate_package_id, "the deployed champion uses a different offset contract"
         )
     return ChampionSnapshot(
         deployment_slot=deployment_slot,
@@ -1419,16 +1401,6 @@ def parent_cv_metrics(
             raise EditorSubmissionError("parent CV OOF coverage is not finite")
         metrics["cv_oof_coverage"] = coverage
     return metrics
-
-
-def _canonical_json(payload: dict[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
 
 
 def export_edited_model(

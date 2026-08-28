@@ -27,7 +27,7 @@ from pricing_pipeline.publishing.metadata import (
     build_superglm_publication_receipt,
     write_publication_receipt,
 )
-from pricing_pipeline.publishing.rating_export import export_rating_tables
+from pricing_pipeline.publishing.rating_tables import export_rating_tables
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
 

@@ -1,3 +1,5 @@
+import importlib.util
+
 import pytest
 
 from pricing_pipeline.models.config import ModelBuildConfig
@@ -35,3 +37,21 @@ def test_publication_request_carries_every_supported_model_kind(model_kind):
     assert prepared.build.model_kind == model_kind
     assert prepared.build.export_id == build.export_id
     assert prepared.build.effective_from == build.effective_from
+
+
+def test_supported_publication_surface_has_no_obsolete_internal_modules():
+    import pricing_pipeline.notebook as notebook  # noqa: PLR0402
+
+    assert callable(notebook.publish_candidate)
+    assert callable(notebook.publish_edits)
+    assert callable(notebook.publish_manual_adjustment)
+    assert callable(notebook.deploy_package)
+    for module in (
+        "package_writer",
+        "sqlite_notebook",
+        "editor_candidate",
+        "staging_lock",
+        "superglm_metadata",
+        "superglm_publication_receipt",
+    ):
+        assert importlib.util.find_spec(f"pricing_pipeline.publishing.{module}") is None

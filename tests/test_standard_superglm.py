@@ -15,7 +15,7 @@ from superglm import Categorical, SuperGLM
 from pricing_pipeline.data.manifest import ModelFrameManifestSpec
 from pricing_pipeline.models.config import ModelBuildConfig, ValidationSplitConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.superglm_publication_receipt import OffsetExportContract
+from pricing_pipeline.publishing.metadata import OffsetExportContract
 
 
 class _FakeModel:

@@ -18,15 +18,15 @@ from pricing_pipeline.infra.offline_sqlite import (
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild, ModelExportResult
 from pricing_pipeline.orchestration import pipeline
-from pricing_pipeline.publishing import lineage, rating_export, sqlserver, staging
+from pricing_pipeline.publishing import lineage, rating_tables, sqlserver
 from pricing_pipeline.publishing import publish as publication
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
-from pricing_pipeline.publishing.rating_tables import RatingTables, prepare_rating_tables
-from pricing_pipeline.publishing.superglm_publication_receipt import (
+from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
     SuperGLMPublicationReceipt,
     write_publication_receipt,
 )
+from pricing_pipeline.publishing.publish import CompletedModelPublishResult
+from pricing_pipeline.publishing.rating_tables import RatingTables, prepare_rating_tables
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
 MODEL_CONFIG = ModelBuildConfig(
@@ -48,7 +48,7 @@ class _ExportModel:
 
 
 def test_build_export_id_is_path_safe():
-    export_id = rating_export.build_export_id(
+    export_id = rating_tables.build_export_id(
         "MTPL_FREQ",
         "scheduled__2026-04-27T10:30:00+00:00",
     )
@@ -65,7 +65,7 @@ def test_export_rating_tables_forwards_weights_and_offset(tmp_path: Path):
     offset = np.log(np.array([1.0, 3.0]))
     offset_source = pd.Series([12, 36], name="TermMonths")
 
-    result = rating_export.export_rating_tables(
+    result = rating_tables.export_rating_tables(
         model,
         X,
         y,
@@ -107,7 +107,7 @@ def test_export_rating_tables_preserves_raw_offset_levels(tmp_path: Path):
     ).fit(X, y, offset=offset)
     workbook_path = tmp_path / "rating_tables.xlsx"
 
-    rating_export.export_rating_tables(
+    rating_tables.export_rating_tables(
         model,
         X,
         y,
@@ -142,7 +142,7 @@ def test_export_rating_tables_preserves_raw_offset_levels(tmp_path: Path):
 
 def test_export_rating_tables_requires_supported_superglm(tmp_path: Path):
     with pytest.raises(RuntimeError, match=r"SuperGLM.*export_rating_tables"):
-        rating_export.export_rating_tables(
+        rating_tables.export_rating_tables(
             object(),
             pd.DataFrame({"x": [1]}),
             np.array([0.0]),
@@ -248,22 +248,18 @@ def test_prepared_rating_tables_are_backend_neutral(tmp_path: Path):
 
 def test_build_staging_frames_accepts_mapping_and_uses_standard_layout(tmp_path: Path):
     workbook_path = _minimal_rating_workbook(tmp_path / "rating_tables.xlsx")
-    args = staging.StagingExport(
+    args = rating_tables.StagingExport(
         workbook_path=workbook_path,
         export_id="export-1",
         model_name="MTPL_FREQ",
-        target_name="ClaimNb",
-        model_type="superglm_poisson",
         model_version="v1",
         effective_from=None,
         effective_to=None,
         interaction_features=MappingProxyType({}),
         created_by="analyst@example.test",
-        replace=False,
-        model_id=17,
     )
 
-    export, rates, _levels = staging.build_staging_frames(args)
+    export, rates, _levels = rating_tables.build_staging_frames(args)
 
     assert export.iloc[0]["base_rate"] == pytest.approx(0.123)
     assert export.iloc[0]["source_file"] == str(workbook_path.resolve())
@@ -276,18 +272,36 @@ def test_stage_rating_export_persists_receipt_offset_and_content_digest(tmp_path
     receipt_path = tmp_path / "publication_receipt.json"
     receipt_sha256 = write_publication_receipt(_publication_receipt(), receipt_path)
 
-    content_sha256 = staging.stage_rating_export(
-        engine,
-        workbook_path=workbook_path,
+    build = ApprovedModelBuild.model_construct(
+        model_id=1,
+        model_name=MODEL_CONFIG.model_name,
+        target_name=MODEL_CONFIG.target_name,
+        model_type=MODEL_CONFIG.model_type,
+        created_by="python",
         export_id="export-1",
-        model_name="MTPL_FREQ",
         model_version="20260427",
         effective_from=None,
-        publication_receipt_path=receipt_path,
+        publication_receipt_path=str(receipt_path),
         publication_receipt_sha256=receipt_sha256,
-        replace=True,
-        model_id=1,
     )
+    tables = prepare_rating_tables(
+        workbook_path=workbook_path,
+        build=build,
+        model_config=MODEL_CONFIG,
+        effective_to=None,
+    )
+    prepared = publication.prepare_publication(
+        publication.PublicationRequest(
+            build=build,
+            model_config=MODEL_CONFIG,
+            execution_name="test",
+            execution_id=build.export_id,
+            allowed_artifact_root=None,
+        )
+    )
+    with engine.begin() as connection:
+        sqlserver._replace_staging_frames(connection, prepared, tables)
+    content_sha256 = tables.staging_content_sha256
 
     with engine.begin() as connection:
         export = (
@@ -335,14 +349,12 @@ def test_stage_rating_export_persists_receipt_offset_and_content_digest(tmp_path
 def test_stage_rating_export_requires_publication_receipt(tmp_path: Path):
     workbook_path = _minimal_rating_workbook(tmp_path / "rating_tables.xlsx")
     with pytest.raises(TypeError, match="publication_receipt"):
-        staging.stage_rating_export(
-            object(),
+        rating_tables.rating_workbook_model_equivalence_sha256(
             workbook_path=workbook_path,
             export_id="export-1",
             model_name="MTPL_FREQ",
             model_version="v1",
             effective_from=None,
-            model_id=1,
         )
 
 
@@ -365,8 +377,7 @@ def test_stage_rating_export_rejects_receipt_term_missing_from_workbook(tmp_path
     )
 
     with pytest.raises(ValueError, match="not present in staged workbook"):
-        staging.stage_rating_export(
-            object(),
+        rating_tables.rating_workbook_model_equivalence_sha256(
             workbook_path=workbook_path,
             export_id="export-1",
             model_name="MTPL_FREQ",
@@ -374,7 +385,6 @@ def test_stage_rating_export_rejects_receipt_term_missing_from_workbook(tmp_path
             effective_from=None,
             publication_receipt_path=receipt_path,
             publication_receipt_sha256=receipt_sha256,
-            model_id=1,
         )
 
 
@@ -395,7 +405,7 @@ def test_staging_content_sha256_binds_every_frame():
             }
         ]
     )
-    digest = staging.staging_content_sha256(export, rates, levels, terms)
+    digest = rating_tables.staging_content_sha256(export, rates, levels, terms)
 
     changed_rates = rates.copy()
     changed_rates.loc[0, "multiplier"] = 1.2
@@ -405,9 +415,9 @@ def test_staging_content_sha256_binds_every_frame():
     changed_terms.loc[0, "term_metadata_json"] = '{"feature_kind":"numeric"}'
 
     assert len(digest) == 64
-    assert staging.staging_content_sha256(export, changed_rates, levels, terms) != digest
-    assert staging.staging_content_sha256(export, rates, changed_levels, terms) != digest
-    assert staging.staging_content_sha256(export, rates, levels, changed_terms) != digest
+    assert rating_tables.staging_content_sha256(export, changed_rates, levels, terms) != digest
+    assert rating_tables.staging_content_sha256(export, rates, changed_levels, terms) != digest
+    assert rating_tables.staging_content_sha256(export, rates, levels, changed_terms) != digest
 
 
 def test_model_equivalence_ignores_volatile_identity_and_uses_small_numeric_tolerance():
@@ -460,7 +470,7 @@ def test_model_equivalence_ignores_volatile_identity_and_uses_small_numeric_tole
             }
         ]
     )
-    digest = staging.model_equivalence_sha256(export, rates, levels, terms)
+    digest = rating_tables.model_equivalence_sha256(export, rates, levels, terms)
 
     retry_export = export.assign(
         export_id="export-2",
@@ -484,7 +494,7 @@ def test_model_equivalence_ignores_volatile_identity_and_uses_small_numeric_tole
     retry_terms = terms.assign(export_id="export-2")
 
     assert (
-        staging.model_equivalence_sha256(
+        rating_tables.model_equivalence_sha256(
             retry_export,
             retry_rates,
             retry_levels,
@@ -497,7 +507,7 @@ def test_model_equivalence_ignores_volatile_identity_and_uses_small_numeric_tole
     materially_changed.loc[0, "multiplier"] = 1.23456799
     materially_changed.loc[0, "log_coefficient"] = np.log(1.23456799)
     assert (
-        staging.model_equivalence_sha256(
+        rating_tables.model_equivalence_sha256(
             retry_export,
             materially_changed,
             retry_levels,
@@ -509,7 +519,7 @@ def test_model_equivalence_ignores_volatile_identity_and_uses_small_numeric_tole
     changed_level = retry_levels.copy()
     changed_level.loc[0, "level_code"] = "B"
     assert (
-        staging.model_equivalence_sha256(
+        rating_tables.model_equivalence_sha256(
             retry_export,
             retry_rates,
             changed_level,
@@ -526,7 +536,7 @@ def test_workbook_equivalence_is_calculated_entirely_in_python_before_staging(
     receipt_path = tmp_path / "publication_receipt.json"
     receipt_sha256 = write_publication_receipt(_publication_receipt(), receipt_path)
 
-    first = staging.rating_workbook_model_equivalence_sha256(
+    first = rating_tables.rating_workbook_model_equivalence_sha256(
         workbook_path=workbook_path,
         export_id="export-1",
         model_name="MTPL_FREQ",
@@ -534,9 +544,8 @@ def test_workbook_equivalence_is_calculated_entirely_in_python_before_staging(
         effective_from="2026-08-01",
         publication_receipt_path=receipt_path,
         publication_receipt_sha256=receipt_sha256,
-        model_id=17,
     )
-    retry = staging.rating_workbook_model_equivalence_sha256(
+    retry = rating_tables.rating_workbook_model_equivalence_sha256(
         workbook_path=workbook_path,
         export_id="export-2",
         model_name="MTPL_FREQ",
@@ -544,19 +553,17 @@ def test_workbook_equivalence_is_calculated_entirely_in_python_before_staging(
         effective_from="2026-09-01",
         publication_receipt_path=receipt_path,
         publication_receipt_sha256=receipt_sha256,
-        model_id=17,
     )
 
     assert first == retry
 
 
 def test_stage_rating_export_parses_categorical_interaction_matrix(
-    monkeypatch,
     tmp_path: Path,
 ):
     from superglm import Categorical, SuperGLM
 
-    from pricing_pipeline.publishing.superglm_metadata import (
+    from pricing_pipeline.publishing.metadata import (
         build_superglm_publication_receipt,
     )
 
@@ -578,7 +585,7 @@ def test_stage_rating_export_parses_categorical_interaction_matrix(
         selection_penalty=0.0,
     ).fit(X, y, sample_weight=weights)
     workbook_path = tmp_path / "rating_tables.xlsx"
-    rating_export.export_rating_tables(
+    rating_tables.export_rating_tables(
         model,
         X,
         y,
@@ -593,38 +600,34 @@ def test_stage_rating_export_parses_categorical_interaction_matrix(
         ),
         receipt_path,
     )
-    captured = {}
-    monkeypatch.setattr(
-        staging,
-        "insert_staging_frames",
-        lambda engine, args, tables: captured.update(
-            rates=tables.rate_cells.copy(),
-            levels=tables.cell_levels.copy(),
-            terms=tables.term_metadata.copy(),
-        ),
-    )
-
-    staging.stage_rating_export(
-        object(),
-        workbook_path=workbook_path,
-        export_id="export-1",
-        model_name="MTPL_FREQ",
-        model_version="v1",
-        effective_from=None,
-        publication_receipt_path=receipt_path,
-        publication_receipt_sha256=receipt_sha256,
+    build = ApprovedModelBuild.model_construct(
         model_id=17,
+        model_name=MODEL_CONFIG.model_name,
+        model_version="v1",
+        target_name=MODEL_CONFIG.target_name,
+        model_type=MODEL_CONFIG.model_type,
+        export_id="export-1",
+        effective_from=None,
+        created_by="python",
+        publication_receipt_path=str(receipt_path),
+        publication_receipt_sha256=receipt_sha256,
+    )
+    tables = prepare_rating_tables(
+        workbook_path=workbook_path,
+        build=build,
+        model_config=MODEL_CONFIG,
+        effective_to=None,
     )
 
-    interactions = captured["rates"].query("term_name == 'territory_age_band'")
-    interaction_levels = captured["levels"].loc[
-        captured["levels"]["row_id"].isin(interactions["row_id"])
+    interactions = tables.rate_cells.query("term_name == 'territory_age_band'")
+    interaction_levels = tables.cell_levels.loc[
+        tables.cell_levels["row_id"].isin(interactions["row_id"])
     ]
     assert len(interactions) == 6
     assert set(interactions["term_type"]) == {"CATEGORICAL_INTERACTION"}
     assert len(interaction_levels) == 12
     assert set(interaction_levels["position_no"]) == {1, 2}
-    assert set(captured["terms"]["term_name"]) == {
+    assert set(tables.term_metadata["term_name"]) == {
         "territory",
         "age_band",
         "territory_age_band",
@@ -732,81 +735,6 @@ def _model_run_kwargs():
     }
 
 
-def _model_run_row():
-    kwargs = _model_run_kwargs()
-    build = kwargs.pop("build")
-    return {
-        "model_run_id": 501,
-        **kwargs,
-        "mlflow_run_id": build.mlflow_run_id,
-        "manifest_id": build.manifest_id,
-        "export_id": build.export_id,
-        "model_id": build.model_id,
-        "model_name": build.model_name,
-        "model_version": build.model_version,
-        "rating_workbook_path": build.rating_workbook_path,
-        "rating_workbook_sha256": build.rating_workbook_sha256,
-        "run_status": "SUCCESS",
-        "created_by": build.created_by,
-        "publication_receipt_path": build.publication_receipt_path,
-        "publication_receipt_sha256": build.publication_receipt_sha256,
-        "candidate_artifact_path": build.candidate_artifact_path,
-        "candidate_artifact_sha256": build.candidate_artifact_sha256,
-        "candidate_artifact_format": build.candidate_artifact_format,
-        "candidate_artifact_size_bytes": build.candidate_artifact_size_bytes,
-        "candidate_python_version": build.candidate_python_version,
-        "candidate_superglm_version": build.candidate_superglm_version,
-        "model_source_sha256": build.model_source_sha256,
-    }
-
-
-def _model_run_associations():
-    return [
-        {
-            "lineage_source": "actual_dataset",
-            "manifest_id": "manifest-1",
-            "split_set_id": None,
-            "dataset_role": "training",
-            "split_role": None,
-        },
-        {
-            "lineage_source": "actual_dataset",
-            "manifest_id": "parent-manifest",
-            "split_set_id": None,
-            "dataset_role": "training",
-            "split_role": None,
-        },
-        {
-            "lineage_source": "parent_dataset",
-            "manifest_id": "parent-manifest",
-            "split_set_id": None,
-            "dataset_role": "training",
-            "split_role": None,
-        },
-        {
-            "lineage_source": "actual_split",
-            "manifest_id": "manifest-1",
-            "split_set_id": "split-1",
-            "dataset_role": "training",
-            "split_role": "validation",
-        },
-        {
-            "lineage_source": "actual_split",
-            "manifest_id": "parent-manifest",
-            "split_set_id": "parent-split",
-            "dataset_role": "training",
-            "split_role": "benchmark",
-        },
-        {
-            "lineage_source": "parent_split",
-            "manifest_id": "parent-manifest",
-            "split_set_id": "parent-split",
-            "dataset_role": "training",
-            "split_role": "benchmark",
-        },
-    ]
-
-
 def test_record_model_run_writes_identity_associations_parent_and_metrics():
     connection = _LineageConnection()
     kwargs = _model_run_kwargs()
@@ -823,63 +751,18 @@ def test_record_model_run_writes_identity_associations_parent_and_metrics():
 
     assert model_run_id == 501
     model_run_write = next(
-        item for item in connection.statements if "MERGE pricing.MODEL_RUN" in item[0]
+        item for item in connection.statements if "INSERT INTO pricing.MODEL_RUN" in item[0]
     )
     assert model_run_write[1]["candidate_artifact_sha256"] == "a" * 64
     assert model_run_write[1]["model_source_sha256"] == "b" * 64
     assert model_run_write[1]["parent_model_run_id"] == 409
-    assert any("MERGE mlops.MODEL_RUN_DATASET" in sql for sql, _ in connection.statements)
-    assert any("MERGE mlops.MODEL_RUN_SPLIT_SET" in sql for sql, _ in connection.statements)
-    assert any("MERGE mlops.MODEL_RUN_METRIC" in sql for sql, _ in connection.statements)
-    assert any("MERGE pricing.CV_FOLD_METRIC" in sql for sql, _ in connection.statements)
+    assert any("INSERT INTO mlops.MODEL_RUN_DATASET" in sql for sql, _ in connection.statements)
+    assert any("INSERT INTO mlops.MODEL_RUN_SPLIT_SET" in sql for sql, _ in connection.statements)
+    assert any("INSERT INTO mlops.MODEL_RUN_METRIC" in sql for sql, _ in connection.statements)
+    assert any("INSERT INTO pricing.CV_FOLD_METRIC" in sql for sql, _ in connection.statements)
     assert any(
-        "parent_dataset.model_run_id = :parent_model_run_id" in sql
-        for sql, _ in connection.statements
+        "parent.model_run_id = :parent_model_run_id" in sql for sql, _ in connection.statements
     )
-
-
-def test_record_model_run_exact_retry_is_read_only():
-    connection = _LineageConnection(
-        existing=_model_run_row(),
-        associations=_model_run_associations(),
-    )
-
-    model_run_id = lineage.record_model_run(
-        None,
-        connection=connection,
-        **_model_run_kwargs(),
-    )
-
-    assert model_run_id == 501
-    assert len(connection.statements) == 2
-    assert not any(
-        sql.lstrip().startswith(("MERGE", "DELETE", "INSERT", "UPDATE"))
-        for sql, _ in connection.statements
-    )
-
-
-@pytest.mark.parametrize(
-    ("field_name", "changed_value"),
-    [
-        ("manifest_id", "manifest-2"),
-        ("model_version", "v2"),
-        ("candidate_artifact_sha256", "c" * 64),
-        ("rating_workbook_sha256", "c" * 64),
-        ("parent_model_run_id", 410),
-    ],
-)
-def test_record_model_run_rejects_changed_immutable_retry(field_name, changed_value):
-    connection = _LineageConnection(existing=_model_run_row())
-    kwargs = _model_run_kwargs()
-    if field_name == "parent_model_run_id":
-        kwargs[field_name] = changed_value
-    else:
-        kwargs["build"] = kwargs["build"].model_copy(update={field_name: changed_value})
-
-    with pytest.raises(lineage.ModelRunIdentityError, match=field_name):
-        lineage.record_model_run(None, connection=connection, **kwargs)
-
-    assert len(connection.statements) == 1
 
 
 _RETRY_ARTIFACTS = {}

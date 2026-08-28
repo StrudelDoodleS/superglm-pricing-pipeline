@@ -43,9 +43,9 @@ from pricing_pipeline.modeling.monitoring import (
     persist_monitoring_fit,
     run_monitoring_fit,
 )
-from pricing_pipeline.publishing.superglm_metadata import build_superglm_publication_receipt
-from pricing_pipeline.publishing.superglm_publication_receipt import (
+from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
+    build_superglm_publication_receipt,
     canonical_receipt_bytes,
 )
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle

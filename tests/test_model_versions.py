@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pricing_pipeline.publishing.model_versions import resolve_model_version_for_export
+from pricing_pipeline.publishing.sqlserver import resolve_model_version_for_export
 
 
 class FakeScalarResult:

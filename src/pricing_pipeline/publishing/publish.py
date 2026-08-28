@@ -8,11 +8,61 @@ from typing import Any
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.publishing.identity import bind_model_equivalence
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
 from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
 from pricing_pipeline.publishing.rating_tables import prepare_rating_tables
 from pricing_pipeline.workbench.artifacts import CandidateBundle
 from pricing_pipeline.workbench.submission import sha256_file
+
+
+class ModelRegistryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class PricingModelRecord:
+    model_id: int
+    model_name: str
+    model_label: str | None
+    target_name: str
+    model_type: str
+    model_status: str
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    mlflow_run_id: str
+    export_id: str
+    rate_package_id: int
+    package_version: int
+    rating_workbook_path: str
+    package_status: str = "PUBLISHED"
+    was_existing: bool = False
+    model_run_id: int | None = None
+    deduplicated: bool = False
+
+
+@dataclass(frozen=True)
+class CompletedModelPublishResult:
+    """Durable package and model-run identity returned to notebook callers."""
+
+    model_id: int
+    model_name: str
+    model_version: str
+    manifest_id: str
+    split_set_id: str | None
+    export_id: str
+    rate_package_id: int
+    package_version: int
+    package_status: str
+    rating_workbook_path: str
+    model_run_id: int | None = None
+    mlflow_run_id: str | None = None
+    publication_receipt_path: str | None = None
+    publication_receipt_sha256: str | None = None
+    was_existing: bool = False
+    deduplicated: bool = False
+    model_kind: str = "RAW"
+    model_equivalence_sha256: str | None = None
 
 
 @dataclass(frozen=True)

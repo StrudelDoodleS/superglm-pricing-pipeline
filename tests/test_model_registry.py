@@ -1,9 +1,8 @@
 import pytest
 
 from pricing_pipeline.models.config import ModelBuildConfig
-from pricing_pipeline.publishing.model_registry import (
-    ModelRegistryError,
-    PricingModelRecord,
+from pricing_pipeline.publishing.publish import ModelRegistryError, PricingModelRecord
+from pricing_pipeline.publishing.sqlserver import (
     get_pricing_model,
     register_pricing_model,
     validate_registered_model,

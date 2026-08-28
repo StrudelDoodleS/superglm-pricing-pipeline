@@ -14,8 +14,8 @@ import pandas as pd
 
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.naming import clean_identifier
-from pricing_pipeline.publishing.superglm_publication_receipt import (
+from pricing_pipeline.publishing.identity import clean_identifier
+from pricing_pipeline.publishing.metadata import (
     SuperGLMPublicationReceipt,
     canonical_receipt_bytes,
     load_publication_receipt,
@@ -60,15 +60,11 @@ class StagingExport:
     workbook_path: Path
     export_id: str
     model_name: str
-    target_name: str
-    model_type: str
     model_version: str | None
     effective_from: str | None
     effective_to: str | None
     interaction_features: Mapping[str, Any]
     created_by: str
-    replace: bool
-    model_id: int | None
 
 
 @dataclass(frozen=True)
@@ -796,7 +792,7 @@ def _validate_numeric_main_staging(
 
 def _apply_publication_receipt_metadata(
     *,
-    args: StagingExport,
+    export_id: str,
     export_df: pd.DataFrame,
     rate_df: pd.DataFrame,
     level_df: pd.DataFrame,
@@ -863,7 +859,7 @@ def _apply_publication_receipt_metadata(
     export_df["offset_label"] = offset_contract.label
     export_df["metadata_origin"] = receipt.metadata_origin
 
-    return _term_metadata_frame(args.export_id, receipt, staged_terms=staged_terms)
+    return _term_metadata_frame(export_id, receipt, staged_terms=staged_terms)
 
 
 def _verified_rating_frames(
@@ -873,21 +869,11 @@ def _verified_rating_frames(
     model_name: str,
     model_version: str | None,
     effective_from: str | None,
-    target_name: str = "ClaimNb",
-    model_type: str = "superglm_poisson",
     effective_to: str | None = None,
     created_by: str = "python",
-    replace: bool = False,
-    model_id: int | None = None,
     publication_receipt_path: str | Path,
     publication_receipt_sha256: str,
-) -> tuple[
-    StagingExport,
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     receipt = load_publication_receipt(
         publication_receipt_path,
         expected_sha256=publication_receipt_sha256,
@@ -897,26 +883,22 @@ def _verified_rating_frames(
         workbook_path=workbook_path,
         export_id=export_id,
         model_name=model_name,
-        target_name=target_name,
-        model_type=model_type,
         model_version=model_version,
         effective_from=effective_from,
         effective_to=effective_to,
         interaction_features=_receipt_interaction_features(receipt),
         created_by=created_by,
-        replace=replace,
-        model_id=model_id,
     )
     export_df, rate_df, level_df = build_staging_frames(args)
     term_metadata_df = _apply_publication_receipt_metadata(
-        args=args,
+        export_id=export_id,
         export_df=export_df,
         rate_df=rate_df,
         level_df=level_df,
         receipt=receipt,
         receipt_sha256=publication_receipt_sha256,
     )
-    return args, export_df, rate_df, level_df, term_metadata_df
+    return export_df, rate_df, level_df, term_metadata_df
 
 
 def rating_workbook_model_equivalence_sha256(
@@ -926,27 +908,20 @@ def rating_workbook_model_equivalence_sha256(
     model_name: str,
     model_version: str | None,
     effective_from: str | None,
-    target_name: str = "ClaimNb",
-    model_type: str = "superglm_poisson",
     effective_to: str | None = None,
     created_by: str = "python",
-    model_id: int | None = None,
     publication_receipt_path: str | Path,
     publication_receipt_sha256: str,
 ) -> str:
     """Fingerprint a workbook locally before any staging-table write."""
-    _, export_df, rate_df, level_df, term_metadata_df = _verified_rating_frames(
+    export_df, rate_df, level_df, term_metadata_df = _verified_rating_frames(
         workbook_path=workbook_path,
         export_id=export_id,
         model_name=model_name,
         model_version=model_version,
         effective_from=effective_from,
-        target_name=target_name,
-        model_type=model_type,
         effective_to=effective_to,
         created_by=created_by,
-        replace=False,
-        model_id=model_id,
         publication_receipt_path=publication_receipt_path,
         publication_receipt_sha256=publication_receipt_sha256,
     )
@@ -965,17 +940,14 @@ def prepare_rating_tables(
     model_config: ModelBuildConfig,
     effective_to: str | None,
 ) -> RatingTables:
-    _args, export_frame, rate_cells, cell_levels, term_metadata = _verified_rating_frames(
+    export_frame, rate_cells, cell_levels, term_metadata = _verified_rating_frames(
         workbook_path=workbook_path,
         export_id=build.export_id,
         model_name=model_config.model_name,
         model_version=build.model_version,
         effective_from=build.effective_from,
-        target_name=model_config.target_name,
-        model_type=model_config.model_type,
         effective_to=effective_to,
         created_by=build.created_by,
-        model_id=build.model_id,
         publication_receipt_path=build.publication_receipt_path,
         publication_receipt_sha256=build.publication_receipt_sha256,
     )

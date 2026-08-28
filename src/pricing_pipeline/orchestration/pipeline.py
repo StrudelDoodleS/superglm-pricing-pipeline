@@ -7,12 +7,13 @@ from sqlalchemy import text
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
-from pricing_pipeline.publishing.model_registry import (
+from pricing_pipeline.publishing.publish import (
+    CompletedModelPublishResult,
     ModelRegistryError,
-    validate_registered_model,
+    PublicationRequest,
+    publish_candidate,
 )
-from pricing_pipeline.publishing.publish import PublicationRequest, publish_candidate
+from pricing_pipeline.publishing.sqlserver import validate_registered_model
 from pricing_pipeline.workbench.submission import sha256_file
 
 

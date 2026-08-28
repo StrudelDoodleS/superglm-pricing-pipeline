@@ -350,7 +350,7 @@ def test_local_register_model_is_idempotent(tmp_path):
 
 def test_local_model_version_reuses_export_and_advances_trained_versions(tmp_path):
     from pricing_pipeline import notebook as api
-    from pricing_pipeline.publishing.sqlite_notebook import (
+    from pricing_pipeline.publishing.sqlite import (
         resolve_sqlite_model_version,
     )
 
@@ -421,7 +421,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
 ):
     from pricing_pipeline import notebook as api
     from pricing_pipeline.publishing import publish as publication
-    from pricing_pipeline.publishing import sqlite_notebook
+    from pricing_pipeline.publishing import sqlite
     from pricing_pipeline.publishing.rating_tables import RatingTables
 
     model_root = tmp_path / "pricing_models" / "claim_frequency"
@@ -512,7 +512,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
 
     monkeypatch.setattr(publication, "prepare_rating_tables", prepare_tables)
     monkeypatch.setattr(
-        sqlite_notebook,
+        sqlite,
         "_verify_candidate_artifact",
         lambda *args, **kwargs: None,
     )
@@ -520,7 +520,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         model_id=model.model_id,
         model_name=model.name,
         rating_workbook_path=str(workbook),
-        rating_workbook_sha256=sqlite_notebook.sha256_file(workbook),
+        rating_workbook_sha256=sqlite.sha256_file(workbook),
         model_version="v1",
         model_type=model.config.model_type,
         target_name=model.config.target_name,
@@ -552,7 +552,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         ),
     )
     assert (
-        sqlite_notebook.resolve_sqlite_model_version(
+        sqlite.resolve_sqlite_model_version(
             context.engine,
             model_name=model.name,
             export_id=completed_build.export_id,
@@ -682,7 +682,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
     assert stored_package_status == "LOCAL_AUDIT"
 
     mismatch_export_id = "claim-frequency__mismatch"
-    mismatch_version = sqlite_notebook.resolve_sqlite_model_version(
+    mismatch_version = sqlite.resolve_sqlite_model_version(
         context.engine,
         model_name=model.name,
         export_id=mismatch_export_id,
@@ -733,7 +733,7 @@ def test_local_publication_verifies_candidate_artifact_before_staging(
 ):
     from pricing_pipeline import notebook as api
     from pricing_pipeline.publishing import publish as publication
-    from pricing_pipeline.publishing import sqlite_notebook
+    from pricing_pipeline.publishing import sqlite
     from pricing_pipeline.workbench.artifacts import BUNDLE_FORMAT
 
     model_root = tmp_path / "pricing_models" / "claim_frequency"
@@ -775,7 +775,7 @@ def test_local_publication_verifies_candidate_artifact_before_staging(
         model_id=model.model_id,
         model_name=model.name,
         rating_workbook_path=str(workbook),
-        rating_workbook_sha256=sqlite_notebook.sha256_file(workbook),
+        rating_workbook_sha256=sqlite.sha256_file(workbook),
         model_version="v1",
         model_type=model.config.model_type,
         target_name=model.config.target_name,
