@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -15,20 +16,20 @@ from pricing_pipeline.infra.offline_sqlite import (
     sqlite_engine_with_offline_schemas,
 )
 from pricing_pipeline.models.config import ModelBuildConfig
-from pricing_pipeline.models.spec import ModelExportResult
+from pricing_pipeline.models.spec import ApprovedModelBuild, ModelExportResult
 from pricing_pipeline.orchestration import pipeline
 from pricing_pipeline.publishing import lineage, rating_export, staging
 from pricing_pipeline.publishing.lifecycle import (
     CompletedModelPublishResult,
     PublishResult,
 )
+from pricing_pipeline.publishing.rating_tables import RatingTables, prepare_rating_tables
 from pricing_pipeline.publishing.superglm_publication_receipt import (
     OffsetExportContract,
     SuperGLMPublicationReceipt,
     write_publication_receipt,
 )
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
-
 
 MODEL_CONFIG = ModelBuildConfig(
     model_name="MTPL_FREQ",
@@ -213,6 +214,38 @@ def _publication_receipt(
         term_metadata=term_metadata if term_metadata is not None else default_term_metadata,
         offset_contract=offset_contract,
     )
+
+
+def test_prepared_rating_tables_are_backend_neutral(tmp_path: Path):
+    workbook = _minimal_rating_workbook(tmp_path / "rating_tables.xlsx")
+    receipt_path = tmp_path / "publication_receipt.json"
+    receipt_sha256 = write_publication_receipt(_publication_receipt(), receipt_path)
+    build = ApprovedModelBuild.model_construct(
+        model_id=1,
+        model_name=MODEL_CONFIG.model_name,
+        model_version="v1",
+        target_name=MODEL_CONFIG.target_name,
+        model_type=MODEL_CONFIG.model_type,
+        export_id="export-1",
+        effective_from=None,
+        created_by="analyst@example.test",
+        publication_receipt_path=str(receipt_path),
+        publication_receipt_sha256=receipt_sha256,
+        model_equivalence_sha256=None,
+    )
+    tables = prepare_rating_tables(
+        workbook_path=workbook,
+        build=build,
+        model_config=MODEL_CONFIG,
+        effective_to=None,
+    )
+
+    assert isinstance(tables, RatingTables)
+    assert list(tables.export_frame["export_id"]) == [build.export_id]
+    assert not tables.rate_cells.empty
+    assert not tables.cell_levels.empty
+    assert re.fullmatch(r"[0-9a-f]{64}", tables.staging_content_sha256)
+    assert re.fullmatch(r"[0-9a-f]{64}", tables.model_equivalence_sha256)
 
 
 def test_build_staging_frames_accepts_mapping_and_uses_standard_layout(tmp_path: Path):
@@ -566,10 +599,10 @@ def test_stage_rating_export_parses_categorical_interaction_matrix(
     monkeypatch.setattr(
         staging,
         "insert_staging_frames",
-        lambda engine, args, export, rates, levels, terms, **kwargs: captured.update(
-            rates=rates.copy(),
-            levels=levels.copy(),
-            terms=terms.copy(),
+        lambda engine, args, tables: captured.update(
+            rates=tables.rate_cells.copy(),
+            levels=tables.cell_levels.copy(),
+            terms=tables.term_metadata.copy(),
         ),
     )
 
