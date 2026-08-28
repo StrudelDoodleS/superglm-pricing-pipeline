@@ -415,6 +415,58 @@ def test_local_model_version_reuses_export_and_advances_trained_versions(tmp_pat
     )
 
 
+def test_local_model_version_rejects_package_reservation_disagreement(tmp_path):
+    from pricing_pipeline import notebook as api
+    from pricing_pipeline.publishing.sqlite import resolve_sqlite_model_version
+
+    model_root = tmp_path / "pricing_models" / "claim_frequency"
+    model_root.mkdir(parents=True)
+    context = api.connect(mode="local", local_root=model_root / ".local")
+    model = api.register_model(
+        context,
+        _model_spec(api),
+        source_root=model_root,
+        created_by="analyst@example.test",
+    )
+    with context.engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO pricing.PRICING_RATE_PACKAGE (
+                    model_id, model_name, model_version, package_version,
+                    base_rate, package_status, source_export_id,
+                    offset_handling, created_by
+                ) VALUES (
+                    :model_id, 'CLAIM_FREQUENCY', 'v3', 1,
+                    0.1, 'PUBLISHED', 'conflicting-export',
+                    'NONE', 'test'
+                )
+                """
+            ),
+            {"model_id": model.model_id},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO pricing.PRICING_MODEL_VERSION_RESERVATION (
+                    model_id, export_id, model_version
+                ) VALUES (:model_id, 'conflicting-export', 'v4')
+                """
+            ),
+            {"model_id": model.model_id},
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match="published package and model-version reservation disagree",
+    ):
+        resolve_sqlite_model_version(
+            context.engine,
+            model_name=model.name,
+            export_id="conflicting-export",
+        )
+
+
 def test_publish_candidate_records_local_package_run_and_audit_links(
     monkeypatch,
     tmp_path,

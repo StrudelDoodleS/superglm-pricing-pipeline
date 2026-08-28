@@ -133,22 +133,28 @@ def resolve_sqlite_model_version(
                 ).scalar_one()
             )
             params = {"model_id": model_id, "export_id": export_id}
-            existing = connection.execute(
-                text(
-                    """
-                    SELECT model_version FROM pricing.PRICING_RATE_PACKAGE
-                    WHERE model_id = :model_id AND source_export_id = :export_id
-                    UNION ALL
-                    SELECT model_version FROM pricing.PRICING_MODEL_VERSION_RESERVATION
-                    WHERE model_id = :model_id AND export_id = :export_id
-                    LIMIT 1
-                    """
-                ),
-                params,
-            ).scalar_one_or_none()
-            if existing is not None:
+            existing_versions = list(
+                connection.execute(
+                    text(
+                        """
+                        SELECT model_version FROM pricing.PRICING_RATE_PACKAGE
+                        WHERE model_id = :model_id AND source_export_id = :export_id
+                        UNION
+                        SELECT model_version FROM pricing.PRICING_MODEL_VERSION_RESERVATION
+                        WHERE model_id = :model_id AND export_id = :export_id
+                        """
+                    ),
+                    params,
+                ).scalars()
+            )
+            if len(existing_versions) > 1:
+                raise RuntimeError(
+                    "published package and model-version reservation disagree for "
+                    f"model={model_name!r}, export_id={export_id!r}"
+                )
+            if existing_versions:
                 connection.commit()
-                return str(existing)
+                return str(existing_versions[0])
             versions = connection.execute(
                 text(
                     """
