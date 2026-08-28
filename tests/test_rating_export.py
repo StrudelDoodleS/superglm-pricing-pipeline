@@ -19,10 +19,7 @@ from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild, ModelExportResult
 from pricing_pipeline.orchestration import pipeline
 from pricing_pipeline.publishing import lineage, rating_export, staging
-from pricing_pipeline.publishing.lifecycle import (
-    CompletedModelPublishResult,
-    PublishResult,
-)
+from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
 from pricing_pipeline.publishing.rating_tables import RatingTables, prepare_rating_tables
 from pricing_pipeline.publishing.superglm_publication_receipt import (
     OffsetExportContract,
@@ -1159,46 +1156,32 @@ def test_publish_model_export_stages_packages_and_records_lineage(
 ):
     calls = []
     export = _retry_export(tmp_path)
-    fingerprinted_export = export.model_copy(update={"model_equivalence_sha256": "f" * 64})
-    connection = object()
-
+    tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     monkeypatch.setattr(
         pipeline,
-        "ensure_model_equivalence",
-        lambda build: fingerprinted_export,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "stage_rating_export",
-        lambda engine, **kwargs: calls.append(("stage", engine, kwargs)) or "a" * 64,
+        "prepare_rating_tables",
+        lambda **kwargs: calls.append(("prepare", kwargs)) or tables,
     )
 
-    def publish(engine, **kwargs):
-        calls.append(("publish", engine, kwargs))
-        model_run_id = kwargs["package_lineage_writer"](connection, 42)
-        return PublishResult(
+    def publish(engine, prepared, prepared_tables):
+        calls.append(("publish", engine, prepared, prepared_tables))
+        return CompletedModelPublishResult(
+            model_id=17,
+            model_name=export.model_name,
+            model_version=export.model_version,
+            manifest_id=export.manifest_id,
+            split_set_id=export.split_set_id,
             mlflow_run_id="",
             export_id="export-1",
             rate_package_id=42,
             package_version=3,
-            rating_workbook_path="",
             package_status="PUBLISHED",
-            model_run_id=model_run_id,
+            rating_workbook_path="",
+            model_run_id=501,
+            model_equivalence_sha256="f" * 64,
         )
 
-    monkeypatch.setattr(pipeline, "publish_rating_package", publish)
-    monkeypatch.setattr(
-        pipeline,
-        "record_model_run",
-        lambda engine, *, connection, **kwargs: (
-            calls.append(("lineage", connection, kwargs)) or 501
-        ),
-    )
+    monkeypatch.setattr(pipeline, "publish_sqlserver", publish)
 
     result = pipeline.publish_model_export(
         object(),
@@ -1211,17 +1194,12 @@ def test_publish_model_export_stages_packages_and_records_lineage(
     assert result.rate_package_id == 42
     assert result.model_run_id == 501
     assert result.was_existing is False
-    stage_call = next(call for call in calls if call[0] == "stage")
-    assert stage_call[2]["workbook_path"] == Path(export.rating_workbook_path)
-    assert stage_call[2]["publication_receipt_path"] == export.publication_receipt_path
+    prepare_call = next(call for call in calls if call[0] == "prepare")
+    assert prepare_call[1]["workbook_path"] == Path(export.rating_workbook_path)
+    assert prepare_call[1]["build"] is export
     publish_call = next(call for call in calls if call[0] == "publish")
-    assert "package_status" not in publish_call[2]
-    assert publish_call[2]["expected_staged_metadata"]["staging_content_sha256"] == "a" * 64
-    assert publish_call[2]["expected_staged_metadata"]["model_equivalence_sha256"] == "f" * 64
-    lineage_call = next(call for call in calls if call[0] == "lineage")
-    assert lineage_call[1] is connection
-    assert lineage_call[2]["build"] is fingerprinted_export
-    assert lineage_call[2]["rate_package_id"] == 42
+    assert publish_call[2].build.model_equivalence_sha256 == "f" * 64
+    assert publish_call[3] is tables
 
 
 def test_publish_model_export_returns_verified_existing_result_without_rewriting_lineage(
@@ -1229,7 +1207,7 @@ def test_publish_model_export_returns_verified_existing_result_without_rewriting
     tmp_path: Path,
 ):
     export = _retry_export(tmp_path)
-    fingerprinted_export = export.model_copy(update={"model_equivalence_sha256": "f" * 64})
+    tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     existing = CompletedModelPublishResult(
         model_id=17,
         model_name="MTPL_FREQ",
@@ -1246,35 +1224,13 @@ def test_publish_model_export_returns_verified_existing_result_without_rewriting
     )
     monkeypatch.setattr(
         pipeline,
-        "ensure_model_equivalence",
-        lambda build: fingerprinted_export,
+        "prepare_rating_tables",
+        lambda **kwargs: tables,
     )
     monkeypatch.setattr(
         pipeline,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(pipeline, "stage_rating_export", lambda *args, **kwargs: "a" * 64)
-    monkeypatch.setattr(
-        pipeline,
-        "publish_rating_package",
-        lambda *args, **kwargs: PublishResult(
-            mlflow_run_id="",
-            export_id="export-1",
-            rate_package_id=42,
-            package_version=3,
-            rating_workbook_path="",
-            package_status="PUBLISHED",
-            was_existing=True,
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline, "_resolve_existing_published_run", lambda *args, **kwargs: existing
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "record_model_run",
-        lambda *args, **kwargs: pytest.fail("existing publication must not rewrite lineage"),
+        "publish_sqlserver",
+        lambda engine, prepared, prepared_tables: existing,
     )
 
     result = pipeline.publish_model_export(
@@ -1292,7 +1248,7 @@ def test_publish_model_export_reuses_equivalent_run_before_any_staging_write(
     tmp_path: Path,
 ):
     export = _retry_export(tmp_path)
-    fingerprinted_export = export.model_copy(update={"model_equivalence_sha256": "f" * 64})
+    tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     equivalent = SimpleNamespace(
         model_id=17,
         model_name="MTPL_FREQ",
@@ -1314,28 +1270,34 @@ def test_publish_model_export_reuses_equivalent_run_before_any_staging_write(
     calls = []
     monkeypatch.setattr(
         pipeline,
-        "ensure_model_equivalence",
-        lambda build: calls.append("python_fingerprint") or fingerprinted_export,
+        "prepare_rating_tables",
+        lambda **kwargs: calls.append("prepare") or tables,
     )
     monkeypatch.setattr(
         pipeline,
-        "find_equivalent_publication",
-        lambda engine, *, build: calls.append("read_only_lookup") or equivalent,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "release_unused_model_version_reservation",
-        lambda engine, **kwargs: calls.append(("release_reservation", kwargs)),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "stage_rating_export",
-        lambda *args, **kwargs: pytest.fail("equivalent model reached SQL staging"),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "publish_rating_package",
-        lambda *args, **kwargs: pytest.fail("equivalent model reached package publication"),
+        "publish_sqlserver",
+        lambda engine, prepared, prepared_tables: (
+            calls.append("publish")
+            or CompletedModelPublishResult(
+                model_id=equivalent.model_id,
+                model_name=equivalent.model_name,
+                model_version=equivalent.model_version,
+                manifest_id=equivalent.manifest_id,
+                split_set_id=equivalent.split_set_id,
+                export_id=equivalent.export_id,
+                rate_package_id=equivalent.rate_package_id,
+                package_version=equivalent.package_version,
+                package_status=equivalent.package_status,
+                rating_workbook_path=equivalent.rating_workbook_path,
+                model_run_id=equivalent.model_run_id,
+                publication_receipt_path=equivalent.publication_receipt_path,
+                publication_receipt_sha256=equivalent.publication_receipt_sha256,
+                was_existing=True,
+                deduplicated=True,
+                model_kind=equivalent.model_kind,
+                model_equivalence_sha256=equivalent.model_equivalence_sha256,
+            )
+        ),
     )
 
     result = pipeline.publish_model_export(
@@ -1345,11 +1307,7 @@ def test_publish_model_export_reuses_equivalent_run_before_any_staging_write(
         validated_model_id=17,
     )
 
-    assert calls[:2] == ["python_fingerprint", "read_only_lookup"]
-    assert calls[2] == (
-        "release_reservation",
-        {"model_id": 17, "export_id": "export-1"},
-    )
+    assert calls == ["prepare", "publish"]
     assert result.rate_package_id == 42
     assert result.export_id == "export-original"
     assert result.was_existing is True

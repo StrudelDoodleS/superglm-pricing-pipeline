@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from sqlalchemy import text
@@ -7,19 +8,15 @@ from sqlalchemy import text
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.equivalence import (
-    ensure_model_equivalence,
-    find_equivalent_publication,
-    release_unused_model_version_reservation,
-)
+from pricing_pipeline.publishing.identity import bind_model_equivalence
 from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
-from pricing_pipeline.publishing.lineage import record_model_run
 from pricing_pipeline.publishing.model_registry import (
     ModelRegistryError,
     validate_registered_model,
 )
-from pricing_pipeline.publishing.package_writer import publish_rating_package
-from pricing_pipeline.publishing.staging import stage_rating_export
+from pricing_pipeline.publishing.publish import PublicationRequest, prepare_publication
+from pricing_pipeline.publishing.rating_tables import prepare_rating_tables
+from pricing_pipeline.publishing.sqlserver import publish_sqlserver
 from pricing_pipeline.workbench.submission import sha256_file
 
 
@@ -52,142 +49,37 @@ def publish_model_export(
     else:
         model_id = int(validated_model_id)
     _validate_export_matches_config(export, model_config, model_id=model_id)
-    export = ensure_model_equivalence(export)
-    equivalent = find_equivalent_publication(engine, build=export)
-    if equivalent is not None:
-        if equivalent.package_status.upper() != "PUBLISHED":
-            raise PublishedRunIntegrityError("equivalent model package is not PUBLISHED")
-        release_unused_model_version_reservation(
-            engine,
-            model_id=export.model_id,
-            export_id=export.export_id,
-        )
-        return CompletedModelPublishResult(
-            model_id=equivalent.model_id,
-            model_name=equivalent.model_name,
-            model_version=equivalent.model_version,
-            manifest_id=equivalent.manifest_id,
-            split_set_id=equivalent.split_set_id,
-            export_id=equivalent.export_id,
-            rate_package_id=equivalent.rate_package_id,
-            package_version=equivalent.package_version,
-            package_status=equivalent.package_status,
-            rating_workbook_path=equivalent.rating_workbook_path,
-            model_run_id=equivalent.model_run_id,
-            mlflow_run_id=equivalent.mlflow_run_id,
-            publication_receipt_path=equivalent.publication_receipt_path,
-            publication_receipt_sha256=equivalent.publication_receipt_sha256,
-            was_existing=True,
-            deduplicated=True,
-            model_kind=equivalent.model_kind,
-            model_equivalence_sha256=equivalent.model_equivalence_sha256,
-        )
-
-    staging_kwargs = {
-        "workbook_path": Path(export.rating_workbook_path),
-        "export_id": export.export_id,
-        "model_name": model_config.model_name,
-        "model_version": export.model_version,
-        "target_name": model_config.target_name,
-        "model_type": model_config.model_type,
-        "effective_from": export.effective_from,
-        "created_by": export.created_by,
-        "replace": True,
-        "model_id": model_id,
-        "publication_receipt_path": export.publication_receipt_path,
-        "publication_receipt_sha256": export.publication_receipt_sha256,
-    }
-    content_sha256 = stage_rating_export(engine, **staging_kwargs)
-    staged_workbook_sha256 = sha256_file(workbook_path)
-    if staged_workbook_sha256 != export.rating_workbook_sha256:
-        raise PublishedRunIntegrityError(
-            "rating workbook changed during staging: "
-            f"expected={export.rating_workbook_sha256!r}, actual={staged_workbook_sha256!r}"
-        )
-    equivalence_sha256 = export.model_equivalence_sha256
-    if equivalence_sha256 is None:
-        raise PublishedRunIntegrityError(
-            "Python equivalence fingerprint is missing before SQL staging"
-        )
-
-    def write_package_lineage(connection, rate_package_id: int) -> int:
-        return record_model_run(
-            None,
-            build=export,
-            dag_id="notebook",
-            airflow_run_id=export.export_id,
-            rate_package_id=rate_package_id,
-            connection=connection,
-        )
-
-    publish_result = publish_rating_package(
-        engine,
-        export_id=export.export_id,
-        created_by=export.created_by,
-        package_lineage_writer=write_package_lineage,
-        expected_staged_metadata={
-            "export_id": export.export_id,
-            "model_id": model_id,
-            "model_name": model_config.model_name,
-            "model_version": export.model_version,
-            "effective_from_date": export.effective_from,
-            "effective_to_date": None,
-            "source_file": str(Path(export.rating_workbook_path).resolve()),
-            "publication_receipt_sha256": export.publication_receipt_sha256,
-            "staging_content_sha256": content_sha256,
-            "model_equivalence_sha256": equivalence_sha256,
-        },
-        equivalence_key={
-            "manifest_id": export.manifest_id,
-            "model_kind": export.model_kind,
-            "model_equivalence_sha256": equivalence_sha256,
-        },
+    request = PublicationRequest(
+        build=export,
+        model_config=model_config,
+        execution_name="notebook",
+        execution_id=export.export_id,
+        allowed_artifact_root=(
+            None if allowed_artifact_root is None else Path(allowed_artifact_root)
+        ),
     )
-    if publish_result.deduplicated:
-        return _resolve_equivalent_published_run(
-            engine,
-            export=export,
-            rate_package_id=publish_result.rate_package_id,
-        )
-    if publish_result.was_existing:
-        existing = _resolve_existing_published_run(
-            engine,
-            export,
-            allowed_artifact_root=allowed_artifact_root,
-        )
-        if existing is None:
-            raise PublishedRunIntegrityError(
-                f"existing package for export_id {export.export_id!r} "
-                "disappeared before lineage validation"
-            )
-        if existing.rate_package_id != publish_result.rate_package_id:
-            raise PublishedRunIntegrityError(
-                f"existing package identity changed for export_id {export.export_id!r}"
-            )
-        return existing
-    if publish_result.model_run_id is None:
-        raise RuntimeError("package publication did not record scheduled model lineage")
-
-    return CompletedModelPublishResult(
-        model_id=model_id,
-        model_name=export.model_name,
-        model_version=export.model_version,
-        manifest_id=export.manifest_id,
-        split_set_id=export.split_set_id,
-        export_id=publish_result.export_id,
-        rate_package_id=publish_result.rate_package_id,
-        package_version=publish_result.package_version,
-        package_status=publish_result.package_status,
-        rating_workbook_path=export.rating_workbook_path,
-        model_run_id=publish_result.model_run_id,
-        mlflow_run_id=export.mlflow_run_id or None,
-        publication_receipt_path=export.publication_receipt_path,
-        publication_receipt_sha256=export.publication_receipt_sha256,
-        was_existing=publish_result.was_existing,
-        deduplicated=publish_result.deduplicated,
-        model_kind=export.model_kind,
-        model_equivalence_sha256=export.model_equivalence_sha256,
+    prepared = prepare_publication(request)
+    tables = prepare_rating_tables(
+        workbook_path=Path(prepared.build.rating_workbook_path),
+        build=prepared.build,
+        model_config=prepared.model_config,
+        effective_to=prepared.effective_to,
     )
+    prepared_workbook_sha256 = sha256_file(workbook_path)
+    if prepared_workbook_sha256 != export.rating_workbook_sha256:
+        raise PublishedRunIntegrityError(
+            "rating workbook changed during preparation: "
+            f"expected={export.rating_workbook_sha256!r}, "
+            f"actual={prepared_workbook_sha256!r}"
+        )
+    prepared = replace(
+        prepared,
+        build=bind_model_equivalence(
+            prepared.build,
+            calculated_sha256=tables.model_equivalence_sha256,
+        ),
+    )
+    return publish_sqlserver(engine, prepared, tables)
 
 
 def _validate_export_matches_config(

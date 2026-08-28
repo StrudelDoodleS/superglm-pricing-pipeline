@@ -1,9 +1,10 @@
 from inspect import signature
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
+from pricing_pipeline.publishing import sqlserver
 from pricing_pipeline.publishing.model_registry import ModelRegistryError
 from pricing_pipeline.publishing.package_writer import publish_rating_package
 
@@ -28,7 +29,7 @@ def load_staging_to_rating_package(engine, args):
 
 
 def test_package_writer_does_not_write_deployment_tables_during_publish():
-    writer = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    writer = Path("src/pricing_pipeline/publishing/sqlserver.py").read_text(encoding="utf-8")
 
     assert "PRICING_MODEL_DEPLOYMENT" not in writer
     assert "PRICING_PACKAGE_POINTER" not in writer
@@ -44,9 +45,7 @@ def test_publish_rating_package_accepts_revision_mapping_without_public_status()
 
 def test_package_writer_canonicalises_revision_metadata_mapping_once():
     engine = _FakeNewPackageEngine()
-    args = _new_package_args(
-        revision_metadata={"unicode": "München", "kind": "SUPERGLM_EDITOR"}
-    )
+    args = _new_package_args(revision_metadata={"unicode": "München", "kind": "SUPERGLM_EDITOR"})
 
     load_staging_to_rating_package(engine, args)
 
@@ -62,9 +61,7 @@ def test_package_writer_canonicalises_revision_metadata_mapping_once():
 
 def test_package_writer_accepts_non_dict_revision_metadata_mapping():
     engine = _FakeNewPackageEngine()
-    args = _new_package_args(
-        revision_metadata=MappingProxyType({"kind": "SUPERGLM_EDITOR"})
-    )
+    args = _new_package_args(revision_metadata=MappingProxyType({"kind": "SUPERGLM_EDITOR"}))
 
     load_staging_to_rating_package(engine, args)
 
@@ -418,47 +415,55 @@ def _new_package_args(**overrides):
     return args
 
 
-def test_package_lineage_writer_runs_inside_transaction_before_final_status():
+def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypatch):
     engine = _FakeNewPackageEngine()
     events = []
+    prepared = SimpleNamespace(
+        build=SimpleNamespace(export_id="export-1"),
+        verification=object(),
+    )
+    tables = object()
+    package = SimpleNamespace(rate_package_id=42)
+    expected = object()
 
-    def validate_draft(connection, rate_package_id):
-        assert connection is engine.connection
-        assert rate_package_id == 42
-        events.append("validate")
+    def stage(name, result=None):
+        def run(*args, **kwargs):
+            assert engine.transaction.active
+            assert args[0] is engine.connection
+            events.append(name)
+            return result
 
-    def write_lineage(connection, rate_package_id):
-        assert connection is engine.connection
-        assert rate_package_id == 42
-        assert not any(
-            "UPDATE pricing.PRICING_RATE_PACKAGE" in sql for sql, _params in connection.statements
-        )
-        events.append("lineage")
+        return run
 
-    args = _new_package_args(
-        draft_validator=validate_draft,
-        package_lineage_writer=write_lineage,
+    monkeypatch.setattr(sqlserver, "_lock_export", stage("lock"))
+    monkeypatch.setattr(sqlserver, "_resolve_existing_or_equivalent", stage("resolve"))
+    monkeypatch.setattr(sqlserver, "_replace_staging_frames", stage("stage"))
+    monkeypatch.setattr(sqlserver, "_insert_draft_package", stage("draft", package))
+    monkeypatch.setattr(sqlserver, "_insert_rating_tables", stage("rating"))
+    monkeypatch.setattr(sqlserver, "_insert_lineage", stage("lineage", 501))
+    monkeypatch.setattr(sqlserver, "_verify_draft", stage("verify"))
+    monkeypatch.setattr(sqlserver, "_mark_published", stage("publish"))
+    monkeypatch.setattr(sqlserver, "_delete_staging_children", stage("cleanup"))
+    monkeypatch.setattr(
+        sqlserver,
+        "_publication_result",
+        lambda package, model_run_id, prepared: events.append("result") or expected,
     )
 
-    assert load_staging_to_rating_package(engine, args) == 42
-
-    package_insert = next(
-        (sql, params)
-        for sql, params in engine.connection.statements
-        if "INSERT INTO pricing.PRICING_RATE_PACKAGE" in sql
-    )
-    assert "staging_content_sha256" in package_insert[0]
-    assert package_insert[1]["staging_content_sha256"] == "a" * 64
-    status_index = next(
-        index
-        for index, (sql, _params) in enumerate(engine.connection.statements)
-        if "UPDATE pricing.PRICING_RATE_PACKAGE" in sql
-    )
-    assert events == ["validate", "lineage"]
-    assert engine.connection.statements[status_index][1] == {
-        "package_status": "PUBLISHED",
-        "rate_package_id": 42,
-    }
+    assert sqlserver.publish_sqlserver(engine, prepared, tables) is expected
+    assert engine.transaction.active is False
+    assert events == [
+        "lock",
+        "resolve",
+        "stage",
+        "draft",
+        "rating",
+        "lineage",
+        "verify",
+        "publish",
+        "cleanup",
+        "result",
+    ]
 
 
 def test_successful_publish_deletes_staging_payload_after_final_status_only():
@@ -808,7 +813,7 @@ def test_package_writer_allows_existing_source_export_when_old_source_file_is_un
 
 
 def test_package_writer_publishes_receipt_and_term_metadata_columns():
-    writer = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    writer = Path("src/pricing_pipeline/publishing/sqlserver.py").read_text(encoding="utf-8")
 
     assert "publication_receipt_json" in writer
     assert "publication_receipt_sha256" in writer

@@ -7,9 +7,7 @@ from typing import Any
 
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.superglm_publication_receipt import (
-    SuperGLMPublicationReceipt,
-)
+from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
 from pricing_pipeline.workbench.artifacts import CandidateBundle
 
 

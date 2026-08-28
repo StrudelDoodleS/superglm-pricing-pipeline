@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from inspect import signature
 import json
+from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,7 +19,6 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     CompletedModelPublishResult,
     publish_completed_model_build,
 )
-from pricing_pipeline.publishing.lifecycle import PublishResult
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
 
@@ -249,41 +248,39 @@ def test_model_export_publisher_returns_typed_result(monkeypatch, tmp_path):
     workbook = tmp_path / "rating_tables.xlsx"
     workbook.write_bytes(b"rating workbook")
     export = _approved_build(tmp_path, workbook=workbook, created_by="analyst")
-    fingerprinted_export = export.model_copy(update={"model_equivalence_sha256": "f" * 64})
-    connection = object()
+    prepared_tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
+    calls = []
     monkeypatch.setattr(
         pipeline,
-        "ensure_model_equivalence",
-        lambda build: fingerprinted_export,
+        "prepare_rating_tables",
+        lambda **kwargs: calls.append(("prepare", kwargs)) or prepared_tables,
     )
     monkeypatch.setattr(
         pipeline,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
+        "publish_sqlserver",
+        lambda engine, prepared, tables: (
+            calls.append(("publish", engine, prepared, tables))
+            or CompletedModelPublishResult(
+                model_id=17,
+                model_name=export.model_name,
+                model_version=export.model_version,
+                manifest_id=export.manifest_id,
+                split_set_id=export.split_set_id,
+                mlflow_run_id="",
+                export_id=export.export_id,
+                rate_package_id=42,
+                package_version=7,
+                package_status="PUBLISHED",
+                rating_workbook_path=export.rating_workbook_path,
+                model_run_id=91,
+                model_equivalence_sha256="f" * 64,
+            )
+        ),
     )
-    monkeypatch.setattr(pipeline, "stage_rating_export", lambda *args, **kwargs: "a" * 64)
-    monkeypatch.setattr(
-        pipeline,
-        "record_model_run",
-        lambda engine, *, connection, **kwargs: 91,
-    )
 
-    def publish_package(engine, *, package_lineage_writer, **kwargs):
-        model_run_id = package_lineage_writer(connection, 42)
-        return PublishResult(
-            mlflow_run_id="",
-            export_id=export.export_id,
-            rate_package_id=42,
-            package_version=7,
-            package_status="PUBLISHED",
-            rating_workbook_path=export.rating_workbook_path,
-            model_run_id=model_run_id,
-        )
-
-    monkeypatch.setattr(pipeline, "publish_rating_package", publish_package)
-
+    engine = object()
     result = pipeline.publish_model_export(
-        object(),
+        engine,
         export,
         model_config=_config(),
         validated_model_id=17,
@@ -292,6 +289,14 @@ def test_model_export_publisher_returns_typed_result(monkeypatch, tmp_path):
     assert isinstance(result, CompletedModelPublishResult)
     assert result.model_run_id == 91
     assert result.rate_package_id == 42
+    assert [call[0] for call in calls] == ["prepare", "publish"]
+    prepare_call = calls[0][1]
+    assert prepare_call["workbook_path"] == Path(export.rating_workbook_path)
+    assert prepare_call["build"] is export
+    publish_call = calls[1]
+    assert publish_call[1] is engine
+    assert publish_call[2].build.model_equivalence_sha256 == "f" * 64
+    assert publish_call[3] is prepared_tables
 
 
 def test_model_export_publisher_returns_existing_result_unchanged(
@@ -301,36 +306,17 @@ def test_model_export_publisher_returns_existing_result_unchanged(
     workbook = tmp_path / "rating_tables.xlsx"
     workbook.write_bytes(b"rating workbook")
     export = _approved_build(tmp_path, workbook=workbook, created_by="analyst")
-    fingerprinted_export = export.model_copy(update={"model_equivalence_sha256": "f" * 64})
     existing = _completed_publish_result(export, was_existing=True)
+    tables = SimpleNamespace(model_equivalence_sha256="f" * 64)
     monkeypatch.setattr(
         pipeline,
-        "ensure_model_equivalence",
-        lambda build: fingerprinted_export,
+        "prepare_rating_tables",
+        lambda **kwargs: tables,
     )
     monkeypatch.setattr(
         pipeline,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(pipeline, "stage_rating_export", lambda *args, **kwargs: "a" * 64)
-    monkeypatch.setattr(
-        pipeline,
-        "publish_rating_package",
-        lambda *args, **kwargs: PublishResult(
-            mlflow_run_id="",
-            export_id=export.export_id,
-            rate_package_id=42,
-            package_version=7,
-            package_status="PUBLISHED",
-            rating_workbook_path=export.rating_workbook_path,
-            was_existing=True,
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "_resolve_existing_published_run",
-        lambda *args, **kwargs: existing,
+        "publish_sqlserver",
+        lambda engine, prepared, prepared_tables: existing,
     )
 
     result = pipeline.publish_model_export(
