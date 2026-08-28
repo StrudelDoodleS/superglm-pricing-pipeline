@@ -106,18 +106,19 @@ def test_lorenz_curve_does_not_resolve_below_minimum_comparison_units():
     assert first == redistributed
 
 
-def test_report_owner_imports_without_superglm():
+def test_rating_workbook_adapter_imports_without_superglm():
     script = """\
 import builtins
+import sys
 original = builtins.__import__
 def guarded(name, *args, **kwargs):
-    if name.startswith("superglm"):
+    if name == "joblib" or name.startswith("superglm"):
         raise AssertionError(f"forbidden import: {name}")
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
-import pricing_pipeline.reporting.evidence
-import pricing_pipeline.reporting.report
-import pricing_pipeline.reporting._underwriter_html
+import pricing_pipeline.reporting.adapters
+import pricing_pipeline.reporting.adapters.rating_workbook
+assert not any(name == "superglm" or name.startswith("superglm.") for name in sys.modules)
 """
 
     subprocess.run([sys.executable, "-c", script], check=True)
@@ -831,7 +832,7 @@ def test_double_lift_uses_exact_nll_when_both_models_have_training_metadata(
 
 
 def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monkeypatch):
-    import pricing_pipeline.reporting.adapters.superglm as superglm_adapter
+    from superglm.profiling import tweedie as tweedie_profile
 
     frame = pd.DataFrame(
         {
@@ -842,7 +843,7 @@ def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monke
             "model_b": [0.3, 0.25, 1.8, 3.7, 5.5],
         }
     )
-    original = superglm_adapter.tweedie_logpdf
+    original = tweedie_profile.tweedie_logpdf
     calls = 0
 
     def counted(*args, **kwargs):
@@ -850,7 +851,7 @@ def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monke
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(superglm_adapter, "tweedie_logpdf", counted)
+    monkeypatch.setattr(tweedie_profile, "tweedie_logpdf", counted)
     build_underwriter_report(
         frame,
         actual="actual",

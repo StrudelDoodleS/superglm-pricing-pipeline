@@ -433,7 +433,7 @@ def test_adapter_keeps_successful_interactions_when_one_public_plot_capability_i
         raise NotImplementedError("upstream implementation detail")
 
     monkeypatch.setattr(
-        "pricing_pipeline.reporting.adapters.superglm.EditorSession.from_model",
+        "superglm.editor.EditorSession.from_model",
         unsupported_editor,
     )
     frame = pd.DataFrame(
