@@ -1,0 +1,1588 @@
+"""Verify signed editor/manual submissions and publish one trusted child request."""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import math
+import os
+import pickle
+import shutil
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import joblib
+import numpy as np
+from sklearn.metrics import mean_poisson_deviance
+from sqlalchemy import text
+
+from pricing_pipeline.infra.config import Settings
+from pricing_pipeline.infra.file_lock import exclusive_file_lock
+from pricing_pipeline.infra.schema import schema_names_from_connectable
+from pricing_pipeline.modeling.manual_adjustment import (
+    ManualAdjustmentPolicy,
+    manual_adjustment_policy_from_metadata,
+    replay_manual_adjustment_policy,
+)
+from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
+from pricing_pipeline.publishing.metadata import (
+    OffsetExportContract,
+    SuperGLMPublicationReceipt,
+    build_superglm_publication_receipt,
+    canonical_receipt_bytes,
+    write_publication_receipt,
+)
+from pricing_pipeline.publishing.publish import (
+    DraftVerification,
+    PublicationRequest,
+    publish_candidate,
+)
+from pricing_pipeline.publishing.rating_tables import export_rating_tables
+from pricing_pipeline.workbench.artifacts import (
+    CandidateArtifactError,
+    CandidateArtifactMetadata,
+    CandidateBundle,
+    load_candidate_bundle,
+    load_edited_model,
+    save_candidate_bundle,
+)
+from pricing_pipeline.workbench.submission import (
+    LEGACY_SUBMISSION_FORMAT,
+    SUBMISSION_FORMAT,
+    EditorSubmission,
+    EditorSubmissionError,
+    load_verified_submission,
+    sha256_file,
+)
+
+
+@dataclass(frozen=True)
+class ChampionSnapshot:
+    deployment_slot: str
+    rate_package_id: int | None
+    bundle: CandidateBundle | None
+    unavailable_reason: str | None = None
+
+    @property
+    def status(self) -> str:
+        if self.rate_package_id is None:
+            return "NO_CHAMPION"
+        if self.bundle is None:
+            return "UNAVAILABLE"
+        return "COMPARED"
+
+    def revision_metadata(self) -> dict[str, Any]:
+        return {
+            "available": self.status == "COMPARED",
+            "deployment_slot": self.deployment_slot,
+            "rate_package_id": self.rate_package_id,
+            "reason": self.unavailable_reason,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class ParentCandidate:
+    model_id: int
+    model_name: str
+    model_version: str
+    package_version: int
+    rate_package_id: int
+    model_run_id: int
+    effective_from: str | None
+    effective_to: str | None
+    config: ModelBuildConfig
+    bundle: CandidateBundle
+    champion: ChampionSnapshot
+
+
+@dataclass(frozen=True)
+class EditorExport:
+    completed_build: ApprovedModelBuild
+    publication_receipt: SuperGLMPublicationReceipt
+    revision_metadata: dict[str, Any]
+    edited_model: Any
+    bundle: CandidateBundle
+
+
+@dataclass(frozen=True)
+class EditorPublicationResult:
+    submission_id: str
+    model_name: str
+    parent_rate_package_id: int
+    rate_package_id: int
+    package_version: int
+    model_run_id: int
+    package_status: str
+    was_existing: bool
+    model_kind: str = "EDITOR_EDIT"
+    deduplicated: bool = False
+
+
+@dataclass(frozen=True)
+class EditorPublicationAttempt:
+    staging_dir: Path
+    final_dir: Path
+
+
+_EDITED_MODEL_UNSET = object()
+
+
+def publish_editor_submission(
+    engine,
+    *,
+    settings: Settings,
+    submission_path: str,
+    submission_sha256: str,
+    dag_id: str,
+    airflow_run_id: str,
+    created_by: str,
+    model_config: ModelBuildConfig,
+) -> EditorPublicationResult:
+    publisher_identity = _publisher_identity(created_by)
+    submission = _load_submission(
+        submission_path=submission_path,
+        submission_sha256=submission_sha256,
+        allowed_root=settings.workbench_artifact_root,
+    )
+    _require_submission_config(submission, model_config)
+    submission_dir = _submission_directory(
+        submission,
+        allowed_root=settings.workbench_artifact_root,
+    )
+    with _editor_publication_lock(submission_dir):
+        existing = _resolve_exact_retry(
+            engine=engine,
+            submission=submission,
+            allowed_root=settings.workbench_artifact_root,
+        )
+        if existing is not None:
+            return existing
+        parent = _load_trusted_parent(
+            engine=engine,
+            submission=submission,
+            model_config=model_config,
+            allowed_root=settings.workbench_artifact_root,
+        )
+        edited = _load_and_verify_edit(
+            submission=submission,
+            parent=parent,
+            allowed_root=settings.workbench_artifact_root,
+        )
+        with _publication_attempt(
+            submission,
+            settings.workbench_artifact_root,
+        ) as attempt:
+            exported = _export_edited_build(
+                submission=submission,
+                parent=parent,
+                edited_model=edited,
+                created_by=publisher_identity,
+                attempt=attempt,
+                allowed_root=settings.workbench_artifact_root,
+            )
+            request = _publication_request(
+                submission=submission,
+                parent=parent,
+                exported=exported,
+                model_config=model_config,
+                execution_name=dag_id,
+                execution_id=airflow_run_id,
+                allowed_root=settings.workbench_artifact_root,
+            )
+            publication = publish_candidate(engine, request)
+            reused_parent_rate_package_id = _verify_reused_publication(
+                engine=engine,
+                submission=submission,
+                publication=publication,
+                allowed_root=settings.workbench_artifact_root,
+            )
+            if publication.was_existing or publication.deduplicated:
+                _remove_path(attempt.final_dir)
+            return _editor_result(
+                submission=submission,
+                publication=publication,
+                parent_rate_package_id=reused_parent_rate_package_id,
+            )
+
+
+def _publisher_identity(value: str) -> str:
+    identity = str(value).strip()
+    if not identity:
+        raise EditorSubmissionError("publisher identity is required")
+    return identity
+
+
+def _load_submission(
+    *,
+    submission_path: str,
+    submission_sha256: str,
+    allowed_root: str | Path,
+) -> EditorSubmission:
+    submission = load_verified_submission(
+        submission_path,
+        submission_sha256,
+        allowed_root=allowed_root,
+    )
+    _manual_policy_for_submission(submission)
+    return submission
+
+
+def _require_submission_config(
+    submission: EditorSubmission,
+    model_config: ModelBuildConfig,
+) -> None:
+    submitted_slot = str(submission.deployment_slot or "").strip().upper()
+    configured_slot = str(model_config.deployment_slot or "").strip().upper()
+    if not submitted_slot or submitted_slot != configured_slot:
+        raise EditorSubmissionError(
+            "explicit model config deployment_slot does not match the editor submission"
+        )
+
+
+def _resolve_exact_retry(
+    *,
+    engine,
+    submission: EditorSubmission,
+    allowed_root: str | Path,
+) -> EditorPublicationResult | None:
+    return _resolve_existing_editor_publication(
+        engine,
+        submission,
+        allowed_root=allowed_root,
+    )
+
+
+def _load_trusted_parent(
+    *,
+    engine,
+    submission: EditorSubmission,
+    model_config: ModelBuildConfig,
+    allowed_root: str | Path,
+) -> ParentCandidate:
+    return load_parent_candidate(
+        engine,
+        submission,
+        allowed_root=allowed_root,
+        model_config=model_config,
+    )
+
+
+def _load_and_verify_edit(
+    *,
+    submission: EditorSubmission,
+    parent: ParentCandidate,
+    allowed_root: str | Path,
+) -> Any:
+    return _load_edited_model(parent, submission, allowed_root=allowed_root)
+
+
+@contextmanager
+def _publication_attempt(
+    submission: EditorSubmission,
+    allowed_root: str | Path,
+) -> Iterator[EditorPublicationAttempt]:
+    submission_dir = _submission_directory(
+        submission,
+        allowed_root=allowed_root,
+    )
+    _remove_unpublished_editor_attempts(submission_dir)
+    attempt = _new_editor_publication_attempt(submission_dir)
+    try:
+        yield attempt
+    except BaseException:
+        _remove_path(attempt.final_dir)
+        raise
+    finally:
+        _remove_path(attempt.staging_dir)
+
+
+def _export_edited_build(
+    *,
+    submission: EditorSubmission,
+    parent: ParentCandidate,
+    edited_model: Any,
+    created_by: str,
+    attempt: EditorPublicationAttempt,
+    allowed_root: str | Path,
+) -> EditorExport:
+    exported = export_edited_model(
+        parent,
+        submission,
+        created_by=created_by,
+        allowed_root=allowed_root,
+        write_dir=attempt.staging_dir,
+        published_dir=attempt.final_dir,
+        edited_model=edited_model,
+    )
+    os.rename(attempt.staging_dir, attempt.final_dir)
+    build = exported.completed_build
+    if sha256_file(build.rating_workbook_path) != build.rating_workbook_sha256:
+        raise EditorSubmissionError("edited rating workbook SHA-256 changed before publication")
+    return exported
+
+
+def _publication_request(
+    *,
+    submission: EditorSubmission,
+    parent: ParentCandidate,
+    exported: EditorExport,
+    model_config: ModelBuildConfig,
+    execution_name: str,
+    execution_id: str,
+    allowed_root: str | Path,
+) -> PublicationRequest:
+    return PublicationRequest(
+        build=exported.completed_build,
+        model_config=model_config,
+        execution_name=execution_name,
+        execution_id=execution_id,
+        allowed_artifact_root=Path(allowed_root).expanduser().resolve(),
+        effective_to=parent.effective_to,
+        parent_rate_package_id=submission.parent_rate_package_id,
+        parent_model_run_id=submission.parent_model_run_id,
+        revision_metadata={
+            **exported.revision_metadata,
+            "published_by": exported.completed_build.created_by,
+        },
+        verification=DraftVerification(
+            model=exported.edited_model,
+            bundle=exported.bundle,
+            receipt=exported.publication_receipt,
+        ),
+    )
+
+
+def _verify_reused_publication(
+    *,
+    engine,
+    submission: EditorSubmission,
+    publication: CompletedModelPublishResult,
+    allowed_root: str | Path,
+) -> int | None:
+    if publication.deduplicated:
+        if publication.model_run_id is None:
+            raise EditorSubmissionError(
+                "equivalent editor package has no durable model-run lineage"
+            )
+        row = _load_reused_publication_lineage(
+            engine,
+            rate_package_id=publication.rate_package_id,
+            model_run_id=publication.model_run_id,
+        )
+        if _submission_model_kind(submission) == "MANUAL_EDIT":
+            _require_matching_manual_policy_lineage(
+                submission=submission,
+                row=row,
+            )
+        return _require_reused_publication_lineage(publication=publication, row=row)
+    if not publication.was_existing:
+        return None
+    existing = _resolve_exact_retry(
+        engine=engine,
+        submission=submission,
+        allowed_root=allowed_root,
+    )
+    if existing is None or existing.rate_package_id != publication.rate_package_id:
+        raise EditorSubmissionError("existing editor package changed before lineage validation")
+    return existing.parent_rate_package_id
+
+
+def _load_reused_publication_lineage(
+    engine,
+    *,
+    rate_package_id: int,
+    model_run_id: int,
+) -> Mapping[str, Any] | None:
+    schemas = schema_names_from_connectable(engine)
+    with engine.connect() as connection:
+        return (
+            connection.execute(
+                text(
+                    f"""
+                    SELECT
+                        pm.model_name,
+                        rp.parent_rate_package_id,
+                        rp.package_status,
+                        rp.revision_metadata_json,
+                        mr.model_run_id,
+                        mr.parent_model_run_id,
+                        mr.run_status,
+                        mr.manifest_id,
+                        mr.model_kind,
+                        mr.model_equivalence_sha256
+                    FROM {schemas.pricing}.PRICING_RATE_PACKAGE AS rp
+                    JOIN {schemas.pricing}.PRICING_MODEL AS pm
+                      ON pm.model_id = rp.model_id
+                    JOIN {schemas.pricing}.MODEL_RUN AS mr
+                      ON mr.rate_package_id = rp.rate_package_id
+                    WHERE rp.rate_package_id = :rate_package_id
+                      AND mr.model_run_id = :model_run_id
+                    """
+                ),
+                {
+                    "rate_package_id": rate_package_id,
+                    "model_run_id": model_run_id,
+                },
+            )
+            .mappings()
+            .one_or_none()
+        )
+
+
+def _require_reused_publication_lineage(
+    *,
+    publication: CompletedModelPublishResult,
+    row: Mapping[str, Any] | None,
+) -> int:
+    if row is None or row.get("parent_rate_package_id") is None:
+        raise EditorSubmissionError("equivalent editor package has unusable durable lineage")
+    expected = {
+        "model_name": publication.model_name,
+        "package_status": "PUBLISHED",
+        "model_run_id": publication.model_run_id,
+        "run_status": "SUCCESS",
+        "manifest_id": publication.manifest_id,
+        "model_kind": publication.model_kind,
+        "model_equivalence_sha256": publication.model_equivalence_sha256,
+    }
+    mismatches = [
+        field_name
+        for field_name, expected_value in expected.items()
+        if str(row.get(field_name)) != str(expected_value)
+    ]
+    if mismatches:
+        raise EditorSubmissionError(
+            "equivalent editor package has incompatible lineage: " + ", ".join(mismatches)
+        )
+    return int(row["parent_rate_package_id"])
+
+
+def _editor_result(
+    *,
+    submission: EditorSubmission,
+    publication: CompletedModelPublishResult,
+    parent_rate_package_id: int | None,
+) -> EditorPublicationResult:
+    if publication.model_run_id is None:
+        raise RuntimeError("package publication did not record editor lineage")
+    return EditorPublicationResult(
+        submission_id=submission.submission_id,
+        model_name=publication.model_name,
+        parent_rate_package_id=(
+            submission.parent_rate_package_id
+            if parent_rate_package_id is None
+            else parent_rate_package_id
+        ),
+        rate_package_id=publication.rate_package_id,
+        package_version=publication.package_version,
+        model_run_id=publication.model_run_id,
+        package_status=publication.package_status,
+        was_existing=publication.was_existing,
+        model_kind=publication.model_kind,
+        deduplicated=publication.deduplicated,
+    )
+
+
+def _editor_export_id(submission: EditorSubmission) -> str:
+    prefix = "manual" if _submission_model_kind(submission) == "MANUAL_EDIT" else "editor"
+    return f"{prefix}__{submission.submission_id.replace('-', '_')}"
+
+
+def _submission_model_kind(submission: EditorSubmission) -> str:
+    return str(getattr(submission, "model_kind", "EDITOR_EDIT") or "EDITOR_EDIT").upper()
+
+
+def _manual_policy_for_submission(
+    submission: EditorSubmission,
+) -> ManualAdjustmentPolicy | None:
+    if _submission_model_kind(submission) != "MANUAL_EDIT":
+        return None
+    try:
+        return manual_adjustment_policy_from_metadata(getattr(submission, "edit_metadata", None))
+    except (TypeError, ValueError) as exc:
+        raise EditorSubmissionError(
+            f"MANUAL_EDIT submission has invalid manual adjustment policy: {exc}"
+        ) from exc
+
+
+def _manual_policy_provenance_identity(value: object) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        manual_adjustment_policy_from_metadata(value)
+        return _canonical_json(dict(value))
+    except (TypeError, ValueError):  # fmt: skip
+        return None
+
+
+def _require_matching_manual_policy_lineage(
+    *,
+    submission: EditorSubmission,
+    row: Mapping[str, Any] | None,
+) -> None:
+    mismatches: list[str] = []
+    stored_revision: Mapping[str, Any] | None = None
+    if row is None:
+        mismatches.append("package/run provenance is missing")
+    else:
+        if row.get("parent_rate_package_id") != submission.parent_rate_package_id:
+            mismatches.append("parent_rate_package_id")
+        if row.get("parent_model_run_id") != submission.parent_model_run_id:
+            mismatches.append("parent_model_run_id")
+        raw_revision = row.get("revision_metadata_json")
+        try:
+            decoded_revision = (
+                json.loads(raw_revision) if isinstance(raw_revision, str) else raw_revision
+            )
+        except json.JSONDecodeError:
+            decoded_revision = None
+        if isinstance(decoded_revision, Mapping):
+            stored_revision = decoded_revision
+        else:
+            mismatches.append("revision_metadata_json")
+
+    if stored_revision is not None:
+        if stored_revision.get("kind") != "SUPERGLM_MANUAL_EDIT":
+            mismatches.append("revision kind")
+        if stored_revision.get("parent_rate_package_id") != submission.parent_rate_package_id:
+            mismatches.append("revision parent_rate_package_id")
+        if stored_revision.get("parent_model_run_id") != submission.parent_model_run_id:
+            mismatches.append("revision parent_model_run_id")
+
+        requested_policy_identity = _manual_policy_provenance_identity(
+            getattr(submission, "edit_metadata", None)
+        )
+        stored_policy_identity = _manual_policy_provenance_identity(
+            stored_revision.get("edit_metadata")
+        )
+        if requested_policy_identity is None or stored_policy_identity != requested_policy_identity:
+            mismatches.append("manual adjustment policy metadata")
+
+    if mismatches:
+        raise EditorSubmissionError(
+            "equivalent MANUAL_EDIT package has incompatible immutable policy lineage "
+            f"({', '.join(mismatches)}); the one-package-per-equivalent-model identity "
+            "cannot preserve the requested replay contract"
+        )
+
+
+def _submission_directory(
+    submission: EditorSubmission,
+    *,
+    allowed_root: str | Path,
+) -> Path:
+    root = Path(allowed_root).expanduser().resolve()
+    submission_path = Path(submission.path).expanduser().resolve()
+    if not submission_path.is_relative_to(root):
+        raise EditorSubmissionError(
+            f"submission path is outside configured artifact root {root}: {submission_path}"
+        )
+    return submission_path.parent
+
+
+@contextmanager
+def _editor_publication_lock(submission_dir: Path) -> Iterator[None]:
+    lock_path = submission_dir / "publication.lock"
+    with exclusive_file_lock(lock_path):
+        yield
+
+
+def _verify_model_frame_sha256(
+    bundle: CandidateBundle,
+    sql_digest: Any,
+    *,
+    context: str,
+) -> None:
+    if (
+        not isinstance(sql_digest, str)
+        or len(sql_digest) != 64
+        or any(character not in "0123456789abcdef" for character in sql_digest)
+    ):
+        raise EditorSubmissionError(
+            f"{context} SQL manifest model_frame_sha256 is missing or invalid"
+        )
+    if bundle.model_frame_sha256 is None:
+        raise EditorSubmissionError(f"{context} bundle model_frame_sha256 is missing")
+    if bundle.model_frame_sha256 != sql_digest:
+        raise EditorSubmissionError(
+            f"{context} bundle model_frame_sha256 does not match the SQL manifest"
+        )
+
+
+def _require_existing_submission_revision(
+    row: Mapping[str, Any],
+    submission: EditorSubmission,
+) -> None:
+    raw_revision = row.get("revision_metadata_json")
+    try:
+        revision = json.loads(raw_revision) if isinstance(raw_revision, str) else raw_revision
+    except json.JSONDecodeError:
+        revision = None
+    if not isinstance(revision, Mapping):
+        raise EditorSubmissionError(
+            "existing editor publication signed submission metadata does not match: "
+            "revision_metadata_json"
+        )
+
+    expected_kind = (
+        "SUPERGLM_MANUAL_EDIT"
+        if _submission_model_kind(submission) == "MANUAL_EDIT"
+        else "SUPERGLM_EDITOR"
+    )
+    expected = {
+        "kind": expected_kind,
+        "submission_id": submission.submission_id,
+        "submission_path": submission.path,
+        "submission_sha256": submission.sha256,
+        "parent_rate_package_id": submission.parent_rate_package_id,
+        "parent_model_run_id": submission.parent_model_run_id,
+    }
+    mismatches = [
+        field_name
+        for field_name, expected_value in expected.items()
+        if revision.get(field_name) != expected_value
+    ]
+    requested_edit_metadata = getattr(submission, "edit_metadata", None)
+    stored_edit_metadata = revision.get("edit_metadata")
+    try:
+        requested_edit_identity = (
+            None
+            if requested_edit_metadata is None
+            else _canonical_json(dict(requested_edit_metadata))
+        )
+        stored_edit_identity = (
+            None if stored_edit_metadata is None else _canonical_json(dict(stored_edit_metadata))
+        )
+    except (TypeError, ValueError):  # fmt: skip
+        requested_edit_identity = None
+        stored_edit_identity = "invalid"
+    if stored_edit_identity != requested_edit_identity:
+        mismatches.append("edit_metadata")
+    if _submission_model_kind(submission) == "MANUAL_EDIT":
+        requested_policy_identity = _manual_policy_provenance_identity(requested_edit_metadata)
+        stored_policy_identity = _manual_policy_provenance_identity(stored_edit_metadata)
+        if requested_policy_identity is None or stored_policy_identity != requested_policy_identity:
+            mismatches.append("manual adjustment policy lineage")
+    if mismatches:
+        raise EditorSubmissionError(
+            "existing editor publication signed submission metadata does not match: "
+            + ", ".join(mismatches)
+        )
+
+
+def _resolve_existing_editor_publication(
+    engine,
+    submission: EditorSubmission,
+    *,
+    allowed_root: str | Path,
+) -> EditorPublicationResult | None:
+    schemas = schema_names_from_connectable(engine)
+    query = text(
+        f"""
+        SELECT
+            pm.model_name,
+            rp.rate_package_id,
+            rp.package_version,
+            rp.package_status,
+            rp.parent_rate_package_id,
+            rp.revision_metadata_json,
+            mr.model_run_id,
+            mr.parent_model_run_id,
+            mr.run_status,
+            mr.model_version,
+            mr.model_kind,
+            mr.export_id,
+            mr.manifest_id,
+            manifest.model_frame_sha256,
+            mr.rating_workbook_path,
+            mr.rating_workbook_sha256,
+            split_link.split_set_id,
+            mr.model_source_sha256,
+            mr.candidate_artifact_path,
+            mr.candidate_artifact_sha256,
+            mr.candidate_artifact_format,
+            mr.candidate_artifact_size_bytes,
+            mr.candidate_python_version,
+            mr.candidate_superglm_version
+        FROM {schemas.pricing}.PRICING_RATE_PACKAGE AS rp
+        JOIN {schemas.pricing}.PRICING_MODEL AS pm
+          ON pm.model_id = rp.model_id
+        LEFT JOIN {schemas.pricing}.MODEL_RUN AS mr
+          ON mr.rate_package_id = rp.rate_package_id
+        LEFT JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
+          ON manifest.manifest_id = mr.manifest_id
+        LEFT JOIN {schemas.mlops}.MODEL_RUN_SPLIT_SET AS split_link
+          ON split_link.model_run_id = mr.model_run_id
+         AND split_link.manifest_id = mr.manifest_id
+         AND split_link.dataset_role = 'training'
+         AND split_link.split_role = 'validation'
+        WHERE pm.model_name = :model_name
+          AND rp.parent_rate_package_id = :parent_rate_package_id
+          AND rp.source_export_id = :export_id
+        """
+    )
+    with engine.begin() as connection:
+        rows = list(
+            connection.execute(
+                query,
+                {
+                    "model_name": submission.model_name,
+                    "parent_rate_package_id": submission.parent_rate_package_id,
+                    "export_id": _editor_export_id(submission),
+                },
+            )
+            .mappings()
+            .all()
+        )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise EditorSubmissionError(
+            "editor publication requires lineage repair: "
+            f"expected one package/run, found {len(rows)}"
+        )
+    row = dict(rows[0])
+    if (
+        row.get("model_run_id") is None
+        or str(row.get("package_status") or "").upper() != "PUBLISHED"
+        or str(row.get("run_status") or "").upper() != "SUCCESS"
+    ):
+        raise EditorSubmissionError(
+            "editor publication requires lineage repair: package/run is incomplete"
+        )
+    workbook_path = Path(str(row.get("rating_workbook_path") or "")).expanduser().resolve()
+    root = Path(allowed_root).expanduser().resolve()
+    if not workbook_path.is_relative_to(root) or not workbook_path.is_file():
+        raise EditorSubmissionError(
+            "existing editor publication rating workbook is missing or outside the artifact root"
+        )
+    expected_workbook_sha256 = str(row.get("rating_workbook_sha256") or "")
+    if sha256_file(workbook_path) != expected_workbook_sha256:
+        raise EditorSubmissionError(
+            "existing editor publication rating workbook SHA-256 verification failed"
+        )
+    artifact_fields = (
+        "candidate_artifact_path",
+        "candidate_artifact_sha256",
+        "candidate_artifact_format",
+        "candidate_artifact_size_bytes",
+        "candidate_python_version",
+        "candidate_superglm_version",
+    )
+    if any(row.get(field) is None for field in artifact_fields):
+        raise EditorSubmissionError(
+            "editor publication requires lineage repair: candidate artifact metadata is incomplete"
+        )
+    expected_lineage = {
+        "model_name": submission.model_name,
+        "export_id": _editor_export_id(submission),
+        "manifest_id": submission.manifest_id,
+        "split_set_id": submission.split_set_id,
+        "model_source_sha256": submission.model_source_sha256,
+    }
+    expected_sql_lineage = {
+        **expected_lineage,
+        "parent_model_run_id": submission.parent_model_run_id,
+        "model_kind": _submission_model_kind(submission),
+    }
+    if row.get("model_kind") is None:
+        row["model_kind"] = "EDITOR_EDIT"
+    sql_mismatches = [
+        field for field, expected in expected_sql_lineage.items() if row.get(field) != expected
+    ]
+    if sql_mismatches:
+        raise EditorSubmissionError(
+            "existing editor publication SQL lineage does not match the submission: "
+            + ", ".join(sql_mismatches)
+        )
+    _require_existing_submission_revision(row, submission)
+    try:
+        bundle = load_candidate_bundle(
+            row["candidate_artifact_path"],
+            expected_sha256=row["candidate_artifact_sha256"],
+            expected_size_bytes=int(row["candidate_artifact_size_bytes"]),
+            expected_format=row["candidate_artifact_format"],
+            expected_python_version=row["candidate_python_version"],
+            expected_superglm_version=row["candidate_superglm_version"],
+            allowed_root=allowed_root,
+        )
+    except CandidateArtifactError as exc:
+        raise EditorSubmissionError(
+            f"existing editor publication candidate artifact failed verification: {exc}"
+        ) from exc
+    expected_bundle = {
+        **expected_lineage,
+        "model_version": row.get("model_version"),
+    }
+    bundle_mismatches = [
+        field for field, expected in expected_bundle.items() if getattr(bundle, field) != expected
+    ]
+    if bundle_mismatches:
+        raise EditorSubmissionError(
+            "existing editor publication bundle lineage does not match the submission: "
+            + ", ".join(bundle_mismatches)
+        )
+    _verify_model_frame_sha256(
+        bundle,
+        row.get("model_frame_sha256"),
+        context="existing editor publication",
+    )
+    return EditorPublicationResult(
+        submission_id=submission.submission_id,
+        model_name=str(row["model_name"]),
+        parent_rate_package_id=int(row["parent_rate_package_id"]),
+        rate_package_id=int(row["rate_package_id"]),
+        package_version=int(row["package_version"]),
+        model_run_id=int(row["model_run_id"]),
+        package_status=str(row["package_status"]),
+        was_existing=True,
+        model_kind=_submission_model_kind(submission),
+    )
+
+
+def _remove_unpublished_editor_attempts(submission_dir: Path) -> None:
+    published_root = submission_dir / "published"
+    for root_name in (".staging", "attempts"):
+        root = published_root / root_name
+        if not root.is_dir():
+            continue
+        for child in root.iterdir():
+            _remove_path(child)
+
+
+def _new_editor_publication_attempt(submission_dir: Path) -> EditorPublicationAttempt:
+    attempt_id = uuid4().hex
+    published_root = submission_dir / "published"
+    staging_root = published_root / ".staging"
+    attempts_root = published_root / "attempts"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    attempts_root.mkdir(parents=True, exist_ok=True)
+    staging_dir = staging_root / attempt_id
+    final_dir = attempts_root / attempt_id
+    staging_dir.mkdir()
+    return EditorPublicationAttempt(staging_dir=staging_dir, final_dir=final_dir)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
+def load_parent_candidate(
+    engine,
+    submission: EditorSubmission,
+    *,
+    allowed_root: str | Path,
+    model_config: ModelBuildConfig,
+) -> ParentCandidate:
+    submitted_slot = str(submission.deployment_slot or "").strip().upper()
+    configured_slot = str(model_config.deployment_slot or "").strip().upper()
+    if not submitted_slot or submitted_slot != configured_slot:
+        raise EditorSubmissionError(
+            "explicit model config deployment_slot does not match the editor submission"
+        )
+
+    schemas = schema_names_from_connectable(engine)
+    query = text(
+        f"""
+        SELECT
+            pm.model_id,
+            pm.model_name,
+            rp.model_version,
+            rp.package_version,
+            rp.rate_package_id,
+            rp.package_status,
+            rp.effective_from_date,
+            rp.effective_to_date,
+            mr.model_run_id,
+            mr.run_status,
+            mr.model_version AS run_model_version,
+            mr.export_id,
+            mr.manifest_id,
+            manifest.model_frame_sha256,
+            split_link.split_set_id,
+            mr.candidate_artifact_path,
+            mr.candidate_artifact_sha256,
+            mr.candidate_artifact_format,
+            mr.candidate_artifact_size_bytes,
+            mr.candidate_python_version,
+            mr.candidate_superglm_version,
+            mr.model_source_sha256
+        FROM {schemas.pricing}.PRICING_RATE_PACKAGE AS rp
+        JOIN {schemas.pricing}.PRICING_MODEL AS pm
+          ON pm.model_id = rp.model_id
+        JOIN {schemas.pricing}.MODEL_RUN AS mr
+          ON mr.rate_package_id = rp.rate_package_id
+        JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
+          ON manifest.manifest_id = mr.manifest_id
+        LEFT JOIN {schemas.mlops}.MODEL_RUN_SPLIT_SET AS split_link
+          ON split_link.model_run_id = mr.model_run_id
+         AND split_link.manifest_id = mr.manifest_id
+         AND split_link.dataset_role = 'training'
+         AND split_link.split_role = 'validation'
+        WHERE rp.rate_package_id = :rate_package_id
+          AND mr.model_run_id = :model_run_id
+        """
+    )
+    with engine.begin() as connection:
+        rows = list(
+            connection.execute(
+                query,
+                {
+                    "rate_package_id": submission.parent_rate_package_id,
+                    "model_run_id": submission.parent_model_run_id,
+                },
+            )
+            .mappings()
+            .all()
+        )
+    if len(rows) != 1:
+        raise EditorSubmissionError(
+            f"parent package must resolve exactly one successful model run; found {len(rows)}"
+        )
+    row = dict(rows[0])
+    if str(row.get("package_status") or "").upper() != "PUBLISHED":
+        raise EditorSubmissionError("parent rate package must still be PUBLISHED")
+    expected = {
+        "model_name": submission.model_name,
+        "run_model_version": row["model_version"],
+        "package_version": submission.source_package_version,
+        "rate_package_id": submission.parent_rate_package_id,
+        "model_run_id": submission.parent_model_run_id,
+        "manifest_id": submission.manifest_id,
+        "split_set_id": submission.split_set_id,
+        "candidate_artifact_sha256": submission.baseline_candidate_sha256,
+        "model_source_sha256": submission.model_source_sha256,
+    }
+    mismatches = [name for name, value in expected.items() if str(row.get(name)) != str(value)]
+    if str(row.get("run_status") or "").upper() != "SUCCESS":
+        mismatches.append("run_status")
+    if mismatches:
+        raise EditorSubmissionError(
+            "parent SQL lineage no longer matches the submission: " + ", ".join(mismatches)
+        )
+
+    bundle = load_candidate_bundle(
+        row["candidate_artifact_path"],
+        expected_sha256=row["candidate_artifact_sha256"],
+        expected_size_bytes=int(row["candidate_artifact_size_bytes"]),
+        expected_format=row["candidate_artifact_format"],
+        expected_python_version=row["candidate_python_version"],
+        expected_superglm_version=row["candidate_superglm_version"],
+        allowed_root=allowed_root,
+    )
+    for field_name, expected_value in (
+        ("model_name", row["model_name"]),
+        ("model_version", row["run_model_version"]),
+        ("export_id", row["export_id"]),
+        ("manifest_id", submission.manifest_id),
+        ("split_set_id", submission.split_set_id),
+        ("model_source_sha256", submission.model_source_sha256),
+    ):
+        if getattr(bundle, field_name) != expected_value:
+            raise EditorSubmissionError(
+                f"parent bundle {field_name} does not match SQL/submission lineage"
+            )
+    _verify_model_frame_sha256(
+        bundle,
+        row.get("model_frame_sha256"),
+        context="parent candidate",
+    )
+    config = model_config
+    configured_name = config.model_name
+    if str(configured_name) != submission.model_name:
+        raise EditorSubmissionError(
+            "explicit model config does not match the editor submission model_name"
+        )
+    champion = _load_champion_bundle(
+        engine,
+        model_id=int(row["model_id"]),
+        deployment_slot=submitted_slot,
+        allowed_root=allowed_root,
+        parent_bundle=bundle,
+    )
+    return ParentCandidate(
+        model_id=int(row["model_id"]),
+        model_name=str(row["model_name"]),
+        model_version=str(row["model_version"]),
+        package_version=int(row["package_version"]),
+        rate_package_id=int(row["rate_package_id"]),
+        model_run_id=int(row["model_run_id"]),
+        effective_from=(
+            None if row.get("effective_from_date") is None else str(row["effective_from_date"])
+        ),
+        effective_to=(
+            None if row.get("effective_to_date") is None else str(row["effective_to_date"])
+        ),
+        config=config,
+        bundle=bundle,
+        champion=champion,
+    )
+
+
+def _load_champion_bundle(
+    engine,
+    *,
+    model_id: int,
+    deployment_slot: str,
+    allowed_root: Path,
+    parent_bundle: CandidateBundle,
+) -> ChampionSnapshot:
+    schemas = schema_names_from_connectable(engine)
+    query = text(
+        f"""
+        SELECT
+            deployment.rate_package_id,
+            mr.run_status,
+            mr.candidate_artifact_path,
+            mr.candidate_artifact_sha256,
+            mr.candidate_artifact_format,
+            mr.candidate_artifact_size_bytes,
+            mr.candidate_python_version,
+            mr.candidate_superglm_version
+        FROM {schemas.pricing}.PRICING_MODEL_DEPLOYMENT AS deployment
+        LEFT JOIN {schemas.pricing}.MODEL_RUN AS mr
+          ON mr.rate_package_id = deployment.rate_package_id
+        WHERE deployment.model_id = :model_id
+          AND deployment.deployment_slot = :deployment_slot
+          AND deployment.effective_to_ts IS NULL
+        """
+    )
+    with engine.begin() as connection:
+        rows = list(
+            connection.execute(
+                query,
+                {"model_id": model_id, "deployment_slot": deployment_slot},
+            )
+            .mappings()
+            .all()
+        )
+    if not rows:
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=None,
+            bundle=None,
+            unavailable_reason=f"no champion is deployed in {deployment_slot}",
+        )
+    if len(rows) != 1:
+        raise EditorSubmissionError(
+            f"{len(rows)} current champion runs resolved in {deployment_slot}; "
+            "comparison identity is ambiguous"
+        )
+    row = dict(rows[0])
+    rate_package_id = int(row["rate_package_id"])
+    if str(row.get("run_status") or "").upper() != "SUCCESS":
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason="the deployed champion has no successful candidate run",
+        )
+    required = (
+        "candidate_artifact_path",
+        "candidate_artifact_sha256",
+        "candidate_artifact_format",
+        "candidate_artifact_size_bytes",
+        "candidate_python_version",
+        "candidate_superglm_version",
+    )
+    if any(row.get(name) is None for name in required):
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason="the deployed champion has no candidate artifact",
+        )
+    try:
+        champion = load_candidate_bundle(
+            row["candidate_artifact_path"],
+            expected_sha256=row["candidate_artifact_sha256"],
+            expected_size_bytes=int(row["candidate_artifact_size_bytes"]),
+            expected_format=row["candidate_artifact_format"],
+            expected_python_version=row["candidate_python_version"],
+            expected_superglm_version=row["candidate_superglm_version"],
+            allowed_root=allowed_root,
+        )
+    except CandidateArtifactError as exc:
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason=f"the deployed champion artifact could not be verified: {exc}",
+        )
+    if list(champion.X.columns) != list(parent_bundle.X.columns):
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason="the deployed champion uses a different prepared feature frame",
+        )
+    try:
+        champion_contract = OffsetExportContract.model_validate(champion.offset_contract)
+        parent_contract = OffsetExportContract.model_validate(parent_bundle.offset_contract)
+    except ValueError:
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason="the deployed champion has an invalid offset contract",
+        )
+    if champion_contract != parent_contract:
+        return ChampionSnapshot(
+            deployment_slot=deployment_slot,
+            rate_package_id=rate_package_id,
+            bundle=None,
+            unavailable_reason="the deployed champion uses a different offset contract",
+        )
+    return ChampionSnapshot(
+        deployment_slot=deployment_slot,
+        rate_package_id=rate_package_id,
+        bundle=champion,
+    )
+
+
+def _load_edited_model(
+    parent: ParentCandidate,
+    submission: EditorSubmission,
+    *,
+    allowed_root: str | Path,
+) -> Any:
+    manual_policy = _manual_policy_for_submission(submission)
+    submission_format = getattr(submission, "format", LEGACY_SUBMISSION_FORMAT)
+    if submission_format == LEGACY_SUBMISSION_FORMAT:
+        edited_model = _replay_legacy_editor_session(
+            parent,
+            submission,
+            allowed_root=allowed_root,
+        )
+        if manual_policy is not None:
+            _require_manual_policy_replay(parent, edited_model, manual_policy)
+        return edited_model
+    if submission_format != SUBMISSION_FORMAT:
+        raise EditorSubmissionError(f"unsupported editor submission format {submission_format!r}")
+
+    metadata = (
+        submission.edited_model_path,
+        submission.edited_model_sha256,
+        submission.edited_model_size_bytes,
+        submission.edited_model_format,
+        submission.edited_model_python_version,
+        submission.edited_model_superglm_version,
+    )
+    if any(value is None for value in metadata):
+        raise EditorSubmissionError("v2 submission has incomplete edited model metadata")
+    try:
+        edited_model = load_edited_model(
+            submission.edited_model_path,
+            expected_sha256=submission.edited_model_sha256,
+            expected_size_bytes=submission.edited_model_size_bytes,
+            expected_format=submission.edited_model_format,
+            expected_python_version=submission.edited_model_python_version,
+            expected_superglm_version=submission.edited_model_superglm_version,
+            allowed_root=allowed_root,
+        )
+    except CandidateArtifactError as exc:
+        raise EditorSubmissionError(f"edited model artifact failed verification: {exc}") from exc
+
+    if getattr(edited_model, "_result", None) is None:
+        raise EditorSubmissionError("edited model artifact is not fitted")
+    if not callable(getattr(edited_model, "predict", None)):
+        raise EditorSubmissionError("edited model artifact has no callable predict method")
+    try:
+        parent_features = set(parent.bundle.fitted_model.features)
+        edited_features = set(edited_model.features)
+    except (AttributeError, TypeError) as exc:
+        raise EditorSubmissionError("edited model has invalid feature names") from exc
+    if edited_features != parent_features:
+        raise EditorSubmissionError(
+            "edited model feature names do not match the parent model: "
+            f"parent={sorted(parent_features)!r}, edited={sorted(edited_features)!r}"
+        )
+    _predict(edited_model, parent.bundle)
+    if manual_policy is not None:
+        _require_manual_policy_replay(parent, edited_model, manual_policy)
+    return edited_model
+
+
+def _require_manual_policy_replay(
+    parent: ParentCandidate,
+    edited_model: Any,
+    policy: ManualAdjustmentPolicy,
+) -> None:
+    try:
+        _, trusted_model = replay_manual_adjustment_policy(parent.bundle, policy)
+        expected = _predict(trusted_model, parent.bundle)
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        raise EditorSubmissionError(
+            "MANUAL_EDIT policy could not be replayed against the verified parent bundle"
+        ) from exc
+    actual = _predict(edited_model, parent.bundle)
+    if not np.allclose(actual, expected, rtol=1e-10, atol=1e-12):
+        raise EditorSubmissionError(
+            "submitted MANUAL_EDIT model does not match trusted manual adjustment policy "
+            "replay over the full verified parent model frame"
+        )
+    try:
+        receipt_kwargs = {
+            "offset_contract": parent.bundle.offset_contract,
+            "fit_sample_weight_name": parent.bundle.fit_sample_weight_name,
+            "export_weight_name": parent.bundle.export_weight_name,
+        }
+        trusted_receipt = build_superglm_publication_receipt(
+            trusted_model,
+            **receipt_kwargs,
+        )
+        submitted_receipt = build_superglm_publication_receipt(
+            edited_model,
+            **receipt_kwargs,
+        )
+        receipts_match = canonical_receipt_bytes(submitted_receipt) == canonical_receipt_bytes(
+            trusted_receipt
+        )
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        raise EditorSubmissionError(
+            "MANUAL_EDIT publication receipt could not be verified against the trusted "
+            "policy replay"
+        ) from exc
+    if not receipts_match:
+        raise EditorSubmissionError(
+            "submitted MANUAL_EDIT publication receipt does not match trusted manual "
+            "adjustment policy replay"
+        )
+    try:
+        submitted_runtime_sha256 = _normalized_fitted_runtime_sha256(edited_model)
+        trusted_runtime_sha256 = _normalized_fitted_runtime_sha256(trusted_model)
+    except (EOFError, OSError, pickle.PickleError, TypeError, ValueError) as exc:
+        raise EditorSubmissionError(
+            "MANUAL_EDIT normalized fitted runtime state could not be verified"
+        ) from exc
+    if submitted_runtime_sha256 != trusted_runtime_sha256:
+        raise EditorSubmissionError(
+            "submitted MANUAL_EDIT normalized fitted runtime state does not match "
+            "trusted manual adjustment policy replay"
+        )
+
+
+def _normalized_fitted_runtime_sha256(model: Any) -> str:
+    artifact = io.BytesIO()
+    joblib.dump(model, artifact, protocol=5)
+    artifact.seek(0)
+    normalized_model = joblib.load(artifact)
+    normalized_pickle = pickle.dumps(normalized_model, protocol=5)
+    return hashlib.sha256(normalized_pickle).hexdigest()
+
+
+def _replay_legacy_editor_session(
+    parent: ParentCandidate,
+    submission: EditorSubmission,
+    *,
+    allowed_root: str | Path,
+) -> Any:
+    path = Path(submission.editor_session_path).expanduser().resolve()
+    root = Path(allowed_root).expanduser().resolve()
+    if not path.is_relative_to(root):
+        raise EditorSubmissionError(f"editor session is outside artifact root {root}: {path}")
+    if path.stat().st_size != int(submission.editor_session_size_bytes):
+        raise EditorSubmissionError("editor session byte-size verification failed")
+    if sha256_file(path) != submission.editor_session_sha256:
+        raise EditorSubmissionError("editor session SHA-256 verification failed")
+    from superglm.editor import EditorSession
+
+    session = EditorSession.load(path, model=parent.bundle.fitted_model)
+    return session.to_model(
+        X=parent.bundle.X,
+        y=parent.bundle.y,
+        sample_weight=parent.bundle.sample_weight,
+        offset=parent.bundle.offset,
+    )
+
+
+def _predict(model: Any, bundle: CandidateBundle) -> np.ndarray:
+    if bundle.offset is None:
+        prediction = model.predict(bundle.X)
+    else:
+        prediction = model.predict(bundle.X, offset=bundle.offset)
+    values = np.asarray(prediction, dtype=float).reshape(-1)
+    if len(values) != len(bundle.X) or not np.isfinite(values).all():
+        raise EditorSubmissionError("model returned invalid training predictions")
+    return values
+
+
+def _mean_model_deviance(
+    model: Any,
+    y: np.ndarray,
+    prediction: np.ndarray,
+    weights: np.ndarray,
+) -> float | None:
+    distribution = getattr(model, "_distribution", None)
+    deviance_unit = getattr(distribution, "deviance_unit", None)
+    if callable(deviance_unit):
+        unit_values = np.asarray(deviance_unit(y, prediction), dtype=float)
+        if unit_values.shape != y.shape or not np.isfinite(unit_values).all():
+            raise EditorSubmissionError("model distribution returned invalid unit deviance")
+        return float(np.average(unit_values, weights=weights))
+    if np.all(y >= 0) and np.all(prediction > 0):
+        return float(mean_poisson_deviance(y, prediction, sample_weight=weights))
+    return None
+
+
+def training_comparison_metrics(
+    baseline_model: Any,
+    edited_model: Any,
+    bundle: CandidateBundle,
+    *,
+    comparison_name: str,
+) -> tuple[dict[str, float], dict[str, str]]:
+    name = str(comparison_name).strip().lower()
+    if not name:
+        raise ValueError("comparison_name is required")
+    baseline = _predict(baseline_model, bundle)
+    edited = _predict(edited_model, bundle)
+    weights = (
+        np.ones(len(bundle.X), dtype=float)
+        if bundle.sample_weight is None
+        else np.asarray(bundle.sample_weight, dtype=float)
+    )
+    if len(weights) != len(bundle.X) or not np.isfinite(weights).all() or weights.sum() <= 0:
+        raise EditorSubmissionError("training comparison weights are invalid")
+    absolute_delta = np.abs(edited - baseline)
+    relative_delta = absolute_delta / np.maximum(np.abs(baseline), 1e-12)
+    prefix = f"editor_training_{name}"
+    metrics = {
+        f"{prefix}_mean_absolute_prediction_delta": float(
+            np.average(absolute_delta, weights=weights)
+        ),
+        f"{prefix}_max_absolute_prediction_delta": float(np.max(absolute_delta)),
+        f"{prefix}_mean_absolute_relative_change": float(
+            np.average(relative_delta, weights=weights)
+        ),
+    }
+    y = np.asarray(bundle.y, dtype=float)
+    if len(y) == len(bundle.X) and np.isfinite(y).all():
+        baseline_deviance = _mean_model_deviance(
+            baseline_model,
+            y,
+            baseline,
+            weights,
+        )
+        edited_deviance = _mean_model_deviance(
+            edited_model,
+            y,
+            edited,
+            weights,
+        )
+    else:
+        baseline_deviance = None
+        edited_deviance = None
+    if baseline_deviance is not None and edited_deviance is not None:
+        metrics[f"{prefix}_baseline_deviance"] = baseline_deviance
+        metrics[f"{prefix}_edited_deviance"] = edited_deviance
+        delta_name = (
+            "editor_training_deviance_delta" if name == "parent" else f"{prefix}_deviance_delta"
+        )
+        metrics[delta_name] = edited_deviance - baseline_deviance
+    scope = f"editor_training_{name}"
+    return metrics, {metric_name: scope for metric_name in metrics}
+
+
+def parent_cv_metrics(
+    bundle: CandidateBundle,
+) -> dict[str, float]:
+    report = bundle.cv_report
+    metrics: dict[str, float] = {}
+    for report_name, metric_prefix in (
+        ("mean_scores", "cv_mean"),
+        ("pooled_scores", "cv_pooled"),
+        ("std_scores", "cv_std"),
+    ):
+        values = report.get(report_name) or {}
+        for metric_name, raw_value in values.items():
+            value = float(raw_value)
+            if not math.isfinite(value):
+                raise EditorSubmissionError(
+                    f"parent CV metric {report_name}.{metric_name} is not finite"
+                )
+            metrics[f"{metric_prefix}_{metric_name}"] = value
+    if report.get("oof_coverage") is not None:
+        coverage = float(report["oof_coverage"])
+        if not math.isfinite(coverage):
+            raise EditorSubmissionError("parent CV OOF coverage is not finite")
+        metrics["cv_oof_coverage"] = coverage
+    return metrics
+
+
+def _canonical_json(payload: dict[str, Any]) -> str:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def export_edited_model(
+    parent: ParentCandidate,
+    submission: EditorSubmission,
+    *,
+    created_by: str,
+    allowed_root: str | Path,
+    write_dir: str | Path,
+    published_dir: str | Path,
+    edited_model: Any = _EDITED_MODEL_UNSET,
+) -> EditorExport:
+    if edited_model is _EDITED_MODEL_UNSET:
+        edited_model = _load_edited_model(parent, submission, allowed_root=allowed_root)
+    root = Path(allowed_root).expanduser().resolve()
+    output_dir = Path(write_dir).expanduser().resolve()
+    final_dir = Path(published_dir).expanduser().resolve()
+    if not output_dir.is_relative_to(root) or not final_dir.is_relative_to(root):
+        raise EditorSubmissionError("editor publication attempt is outside artifact root")
+    if not output_dir.is_dir():
+        raise EditorSubmissionError("editor publication staging directory does not exist")
+    workbook_write_path = output_dir / "rating_tables.xlsx"
+    workbook_path = final_dir / "rating_tables.xlsx"
+    contract = parent.bundle.offset_contract
+    export_options: dict[str, Any] = {}
+    if parent.bundle.offset is not None:
+        export_options["offset"] = parent.bundle.offset
+    if contract.handling == "EXPORTED_FACTOR":
+        export_options.update(
+            offset_source=parent.bundle.offset_source,
+            offset_name=contract.source_factor_name,
+            offset_kind="auto",
+        )
+    export_rating_tables(
+        edited_model,
+        parent.bundle.X,
+        parent.bundle.y,
+        parent.bundle.export_weight,
+        output_path=workbook_write_path,
+        **export_options,
+    )
+    workbook_sha256 = sha256_file(workbook_write_path)
+    receipt = build_superglm_publication_receipt(
+        edited_model,
+        offset_contract=contract,
+        fit_sample_weight_name=parent.bundle.fit_sample_weight_name,
+        export_weight_name=parent.bundle.export_weight_name,
+    )
+    receipt_write_path = output_dir / "publication_receipt.json"
+    receipt_path = final_dir / "publication_receipt.json"
+    receipt_sha256 = write_publication_receipt(receipt, receipt_write_path)
+
+    baseline_cv_metrics = parent_cv_metrics(parent.bundle)
+    metrics, metric_scopes = training_comparison_metrics(
+        parent.bundle.fitted_model,
+        edited_model,
+        parent.bundle,
+        comparison_name="parent",
+    )
+    champion_bundle = parent.champion.bundle
+    if champion_bundle is not None:
+        champion_metrics, champion_scopes = training_comparison_metrics(
+            champion_bundle.fitted_model,
+            edited_model,
+            parent.bundle,
+            comparison_name="champion",
+        )
+        metrics.update(champion_metrics)
+        metric_scopes.update(champion_scopes)
+    champion_comparison = parent.champion.revision_metadata()
+    edited_bundle = replace(
+        parent.bundle,
+        fitted_model=edited_model,
+        cv_report={},
+        model_name=parent.model_name,
+        model_version=parent.model_version,
+        export_id=_editor_export_id(submission),
+    )
+    artifact: CandidateArtifactMetadata = save_candidate_bundle(
+        edited_bundle,
+        output_dir / "candidate_bundle.joblib",
+    )
+    artifact = replace(
+        artifact,
+        path=str(final_dir / "candidate_bundle.joblib"),
+    )
+    revision_metadata = {
+        "kind": (
+            "SUPERGLM_MANUAL_EDIT"
+            if _submission_model_kind(submission) == "MANUAL_EDIT"
+            else "SUPERGLM_EDITOR"
+        ),
+        "schema_version": 1,
+        "submission_id": submission.submission_id,
+        "reason": submission.reason,
+        "claimed_identity": submission.claimed_identity,
+        "parent_rate_package_id": submission.parent_rate_package_id,
+        "parent_model_run_id": submission.parent_model_run_id,
+        "submission_path": submission.path,
+        "submission_sha256": submission.sha256,
+        "editor_session_path": submission.editor_session_path,
+        "editor_session_sha256": submission.editor_session_sha256,
+        "editor_session_size_bytes": submission.editor_session_size_bytes,
+        "baseline_candidate_sha256": submission.baseline_candidate_sha256,
+        "baseline_cv_metrics": baseline_cv_metrics,
+        "comparison_metrics": {
+            name: value for name, value in metrics.items() if name.startswith("editor_training_")
+        },
+        "champion_comparison": champion_comparison,
+    }
+    edit_metadata = getattr(submission, "edit_metadata", None)
+    if edit_metadata is not None:
+        revision_metadata["edit_metadata"] = edit_metadata
+    if getattr(submission, "format", LEGACY_SUBMISSION_FORMAT) == SUBMISSION_FORMAT:
+        revision_metadata.update(
+            edited_model_path=submission.edited_model_path,
+            edited_model_sha256=submission.edited_model_sha256,
+            edited_model_size_bytes=submission.edited_model_size_bytes,
+            edited_model_format=submission.edited_model_format,
+            edited_model_python_version=submission.edited_model_python_version,
+            edited_model_superglm_version=submission.edited_model_superglm_version,
+        )
+    completed_build = ApprovedModelBuild(
+        model_id=parent.model_id,
+        model_name=parent.model_name,
+        model_version=parent.model_version,
+        model_type=parent.config.model_type,
+        model_kind=_submission_model_kind(submission),
+        target_name=parent.config.target_name,
+        deployment_slot=submission.deployment_slot,
+        manifest_id=submission.manifest_id,
+        split_set_id=submission.split_set_id,
+        export_id=_editor_export_id(submission),
+        rating_workbook_path=str(workbook_path),
+        rating_workbook_sha256=workbook_sha256,
+        effective_from=parent.effective_from,
+        created_by=created_by,
+        publication_receipt_path=str(receipt_path),
+        publication_receipt_sha256=receipt_sha256,
+        candidate_artifact_path=artifact.path,
+        candidate_artifact_sha256=artifact.sha256,
+        candidate_artifact_format=artifact.format,
+        candidate_artifact_size_bytes=artifact.size_bytes,
+        candidate_python_version=artifact.python_version,
+        candidate_superglm_version=artifact.superglm_version,
+        model_source_sha256=submission.model_source_sha256,
+        model_frame_sha256=edited_bundle.model_frame_sha256,
+        metrics=metrics,
+        metric_scopes=metric_scopes,
+    )
+    return EditorExport(
+        completed_build=completed_build,
+        publication_receipt=receipt,
+        revision_metadata=revision_metadata,
+        edited_model=edited_model,
+        bundle=edited_bundle,
+    )

@@ -76,7 +76,7 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     publish_completed_model_build,
 )
 from pricing_pipeline.publishing.deployment import deploy_rate_package
-from pricing_pipeline.publishing.editor_candidate import publish_editor_submission
+from pricing_pipeline.publishing.editor import publish_editor_submission
 from pricing_pipeline.publishing.model_registry import (
     register_pricing_model,
 )
