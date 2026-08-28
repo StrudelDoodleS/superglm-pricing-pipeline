@@ -1,7 +1,7 @@
 """Publish prepared rating tables in one explicit SQL Server transaction.
 
-The concrete package and lineage SQL intentionally stays together in this module so
-maintainers can audit transaction order without following a repository abstraction.
+Concrete package SQL remains here; lineage writes live in ``lineage.py`` and run in
+the same transaction so maintainers can audit order without a repository abstraction.
 """
 
 from __future__ import annotations
@@ -976,15 +976,33 @@ def _insert_draft_package(
     """Validate release intent and insert the one prepared DRAFT package."""
     build = prepared.build
     export_id = build.export_id
-    meta = {
+    export = {
         name: None if pd.isna(value) else value
         for name, value in tables.export_frame.iloc[0].items()
     }
     model_id = build.model_id
     if model_id is None:
         raise ModelRegistryError(f"prepared export {export_id!r} is missing a registered model_id")
-    if int(meta["model_id"]) != int(model_id):
-        raise ModelRegistryError("prepared rating-table model_id changed before publication")
+    release = {
+        "export_id": export_id,
+        "model_name": build.model_name,
+        "model_version": build.model_version,
+        "effective_from_date": build.effective_from,
+        "effective_to_date": prepared.effective_to,
+        "source_file": str(Path(build.rating_workbook_path).resolve()),
+        "publication_receipt_sha256": build.publication_receipt_sha256,
+        "created_by": build.created_by,
+    }
+    changed = [
+        field
+        for field, expected in release.items()
+        if _identity_text(export.get(field)) != _identity_text(expected)
+    ]
+    if changed:
+        raise ValueError(
+            "prepared rating-table release identity changed before publication: "
+            + ", ".join(changed)
+        )
 
     parent_id = prepared.parent_rate_package_id
     if parent_id is not None:
@@ -1010,13 +1028,13 @@ def _insert_draft_package(
         if str(parent["package_status"]) != "PUBLISHED":
             raise ValueError("parent rate package must have PUBLISHED status")
         for field in ("model_version", "effective_from_date", "effective_to_date"):
-            if _identity_text(parent[field]) != _identity_text(meta[field]):
+            if _identity_text(parent[field]) != _identity_text(release[field]):
                 raise ValueError(
                     f"parent {field}={parent[field]!r} does not match "
-                    f"prepared {field}={meta[field]!r}"
+                    f"prepared {field}={release[field]!r}"
                 )
     else:
-        model_version = _identity_text(meta["model_version"])
+        model_version = _identity_text(release["model_version"])
         if model_version is None:
             raise ValueError("root package publication requires model_version")
         reservation = (
@@ -1054,8 +1072,8 @@ def _insert_draft_package(
                 f"prepared model_version {model_version!r} for export_id={export_id!r}"
             )
 
-    offset_handling = meta["offset_handling"] or "UNKNOWN"
-    offset_factor_name = meta["offset_factor_name"]
+    offset_handling = export["offset_handling"] or "UNKNOWN"
+    offset_factor_name = export["offset_factor_name"]
     offset_terms = tables.rate_cells.loc[
         tables.rate_cells["term_type"] == "OFFSET_FACTOR", "term_name"
     ]
@@ -1079,15 +1097,28 @@ def _insert_draft_package(
         {"model_id": model_id},
     ).scalar_one()
     params = {
-        **meta,
-        "model_id": model_id,
         "parent_rate_package_id": parent_id,
+        "model_id": int(model_id),
+        "model_name": release["model_name"],
+        "model_version": release["model_version"],
         "package_version": package_version,
+        "base_rate": export["base_rate"],
+        "effective_from_date": release["effective_from_date"],
+        "effective_to_date": release["effective_to_date"],
         "package_status": "DRAFT",
         "source_export_id": export_id,
+        "source_file": release["source_file"],
+        "publication_receipt_json": export["publication_receipt_json"],
+        "publication_receipt_sha256": release["publication_receipt_sha256"],
+        "staging_content_sha256": tables.staging_content_sha256,
+        "package_metadata_json": export["package_metadata_json"],
         "revision_metadata_json": canonical_revision_metadata(prepared.revision_metadata),
         "offset_handling": offset_handling,
-        "created_by": build.created_by,
+        "offset_factor_name": offset_factor_name,
+        "offset_source_name": export["offset_source_name"],
+        "offset_label": export["offset_label"],
+        "metadata_origin": export["metadata_origin"],
+        "created_by": release["created_by"],
     }
     rate_package_id = connection.execute(
         text(
@@ -1619,6 +1650,7 @@ def publish_sqlserver(
         _lock_export(connection, prepared.build.export_id)
         existing = _resolve_existing_or_equivalent(connection, prepared, tables)
         if existing is not None:
+            _delete_staging_children(connection, export_id=prepared.build.export_id)
             return existing
         _replace_staging_frames(connection, prepared, tables)
         package = _insert_draft_package(connection, prepared, tables)

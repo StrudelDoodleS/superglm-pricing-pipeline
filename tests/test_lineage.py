@@ -104,7 +104,7 @@ def test_record_model_run_derives_audit_evidence_from_approved_build():
 
 
 @pytest.mark.parametrize("parent_model_run_id", [409, None])
-def test_record_model_run_replaces_complete_mutable_lineage_snapshot(
+def test_record_model_run_inserts_complete_lineage_snapshot(
     parent_model_run_id,
 ):
     connection = _Connection()
