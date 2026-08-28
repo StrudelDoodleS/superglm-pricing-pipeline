@@ -11,13 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.special import gammaln
-from superglm import SuperGLM
-from superglm.distributions import Gamma, Poisson, Tweedie
-from superglm.editor import EditorSession
-from superglm.editor.payloads import session_payload
-from superglm.profiling.tweedie import tweedie_logpdf
 
-from pricing_pipeline.reporting._core import UnderwriterReportError
 from pricing_pipeline.reporting.evidence import (
     MAX_INTERACTION_ROWS,
     MAX_MAIN_EFFECT_GRID_POINTS,
@@ -31,6 +25,7 @@ from pricing_pipeline.reporting.evidence import (
     ModelEvidence,
     ReportContext,
 )
+from pricing_pipeline.reporting.inputs import UnderwriterReportError
 
 _MODEL_SOURCE = "SuperGLM object"
 _LIKELIHOOD_SOURCE = "fitted SuperGLM object"
@@ -197,6 +192,8 @@ def _bind_fitted_predictions(
     model: object,
     context: ReportContext,
 ) -> None:
+    from superglm import SuperGLM
+
     if not isinstance(model, SuperGLM) or getattr(model, "_result", None) is None:
         return
     message = (
@@ -224,7 +221,7 @@ def _bind_fitted_predictions(
         raise UnderwriterReportError(message)
 
 
-def _aligned_fitted_offset(model: SuperGLM, context: ReportContext) -> np.ndarray | None:
+def _aligned_fitted_offset(model: object, context: ReportContext) -> np.ndarray | None:
     if context.offset is not None:
         return np.asarray(context.offset, dtype=float)
     if not bool(getattr(model, "_fit_used_offset", False)):
@@ -293,6 +290,8 @@ class SuppliedTweedieLikelihoodAdapter:
 
 
 def _likelihood_from_superglm(model: object) -> _LikelihoodSpec | None:
+    from superglm.distributions import Gamma, Poisson, Tweedie
+
     distribution = getattr(model, "_distribution", None)
     if isinstance(distribution, Poisson):
         return _LikelihoodSpec(tweedie_power=1.0, dispersion=1.0)
@@ -367,6 +366,8 @@ def _exact_nll_contributions(
             - gammaln(shape)
         )
     else:
+        from superglm.profiling.tweedie import tweedie_logpdf
+
         log_likelihood = tweedie_logpdf(
             actual,
             prediction,
@@ -827,6 +828,9 @@ def _model_main_effects(
     *,
     n_points: int,
 ) -> dict[str, MainEffectEvidence]:
+    from superglm.editor import EditorSession
+    from superglm.editor.payloads import session_payload
+
     try:
         session = EditorSession.from_model(
             model,

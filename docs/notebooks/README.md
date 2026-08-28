@@ -267,8 +267,9 @@ supported because most do not have a stable business interpretation.
 
 ## Scaffold configuration
 
-Copy `pricing_scaffold.example.toml` to `pricing_scaffold.toml` at the scaffold
-root:
+At the scaffold root, run `pricing-pipeline init` (or
+`python -m pricing_pipeline init` after installation), then edit the generated
+`pricing_scaffold.toml`:
 
 ```toml
 [notebook_defaults]
@@ -282,14 +283,21 @@ carry_forward = true
 ```
 
 ```bash
-uv run python scripts/scaffold_pricing_model.py \
+uv run pricing-pipeline scaffold \
   --model-name CLAIM_FREQUENCY \
   --target-name claim_count
 ```
 
+From a source checkout, `uv run python scripts/scaffold_pricing_model.py` calls
+the same installed scaffold command with the same options. It is only an
+equivalent checkout wrapper for the final step: the project must already be
+initialized and `pricing_scaffold.toml` must exist.
+
 Precedence is command line, explicit `--config`, auto-discovered
-`<root>/pricing_scaffold.toml`, then built-in local defaults. Unknown sections
-or keys fail fast. `ALLOW_REMOTE_WRITES` cannot be set in TOML.
+`<root>/pricing_scaffold.toml`. There is no built-in-default fallback when the
+auto-discovered file is absent; run `pricing-pipeline init`, edit the generated
+file, then run `pricing-pipeline scaffold`. Unknown sections or keys fail fast.
+`ALLOW_REMOTE_WRITES` cannot be set in TOML.
 
 `source_selector = "deployed"` makes notebook 05 open the package currently
 deployed in the model's configured slot. An exact `PACKAGE_VERSION` in the

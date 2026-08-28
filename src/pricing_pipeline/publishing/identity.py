@@ -2,21 +2,69 @@
 
 from __future__ import annotations
 
+import json
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
 
 from sqlalchemy import text
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.staging import (
-    rating_workbook_model_equivalence_sha256,
-)
 
 
 class ModelEquivalenceError(RuntimeError):
     """Raised when equivalence evidence or prior durable lineage is inconsistent."""
+
+
+def clean_identifier(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_]+", "_", str(value).strip())
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "unknown"
+
+
+def canonical_json(value: object) -> str:
+    """Serialize identity-bearing JSON with one stable representation."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def identity_value(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def immutable_conflicts(
+    *,
+    stored: Mapping[str, object],
+    requested: Mapping[str, object],
+    fields: Sequence[str],
+) -> tuple[str, ...]:
+    return tuple(
+        field
+        for field in fields
+        if identity_value(stored.get(field)) != identity_value(requested.get(field))
+    )
+
+
+def bind_model_equivalence(
+    build: ApprovedModelBuild,
+    *,
+    calculated_sha256: str,
+) -> ApprovedModelBuild:
+    existing = build.model_equivalence_sha256
+    if existing is not None and existing != calculated_sha256:
+        raise ModelEquivalenceError(
+            "completed build equivalence fingerprint does not match prepared rating tables"
+        )
+    return build.model_copy(update={"model_equivalence_sha256": calculated_sha256})
 
 
 @dataclass(frozen=True)
@@ -40,7 +88,7 @@ class EquivalentModelPublication:
     publication_receipt_sha256: str | None
 
 
-def _date_identity(value: object) -> str | None:
+def date_identity(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -54,35 +102,6 @@ def _date_identity(value: object) -> str | None:
         return datetime.fromisoformat(cleaned).date().isoformat()
     except ValueError:
         return date.fromisoformat(cleaned).isoformat()
-
-
-def ensure_model_equivalence(
-    build: ApprovedModelBuild,
-    *,
-    effective_to: str | None = None,
-) -> ApprovedModelBuild:
-    """Calculate and bind the tolerance-normalized rating fingerprint locally."""
-    digest = rating_workbook_model_equivalence_sha256(
-        workbook_path=Path(build.rating_workbook_path),
-        export_id=build.export_id,
-        model_name=build.model_name,
-        model_version=build.model_version,
-        target_name=build.target_name,
-        model_type=build.model_type,
-        effective_from=build.effective_from,
-        effective_to=effective_to,
-        created_by=build.created_by,
-        model_id=build.model_id,
-        publication_receipt_path=build.publication_receipt_path,
-        publication_receipt_sha256=build.publication_receipt_sha256,
-    )
-    if build.model_equivalence_sha256 is not None:
-        if build.model_equivalence_sha256 != digest:
-            raise ModelEquivalenceError(
-                "completed build model equivalence digest does not match its local workbook"
-            )
-        return build
-    return build.model_copy(update={"model_equivalence_sha256": digest})
 
 
 def find_equivalent_publication(
@@ -188,8 +207,8 @@ def find_equivalent_publication(
         raise ModelEquivalenceError(
             "equivalent model run split lineage points at a different manifest"
         )
-    stored_effective_from = _date_identity(row["effective_from_date"])
-    requested_effective_from = _date_identity(build.effective_from)
+    stored_effective_from = date_identity(row["effective_from_date"])
+    requested_effective_from = date_identity(build.effective_from)
     if stored_effective_from != requested_effective_from:
         raise ModelEquivalenceError(
             "an equivalent model build already exists under a different "
@@ -255,10 +274,47 @@ def release_unused_model_version_reservation(
         )
 
 
+def canonical_revision_metadata(value: Mapping[str, object] | None) -> str | None:
+    """Return the one canonical JSON identity accepted by both backends."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("revision_metadata must be a mapping")  # noqa: TRY004
+
+    def normalise(item: object) -> object:
+        if isinstance(item, Mapping):
+            if not all(isinstance(key, str) for key in item):
+                raise ValueError("revision_metadata keys must be strings")
+            return {key: normalise(nested) for key, nested in item.items()}
+        if isinstance(item, list | tuple):
+            return [normalise(nested) for nested in item]
+        return item
+
+    normalised = normalise(value)
+    try:
+        return json.dumps(
+            normalised,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except ValueError as exc:
+        raise ValueError("revision_metadata must contain only finite numbers") from exc
+    except TypeError as exc:
+        raise ValueError("revision_metadata must contain only JSON-serializable values") from exc
+
+
 __all__ = [
     "EquivalentModelPublication",
     "ModelEquivalenceError",
-    "ensure_model_equivalence",
+    "bind_model_equivalence",
+    "canonical_json",
+    "canonical_revision_metadata",
+    "clean_identifier",
+    "date_identity",
     "find_equivalent_publication",
+    "identity_value",
+    "immutable_conflicts",
     "release_unused_model_version_reservation",
 ]

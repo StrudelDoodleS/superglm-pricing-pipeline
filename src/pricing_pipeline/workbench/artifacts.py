@@ -15,8 +15,7 @@ import numpy as np
 import pandas as pd
 from packaging.version import InvalidVersion, Version
 
-from pricing_pipeline.publishing.superglm_publication_receipt import OffsetExportContract
-
+from pricing_pipeline.publishing.metadata import OffsetExportContract
 
 BUNDLE_FORMAT = "superglm-candidate-joblib-v2"
 EDITED_MODEL_FORMAT = "superglm-edited-model-joblib-v1"
@@ -80,9 +79,7 @@ class CandidateBundle:
                     raise CandidateArtifactError(f"{role}_name was supplied without {role}")
                 continue
             if not isinstance(values, pd.Series | np.ndarray):
-                raise CandidateArtifactError(
-                    f"{role} must be a pandas Series or numpy array"
-                )
+                raise CandidateArtifactError(f"{role} must be a pandas Series or numpy array")
             if isinstance(values, np.ndarray) and values.ndim != 1:
                 raise CandidateArtifactError(f"{role} must be one-dimensional")
             series = pd.Series(values).reset_index(drop=True)
@@ -181,9 +178,7 @@ def save_edited_model(
     target.parent.mkdir(parents=True, exist_ok=True)
     saved = Path(editor_session.save_model(target)).expanduser().resolve()
     if saved != target or not target.is_file():
-        raise CandidateArtifactError(
-            "editor session did not create the requested model artifact"
-        )
+        raise CandidateArtifactError("editor session did not create the requested model artifact")
     return CandidateArtifactMetadata(
         path=str(target),
         sha256=_sha256(target),
@@ -208,8 +203,7 @@ def load_edited_model(
     root = Path(allowed_root).expanduser().resolve()
     if not artifact_path.is_relative_to(root):
         raise CandidateArtifactError(
-            f"edited model artifact is outside configured artifact root {root}: "
-            f"{artifact_path}"
+            f"edited model artifact is outside configured artifact root {root}: {artifact_path}"
         )
     if expected_format != EDITED_MODEL_FORMAT:
         raise CandidateArtifactError(
@@ -222,9 +216,7 @@ def load_edited_model(
     )
 
     if not artifact_path.is_file():
-        raise CandidateArtifactError(
-            f"edited model artifact does not exist: {artifact_path}"
-        )
+        raise CandidateArtifactError(f"edited model artifact does not exist: {artifact_path}")
     try:
         artifact_bytes = artifact_path.read_bytes()
     except OSError as exc:

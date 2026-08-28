@@ -34,7 +34,7 @@ def test_file_lock_consumers_do_not_import_fcntl_at_module_load():
     repository_root = Path(__file__).resolve().parents[1]
     consumer_paths = (
         repository_root / "src/pricing_pipeline/infra/offline_sqlite.py",
-        repository_root / "src/pricing_pipeline/publishing/editor_candidate.py",
+        repository_root / "src/pricing_pipeline/publishing/editor.py",
         repository_root / "src/pricing_pipeline/workbench/submission.py",
     )
 

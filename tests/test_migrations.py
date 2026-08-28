@@ -747,7 +747,7 @@ def test_superglm_publication_receipt_migration_adds_metadata_columns():
 
 
 def test_package_writer_allocates_version_under_lock():
-    writer = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    writer = Path("src/pricing_pipeline/publishing/sqlserver.py").read_text(encoding="utf-8")
 
     assert "WITH (UPDLOCK, HOLDLOCK)" in writer
     assert "MAX(package_version)" in writer
@@ -924,7 +924,7 @@ def test_package_immutability_migration_blocks_direct_edits_to_frozen_packages()
 
 
 def test_rating_package_loader_builds_package_as_draft_before_final_status():
-    loader = Path("src/pricing_pipeline/publishing/package_writer.py").read_text(encoding="utf-8")
+    loader = Path("src/pricing_pipeline/publishing/sqlserver.py").read_text(encoding="utf-8")
 
     assert "requested_package_status" not in loader
     assert '"package_status": "DRAFT"' in loader

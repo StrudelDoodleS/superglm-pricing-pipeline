@@ -16,7 +16,7 @@ from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.orchestration.publish_completed_build import (
     CompletedModelPublishResult,
 )
-from pricing_pipeline.publishing.model_registry import PricingModelRecord
+from pricing_pipeline.publishing.publish import PricingModelRecord
 
 
 def _context(api, tmp_path: Path):

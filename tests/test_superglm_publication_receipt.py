@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
-from decimal import Decimal
 import hashlib
 import json
+from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
-from pricing_pipeline.publishing.naming import clean_identifier
-from pricing_pipeline.publishing.superglm_publication_receipt import (
+from pricing_pipeline.publishing.identity import clean_identifier
+from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
     SuperGLMPublicationReceipt,
     canonical_receipt_bytes,
@@ -106,7 +106,7 @@ def test_canonical_receipt_rejects_non_finite_package_metadata():
 @pytest.mark.parametrize(
     "metadata",
     [
-        {"bad": datetime(2026, 1, 1)},
+        {"bad": datetime(2026, 1, 1)},  # noqa: DTZ001
         {"bad": Decimal("1.25")},
         {"bad": ("tuple",)},
         {1: "not a string key"},
@@ -122,7 +122,7 @@ def test_canonical_receipt_rejects_copied_invalid_package_metadata(metadata):
 @pytest.mark.parametrize(
     "metadata",
     [
-        {"bad": datetime(2026, 1, 1)},
+        {"bad": datetime(2026, 1, 1)},  # noqa: DTZ001
         {"bad": Decimal("1.25")},
         {"bad": ("tuple",)},
         {1: "not a string key"},

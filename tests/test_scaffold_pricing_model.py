@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -9,14 +11,10 @@ from pathlib import Path
 
 import pytest
 
-import scripts.scaffold_pricing_model as scaffold_module
-from scripts.scaffold_pricing_model import (
-    _NOTEBOOK_NAMES,
-    ScaffoldOptions,
-    load_scaffold_config,
-    parse_args,
-    scaffold_pricing_model,
-)
+from pricing_pipeline import cli
+from pricing_pipeline.scaffold.config import ScaffoldOptions, load_scaffold_config
+from pricing_pipeline.scaffold.render import NOTEBOOK_NAMES as _NOTEBOOK_NAMES
+from pricing_pipeline.scaffold.service import scaffold_pricing_model
 
 NOTEBOOK_NAME = re.compile(r"^\d{2}_[a-z0-9]+(?:_[a-z0-9]+)*\.ipynb$")
 EXPECTED_NOTEBOOKS = (
@@ -27,6 +25,25 @@ EXPECTED_NOTEBOOKS = (
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
 )
+
+V021_NOTEBOOK_DIGESTS = {
+    "local": {
+        "01_data_ingestion.ipynb": "6bbbe516361acca41e7790c32fbe7cfe0fde26db53612d481063adb3541a6a6a",
+        "02_model_exploration.ipynb": "d7c164dcb2d4bb61546ba8b67ae68541b95b60256b4d40b99b53193ab549579a",
+        "03_model_training.ipynb": "cde71cff84997de77336656ba17f7bcd61174c49aafdfad6604dc8b65527506c",
+        "04_model_editor.ipynb": "0a713df68f6827334b41554340c7ad6282254cada1136da77ed61ec98a5bbff1",
+        "05_manual_adjustment.ipynb": "ed030abf68e61daf70bba0483fd02c936a8fbda9ad3d0131c5ff6e8ec38885a9",
+        "06_model_deployment.ipynb": "bc4490a86f7e18851d782d79a8c6f7f3e74ee2b585a577babd81066ddf41ba50",
+    },
+    "remote": {
+        "01_data_ingestion.ipynb": "9347209858b4894b6414824b5d3fa0c7b36cfc1ebc6d0eabfcf9b4a8f66e963f",
+        "02_model_exploration.ipynb": "99aa5f64d138e52ad363ae48eee246e55a6485dd0beba78c401ce04e4e943c77",
+        "03_model_training.ipynb": "810ac83bcba5bae76138a3a20f26381447a509c59e1b2855372466cb071832ef",
+        "04_model_editor.ipynb": "9b337092cb7a1ae20cdb346bcaf7e8ca7714f21e538b348fc06634332a8c0960",
+        "05_manual_adjustment.ipynb": "943d703ceb5505c66744ac3124ea44f94b8f3a6185acb7d263e5e59f6e40b132",
+        "06_model_deployment.ipynb": "e36725cfe48fdac7f9da8d0277184e6c26eab84e5c024d3cb973ad4e873dcdda",
+    },
+}
 
 
 def _legacy_deployment_notebook(label: str) -> str:
@@ -85,6 +102,106 @@ def _scaffold(tmp_path: Path, **overrides) -> Path:
 def test_scaffold_has_one_strict_ordered_notebook_contract():
     assert _NOTEBOOK_NAMES == EXPECTED_NOTEBOOKS
     assert all(NOTEBOOK_NAME.fullmatch(name) for name in _NOTEBOOK_NAMES)
+
+
+def test_scaffold_has_one_cli_and_no_legacy_module():
+    assert importlib.util.find_spec("pricing_pipeline.scaffold.legacy") is None
+    source = Path("scripts/scaffold_pricing_model.py").read_text(encoding="utf-8")
+    assert "pricing_pipeline.cli" in source
+    assert "sys.modules" not in source
+    assert "scaffold.legacy" not in source
+
+
+@pytest.mark.parametrize(
+    ("case", "settings"),
+    (
+        (
+            "local",
+            {
+                "deployment_slot": "CLAIM_FREQUENCY_UAT",
+                "database_mode": "local",
+                "runtime_module": None,
+                "expected_remote_database": "",
+                "manual_edit_source_selector": "deployed",
+                "manual_edit_carry_forward": True,
+            },
+        ),
+        (
+            "remote",
+            {
+                "deployment_slot": "CLAIM_FREQUENCY_PROD",
+                "database_mode": "remote",
+                "runtime_module": "work_runtime.database",
+                "expected_remote_database": "PricingAudit",
+                "manual_edit_source_selector": "latest",
+                "manual_edit_carry_forward": False,
+            },
+        ),
+    ),
+)
+def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
+    try:
+        from pricing_pipeline.scaffold.render import render_notebooks
+    except ModuleNotFoundError:
+        pytest.fail("the installed scaffold renderer is missing")
+
+    rendered = render_notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="Claim frequency",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        **settings,
+    )
+
+    assert {
+        name: hashlib.sha256(source.encode("utf-8")).hexdigest()
+        for name, source in rendered.items()
+    } == V021_NOTEBOOK_DIGESTS[case]
+
+
+def test_scaffold_renderer_preserves_token_shaped_user_values():
+    from pricing_pipeline.scaffold.render import render_notebooks
+
+    rendered = render_notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="__CUSTOM_LABEL__",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        deployment_slot="CLAIM_FREQUENCY_UAT",
+        database_mode="local",
+        runtime_module=None,
+        expected_remote_database="",
+        manual_edit_source_selector="deployed",
+        manual_edit_carry_forward=True,
+    )
+
+    assert "__CUSTOM_LABEL__" in rendered["01_data_ingestion.ipynb"]
+
+
+def test_scaffold_renderer_preserves_v021_non_ascii_escaping():
+    from pricing_pipeline.scaffold.render import render_notebooks
+
+    rendered = render_notebooks(
+        package_name="claim_frequency",
+        model_name="CLAIM_FREQUENCY",
+        model_label="Müller",
+        target_name="claim_count",
+        model_type="superglm_poisson",
+        deployment_slot="CLAIM_FREQUENCY_UAT",
+        database_mode="local",
+        runtime_module=None,
+        expected_remote_database="",
+        manual_edit_source_selector="deployed",
+        manual_edit_carry_forward=True,
+    )
+
+    notebook = json.loads(rendered["03_model_training.ipynb"])
+    code = "\n".join(
+        "".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"
+    )
+    assert 'label="M\\u00fcller"' in code
 
 
 def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
@@ -495,10 +612,12 @@ def test_scaffold_allows_a_symlinked_user_root_after_resolving_it(tmp_path):
 def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
     monkeypatch, tmp_path
 ):
+    from pricing_pipeline.scaffold import service
+
     external_path = tmp_path / "external-init.py"
     external_content = "do not modify this file\n"
     external_path.write_text(external_content, encoding="utf-8")
-    original_migration = scaffold_module._migrate_legacy_deployment_notebook
+    original_migration = service._migrate_legacy_deployment_notebook
 
     def swap_leaf_after_preflight(package_dir: Path):
         package_dir.mkdir(parents=True)
@@ -506,7 +625,7 @@ def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
         return original_migration(package_dir)
 
     monkeypatch.setattr(
-        scaffold_module,
+        service,
         "_migrate_legacy_deployment_notebook",
         swap_leaf_after_preflight,
     )
@@ -592,7 +711,11 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
     assert "CARRY_FORWARD = False" in source
 
 
-def test_scaffold_cli_auto_discovers_toml_and_cli_values_win(tmp_path):
+def test_scaffold_cli_auto_discovers_toml_and_cli_values_win(tmp_path, monkeypatch):
+    from pricing_pipeline import cli
+    from pricing_pipeline.scaffold import config, service
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "consumer"\n', encoding="utf-8")
     config_path = tmp_path / "pricing_scaffold.toml"
     config_path.write_text(
         """
@@ -608,58 +731,125 @@ carry_forward = false
         + "\n",
         encoding="utf-8",
     )
-    common = [
-        "--model-name",
-        "MY_MODEL",
-        "--target-name",
-        "target",
-        "--root",
-        str(tmp_path),
-    ]
+    original_resolve = config.resolve_scaffold_options
+    resolutions = []
+    service_options = []
 
-    discovered = parse_args(common)
-    explicit = parse_args(
-        [
-            "--model-name",
-            "MY_MODEL",
-            "--target-name",
-            "target",
-            "--root",
-            str(tmp_path / "another-root"),
-            "--config",
-            str(config_path),
-        ]
+    def record_resolution(options):
+        resolved = original_resolve(options)
+        resolutions.append((options, resolved))
+        return resolved
+
+    def record_service(options):
+        service_options.append(options)
+        return service.ScaffoldResult(package_name=options.package_name, created_files=())
+
+    monkeypatch.setattr(config, "resolve_scaffold_options", record_resolution)
+    monkeypatch.setattr(service, "scaffold_resolved_pricing_model", record_service)
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(tmp_path),
+            ]
+        )
+        == 0
     )
-    overridden = parse_args(
-        [
-            *common,
-            "--database-mode",
-            "local",
-            "--runtime-module",
-            "another_runtime.database",
-            "--expected-remote-database",
-            "AnotherAudit",
-            "--manual-edit-source",
-            "deployed",
-            "--manual-edit-carry-forward",
-        ]
+    assert len(resolutions) == 1
+    assert len(service_options) == 1
+    assert isinstance(service_options[0], config.ResolvedScaffoldOptions)
+    discovered_raw, discovered_resolved = resolutions[0]
+    assert discovered_raw.database_mode == "remote"
+    assert discovered_raw.runtime_module == "work_runtime.database"
+    assert discovered_raw.expected_remote_database == "PricingAudit"
+    assert discovered_raw.manual_edit_source_selector == "latest"
+    assert discovered_raw.manual_edit_carry_forward is False
+    assert discovered_resolved.database_mode == "remote"
+    assert discovered_resolved.runtime_module == "work_runtime.database"
+    assert discovered_resolved.expected_remote_database == "PricingAudit"
+    assert discovered_resolved.manual_edit_source_selector == "latest"
+    assert discovered_resolved.manual_edit_carry_forward is False
+
+    explicit_root = tmp_path / "another-root"
+    explicit_root.mkdir()
+    (explicit_root / "pyproject.toml").write_text(
+        '[project]\nname = "another-consumer"\n', encoding="utf-8"
+    )
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(explicit_root),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert len(resolutions) == 2
+    assert len(service_options) == 2
+    assert isinstance(service_options[1], config.ResolvedScaffoldOptions)
+    explicit_raw, explicit_resolved = resolutions[1]
+    assert explicit_raw.database_mode == "remote"
+    assert explicit_raw.runtime_module == "work_runtime.database"
+    assert explicit_raw.expected_remote_database == "PricingAudit"
+    assert explicit_raw.manual_edit_source_selector == "latest"
+    assert explicit_raw.manual_edit_carry_forward is False
+    assert explicit_resolved.database_mode == "remote"
+    assert explicit_resolved.runtime_module == "work_runtime.database"
+    assert explicit_resolved.expected_remote_database == "PricingAudit"
+    assert explicit_resolved.manual_edit_source_selector == "latest"
+    assert explicit_resolved.manual_edit_carry_forward is False
+
+    assert (
+        cli.main(
+            [
+                "scaffold",
+                "--model-name",
+                "MY_MODEL",
+                "--target-name",
+                "target",
+                "--root",
+                str(tmp_path),
+                "--database-mode",
+                "local",
+                "--runtime-module",
+                "another_runtime.database",
+                "--expected-remote-database",
+                "AnotherAudit",
+                "--manual-edit-source",
+                "deployed",
+                "--manual-edit-carry-forward",
+            ]
+        )
+        == 0
     )
 
-    assert discovered.database_mode == "remote"
-    assert discovered.runtime_module == "work_runtime.database"
-    assert discovered.expected_remote_database == "PricingAudit"
-    assert discovered.manual_edit_source_selector == "latest"
-    assert discovered.manual_edit_carry_forward is False
-    assert explicit.database_mode == "remote"
-    assert explicit.runtime_module == "work_runtime.database"
-    assert explicit.expected_remote_database == "PricingAudit"
-    assert explicit.manual_edit_source_selector == "latest"
-    assert explicit.manual_edit_carry_forward is False
-    assert overridden.database_mode == "local"
-    assert overridden.runtime_module == "another_runtime.database"
-    assert overridden.expected_remote_database == "AnotherAudit"
-    assert overridden.manual_edit_source_selector == "deployed"
-    assert overridden.manual_edit_carry_forward is True
+    assert len(resolutions) == 3
+    assert len(service_options) == 3
+    assert isinstance(service_options[2], config.ResolvedScaffoldOptions)
+    overridden_raw, overridden_resolved = resolutions[2]
+    assert overridden_raw.database_mode == "local"
+    assert overridden_raw.runtime_module == "another_runtime.database"
+    assert overridden_raw.expected_remote_database == "AnotherAudit"
+    assert overridden_raw.manual_edit_source_selector == "deployed"
+    assert overridden_raw.manual_edit_carry_forward is True
+    assert overridden_resolved.database_mode == "local"
+    assert overridden_resolved.runtime_module == "another_runtime.database"
+    assert overridden_resolved.expected_remote_database == "AnotherAudit"
+    assert overridden_resolved.manual_edit_source_selector == "deployed"
+    assert overridden_resolved.manual_edit_carry_forward is True
 
 
 def test_scaffold_config_is_strict_and_example_is_valid(tmp_path):
@@ -715,6 +905,8 @@ def test_scaffold_script_help_has_no_legacy_factory_options():
 
 
 def test_scaffold_script_reports_all_notebook_paths(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "consumer"\n', encoding="utf-8")
+    assert cli.main(["init", "--root", str(tmp_path)]) == 0
     result = subprocess.run(
         [
             sys.executable,

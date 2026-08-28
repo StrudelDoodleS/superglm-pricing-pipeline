@@ -76,19 +76,19 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     publish_completed_model_build,
 )
 from pricing_pipeline.publishing.deployment import deploy_rate_package
-from pricing_pipeline.publishing.editor_candidate import publish_editor_submission
-from pricing_pipeline.publishing.model_registry import (
-    register_pricing_model,
-)
-from pricing_pipeline.publishing.model_versions import resolve_model_version_for_export
-from pricing_pipeline.publishing.naming import clean_identifier
-from pricing_pipeline.publishing.rating_export import build_export_id
-from pricing_pipeline.publishing.sqlite_notebook import (
+from pricing_pipeline.publishing.editor import publish_editor_submission
+from pricing_pipeline.publishing.identity import clean_identifier
+from pricing_pipeline.publishing.metadata import OffsetExportContract
+from pricing_pipeline.publishing.rating_tables import build_export_id
+from pricing_pipeline.publishing.sqlite import (
     publish_sqlite_candidate,
     register_sqlite_model,
     resolve_sqlite_model_version,
 )
-from pricing_pipeline.publishing.superglm_publication_receipt import OffsetExportContract
+from pricing_pipeline.publishing.sqlserver import (
+    register_pricing_model,
+    resolve_model_version_for_export,
+)
 from pricing_pipeline.workbench.core import Candidate, Workbench
 from pricing_pipeline.workbench.submission import save_editor_submission
 

@@ -8,7 +8,6 @@ import pytest
 
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.lifecycle import PublishResult
 
 EDITOR_CONFIG = SimpleNamespace(
     model_name="HOME_FREQ",
@@ -54,7 +53,7 @@ def _editor_build(tmp_path, *, workbook_path=None, **overrides) -> ApprovedModel
 def test_editor_export_carries_only_completed_build_and_editor_publication_values():
     from dataclasses import fields
 
-    from pricing_pipeline.publishing.editor_candidate import EditorExport
+    from pricing_pipeline.publishing.editor import EditorExport
 
     assert {field.name for field in fields(EditorExport)} == {
         "completed_build",
@@ -66,7 +65,8 @@ def test_editor_export_carries_only_completed_build_and_editor_publication_value
 
 
 def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing.publish import CompletedModelPublishResult
 
     workbook_path = tmp_path / "rating_tables.xlsx"
     workbook_path.write_bytes(b"editor workbook")
@@ -101,9 +101,8 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
     build = _editor_build(
         tmp_path,
         workbook_path=workbook_path,
-        rating_workbook_sha256=editor_candidate.sha256_file(workbook_path),
+        rating_workbook_sha256=editor.sha256_file(workbook_path),
     )
-    fingerprinted_build = build.model_copy(update={"model_equivalence_sha256": "f" * 64})
     exported = SimpleNamespace(
         completed_build=build,
         publication_receipt=object(),
@@ -114,12 +113,27 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
         edited_model=object(),
         bundle=object(),
     )
-    calls = []
+    published = CompletedModelPublishResult(
+        model_id=build.model_id,
+        model_name=build.model_name,
+        model_version=build.model_version,
+        manifest_id=build.manifest_id,
+        split_set_id=build.split_set_id,
+        export_id=build.export_id,
+        rate_package_id=108,
+        package_version=8,
+        package_status="PUBLISHED",
+        rating_workbook_path=build.rating_workbook_path,
+        model_run_id=908,
+        publication_receipt_path=build.publication_receipt_path,
+        publication_receipt_sha256=build.publication_receipt_sha256,
+        model_kind=build.model_kind,
+        model_equivalence_sha256="f" * 64,
+    )
     allowed_roots = []
-    publish_connection = object()
-    publication_is_active = False
+    captured = {}
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_verified_submission",
         lambda path, digest, **kwargs: submission,
     )
@@ -135,6 +149,10 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
         assert model_config is EDITOR_CONFIG
         return parent
 
+    def fake_load_edited_model(loaded_parent, loaded_submission, *, allowed_root):
+        allowed_roots.append(("edited", allowed_root))
+        return exported.edited_model
+
     def fake_export_edited_model(
         loaded_parent,
         loaded_submission,
@@ -143,73 +161,27 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
         allowed_root,
         write_dir,
         published_dir,
+        edited_model,
     ):
-        allowed_roots.append(("edited", allowed_root))
+        assert edited_model is exported.edited_model
         assert created_by == "analyst@example.test"
         return exported
 
-    monkeypatch.setattr(editor_candidate, "load_parent_candidate", fake_load_parent_candidate)
-    monkeypatch.setattr(editor_candidate, "export_edited_model", fake_export_edited_model)
+    def fake_publish_candidate(engine, request):
+        captured["request"] = request
+        return published
+
+    monkeypatch.setattr(editor, "load_parent_candidate", fake_load_parent_candidate)
+    monkeypatch.setattr(editor, "_load_edited_model", fake_load_edited_model)
+    monkeypatch.setattr(editor, "export_edited_model", fake_export_edited_model)
+    monkeypatch.setattr(editor, "publish_candidate", fake_publish_candidate)
     monkeypatch.setattr(
-        editor_candidate,
-        "ensure_model_equivalence",
-        lambda completed_build, **kwargs: fingerprinted_build,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "_resolve_existing_editor_publication",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        editor_candidate,
-        "stage_rating_export",
-        lambda engine, **kwargs: calls.append(("stage", kwargs["created_by"])) or "e" * 64,
-    )
 
-    def fake_publish_rating_package(engine, **kwargs):
-        nonlocal publication_is_active
-        calls.append(("publish", kwargs))
-        publication_is_active = True
-        try:
-            lineage_writer = kwargs.get("package_lineage_writer")
-            model_run_id = (
-                None if lineage_writer is None else lineage_writer(publish_connection, 108)
-            )
-        finally:
-            publication_is_active = False
-        return PublishResult(
-            mlflow_run_id="",
-            export_id=build.export_id,
-            rate_package_id=108,
-            package_version=8,
-            rating_workbook_path=build.rating_workbook_path,
-            model_run_id=model_run_id,
-        )
-
-    def fake_record_model_run(engine, *, connection, **kwargs):
-        assert engine is None
-        assert publication_is_active, "lineage must execute inside package publication"
-        assert connection is publish_connection
-        calls.append(("lineage", kwargs))
-        return 908
-
-    monkeypatch.setattr(
-        editor_candidate,
-        "publish_rating_package",
-        fake_publish_rating_package,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "record_model_run",
-        fake_record_model_run,
-    )
-
-    result = editor_candidate.publish_editor_submission(
+    result = editor.publish_editor_submission(
         object(),
         settings=Settings(workbench_artifact_root=tmp_path),
         submission_path=submission.path,
@@ -224,41 +196,32 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
     assert result.rate_package_id == 108
     assert result.package_version == 8
     assert result.model_run_id == 908
-    assert [name for name, _value in calls] == ["stage", "publish", "lineage"]
-    publish_kwargs = calls[1][1]
-    assert publish_kwargs["parent_rate_package_id"] == submission.parent_rate_package_id
-    assert publish_kwargs["revision_metadata"] == {
+    request = captured["request"]
+    assert request.build is build
+    assert request.model_config is EDITOR_CONFIG
+    assert request.execution_name == "pricing_publish_editor_candidate"
+    assert request.execution_id == "manual__submission-1"
+    assert request.allowed_artifact_root == tmp_path.resolve()
+    assert request.effective_to is None
+    assert request.parent_rate_package_id == submission.parent_rate_package_id
+    assert request.parent_model_run_id == submission.parent_model_run_id
+    assert request.revision_metadata == {
         "claimed_identity": "prototype-local-not-authenticated",
         "kind": "SUPERGLM_EDITOR",
         "published_by": "analyst@example.test",
     }
-    assert "package_status" not in publish_kwargs
-    assert callable(publish_kwargs["package_lineage_writer"])
-    assert publish_kwargs["expected_staged_metadata"] == {
-        "export_id": build.export_id,
-        "model_id": parent.model_id,
-        "model_name": parent.model_name,
-        "model_version": parent.model_version,
-        "effective_from_date": None,
-        "effective_to_date": None,
-        "source_file": str(Path(build.rating_workbook_path).resolve()),
-        "publication_receipt_sha256": build.publication_receipt_sha256,
-        "staging_content_sha256": "e" * 64,
-        "model_equivalence_sha256": "f" * 64,
-    }
-    lineage_kwargs = calls[2][1]
-    assert lineage_kwargs["rate_package_id"] == result.rate_package_id
-    assert lineage_kwargs["parent_model_run_id"] == submission.parent_model_run_id
-    assert lineage_kwargs["build"] is fingerprinted_build
+    assert request.verification.model is exported.edited_model
+    assert request.verification.bundle is exported.bundle
+    assert request.verification.receipt is exported.publication_receipt
     assert build.manifest_id == submission.manifest_id
     assert build.split_set_id == submission.split_set_id
-    assert build.rating_workbook_sha256 == editor_candidate.sha256_file(workbook_path)
+    assert build.rating_workbook_sha256 == editor.sha256_file(workbook_path)
     assert build.candidate_artifact_sha256 == "d" * 64
     assert allowed_roots == [("parent", tmp_path), ("edited", tmp_path)]
 
 
 def test_existing_editor_publication_returns_before_artifact_write(monkeypatch, tmp_path):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     submission_path = tmp_path / "submission" / "submission.json"
     submission_path.parent.mkdir()
@@ -270,7 +233,7 @@ def test_existing_editor_publication_returns_before_artifact_write(monkeypatch, 
         deployment_slot="HOME_FREQ_UAT",
         parent_rate_package_id=107,
     )
-    existing = editor_candidate.EditorPublicationResult(
+    existing = editor.EditorPublicationResult(
         submission_id="submission-1",
         model_name="HOME_FREQ",
         parent_rate_package_id=107,
@@ -281,28 +244,28 @@ def test_existing_editor_publication_returns_before_artifact_write(monkeypatch, 
         was_existing=True,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_verified_submission",
         lambda *args, **kwargs: submission,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "_resolve_existing_editor_publication",
         lambda *args, **kwargs: existing,
         raising=False,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_parent_candidate",
         lambda *args, **kwargs: pytest.fail("existing publication must return first"),
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "export_edited_model",
         lambda *args, **kwargs: pytest.fail("existing publication must not write files"),
     )
 
-    result = editor_candidate.publish_editor_submission(
+    result = editor.publish_editor_submission(
         object(),
         settings=Settings(workbench_artifact_root=tmp_path),
         submission_path=str(submission_path),
@@ -337,14 +300,8 @@ def test_manual_equivalence_requires_matching_immutable_policy_lineage(
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor_candidate
-
-    staging_dir = tmp_path / ".staging" / "attempt"
-    final_dir = tmp_path / "attempts" / "attempt"
-    staging_dir.mkdir(parents=True)
-    final_dir.parent.mkdir(parents=True)
-    workbook = staging_dir / "rating_tables.xlsx"
-    workbook.write_bytes(b"manual rating workbook")
+    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing.publish import CompletedModelPublishResult
 
     requested_policy = ManualAdjustmentPolicy(
         name="market adjustment",
@@ -377,34 +334,33 @@ def test_manual_equivalence_requires_matching_immutable_policy_lineage(
         parent_model_run_id=907,
         edit_metadata=requested_edit_metadata,
     )
-    parent = SimpleNamespace(effective_to=None)
-    build = _editor_build(
-        tmp_path,
-        workbook_path=final_dir / workbook.name,
-        rating_workbook_sha256=editor_candidate.sha256_file(workbook),
-        model_kind="MANUAL_EDIT",
-    )
-    fingerprinted_build = build.model_copy(update={"model_equivalence_sha256": "f" * 64})
-    exported = SimpleNamespace(
-        completed_build=build,
-        revision_metadata={
-            "kind": "SUPERGLM_MANUAL_EDIT",
-            "parent_rate_package_id": submission.parent_rate_package_id,
-            "parent_model_run_id": submission.parent_model_run_id,
-            "edit_metadata": requested_edit_metadata,
-        },
-    )
-    equivalent = SimpleNamespace(
+    publication = CompletedModelPublishResult(
+        model_id=17,
         model_name="HOME_FREQ",
-        parent_rate_package_id=stored_parent_rate_package_id,
+        model_version="v4",
+        manifest_id="manifest-1",
+        split_set_id="split-1",
+        export_id="prior-manual-export",
         rate_package_id=108,
         package_version=8,
-        model_run_id=908,
         package_status="PUBLISHED",
+        rating_workbook_path=str(tmp_path / "rating_tables.xlsx"),
+        model_run_id=908,
+        was_existing=True,
+        deduplicated=True,
+        model_kind="MANUAL_EDIT",
+        model_equivalence_sha256="f" * 64,
     )
     stored_row = {
+        "model_name": publication.model_name,
         "parent_rate_package_id": stored_parent_rate_package_id,
+        "package_status": publication.package_status,
+        "model_run_id": publication.model_run_id,
         "parent_model_run_id": stored_parent_model_run_id,
+        "run_status": "SUCCESS",
+        "manifest_id": publication.manifest_id,
+        "model_kind": publication.model_kind,
+        "model_equivalence_sha256": publication.model_equivalence_sha256,
         "revision_metadata_json": json.dumps(
             {
                 "kind": "SUPERGLM_MANUAL_EDIT",
@@ -431,8 +387,8 @@ def test_manual_equivalence_requires_matching_immutable_policy_lineage(
 
         def execute(self, statement, params):
             assert params == {
-                "rate_package_id": equivalent.rate_package_id,
-                "model_run_id": equivalent.model_run_id,
+                "rate_package_id": publication.rate_package_id,
+                "model_run_id": publication.model_run_id,
             }
             return Result()
 
@@ -441,65 +397,34 @@ def test_manual_equivalence_requires_matching_immutable_policy_lineage(
             return Connection()
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing"),
     )
-    monkeypatch.setattr(
-        editor_candidate,
-        "load_parent_candidate",
-        lambda *args, **kwargs: parent,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "export_edited_model",
-        lambda *args, **kwargs: exported,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "ensure_model_equivalence",
-        lambda completed_build, **kwargs: fingerprinted_build,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "find_equivalent_publication",
-        lambda engine, *, build: equivalent,
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "release_unused_model_version_reservation",
-        lambda *args, **kwargs: None,
-    )
 
-    def publish():
-        return editor_candidate._publish_new_editor_submission(
-            Engine(),
+    def verify():
+        return editor._verify_reused_publication(
+            engine=Engine(),
             submission=submission,
+            publication=publication,
             allowed_root=tmp_path,
-            attempt=editor_candidate.EditorPublicationAttempt(staging_dir, final_dir),
-            dag_id="pricing_publish_editor_candidate",
-            airflow_run_id="manual__submission-new-policy",
-            created_by="publisher@example.test",
-            model_config=EDITOR_CONFIG,
         )
 
     if is_compatible:
-        result = publish()
-        assert result.rate_package_id == equivalent.rate_package_id
-        assert result.deduplicated is True
+        assert verify() == stored_parent_rate_package_id
     else:
         with pytest.raises(
-            editor_candidate.EditorSubmissionError,
+            editor.EditorSubmissionError,
             match="equivalent MANUAL_EDIT package has incompatible immutable policy lineage",
         ):
-            publish()
+            verify()
 
 
 def test_editor_retry_rejects_submission_slot_mismatch_before_existing_lookup(
     monkeypatch,
     tmp_path,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     submission_path = tmp_path / "submission" / "submission.json"
     submission_path.parent.mkdir()
@@ -508,18 +433,18 @@ def test_editor_retry_rejects_submission_slot_mismatch_before_existing_lookup(
         deployment_slot="HOME_FREQ_PRODUCTION",
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_verified_submission",
         lambda *args, **kwargs: submission,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "_resolve_existing_editor_publication",
         lambda *args, **kwargs: pytest.fail("slot mismatch reached existing-publication lookup"),
     )
 
-    with pytest.raises(editor_candidate.EditorSubmissionError, match="deployment_slot"):
-        editor_candidate.publish_editor_submission(
+    with pytest.raises(editor.EditorSubmissionError, match="deployment_slot"):
+        editor.publish_editor_submission(
             object(),
             settings=Settings(workbench_artifact_root=tmp_path),
             submission_path=str(submission_path),
@@ -538,7 +463,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
     from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
@@ -576,7 +501,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
         "parent_model_run_id": 907,
         "run_status": "SUCCESS",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor_candidate.sha256_file(workbook),
+        "rating_workbook_sha256": editor.sha256_file(workbook),
         "candidate_artifact_path": artifact.path,
         "candidate_artifact_sha256": artifact.sha256,
         "candidate_artifact_format": artifact.format,
@@ -614,7 +539,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
             return Begin()
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing", mlops="mlops"),
     )
@@ -642,7 +567,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
         }
     )
 
-    result = editor_candidate._resolve_existing_editor_publication(
+    result = editor._resolve_existing_editor_publication(
         Engine(),
         submission,
         allowed_root=tmp_path,
@@ -656,7 +581,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
         original = row[field_name]
         row[field_name] = f"wrong-{field_name}"
         with pytest.raises(EditorSubmissionError, match=field_name):
-            editor_candidate._resolve_existing_editor_publication(
+            editor._resolve_existing_editor_publication(
                 Engine(),
                 submission,
                 allowed_root=tmp_path,
@@ -665,7 +590,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
 
     row["parent_model_run_id"] = 999
     with pytest.raises(EditorSubmissionError, match="parent_model_run_id"):
-        editor_candidate._resolve_existing_editor_publication(
+        editor._resolve_existing_editor_publication(
             Engine(),
             submission,
             allowed_root=tmp_path,
@@ -674,7 +599,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
 
     workbook.write_bytes(b"overwritten")
     with pytest.raises(EditorSubmissionError, match="rating workbook"):
-        editor_candidate._resolve_existing_editor_publication(
+        editor._resolve_existing_editor_publication(
             Engine(),
             submission,
             allowed_root=tmp_path,
@@ -683,7 +608,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
 
     Path(artifact.path).write_bytes(b"overwritten")
     with pytest.raises(EditorSubmissionError, match="failed verification"):
-        editor_candidate._resolve_existing_editor_publication(
+        editor._resolve_existing_editor_publication(
             Engine(),
             submission,
             allowed_root=tmp_path,
@@ -702,7 +627,7 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     policy = ManualAdjustmentPolicy(
         name="market adjustment",
@@ -768,7 +693,7 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
         "run_status": "SUCCESS",
         "model_kind": "MANUAL_EDIT",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor_candidate.sha256_file(workbook),
+        "rating_workbook_sha256": editor.sha256_file(workbook),
         "candidate_artifact_path": str(tmp_path / "candidate.joblib"),
         "candidate_artifact_sha256": "d" * 64,
         "candidate_artifact_format": "superglm-candidate-joblib-v2",
@@ -805,12 +730,12 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
             return Begin()
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing", mlops="mlops"),
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_candidate_bundle",
         lambda *args, **kwargs: pytest.fail(
             "changed signed submission reached committed artifact loading"
@@ -818,10 +743,10 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
     )
 
     with pytest.raises(
-        editor_candidate.EditorSubmissionError,
+        editor.EditorSubmissionError,
         match="existing editor publication signed submission metadata does not match",
     ):
-        editor_candidate._resolve_existing_editor_publication(
+        editor._resolve_existing_editor_publication(
             Engine(),
             submission,
             allowed_root=tmp_path,
@@ -846,7 +771,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
     field_name,
     different_value,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     expected = {
@@ -879,7 +804,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
         "parent_model_run_id": 907,
         "run_status": "SUCCESS",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor_candidate.sha256_file(workbook),
+        "rating_workbook_sha256": editor.sha256_file(workbook),
         "candidate_artifact_path": str(tmp_path / "candidate.joblib"),
         "candidate_artifact_sha256": "d" * 64,
         "candidate_artifact_format": "superglm-candidate-joblib-v2",
@@ -912,12 +837,12 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
             return Begin()
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing", mlops="mlops"),
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_candidate_bundle",
         lambda *args, **kwargs: SimpleNamespace(**bundle_lineage),
     )
@@ -951,7 +876,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
         else "bundle lineage"
     )
     with pytest.raises(EditorSubmissionError, match=expected_layer):
-        editor_candidate._resolve_existing_editor_publication(
+        editor._resolve_existing_editor_publication(
             Engine(),
             submission,
             allowed_root=tmp_path,
@@ -959,7 +884,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
 
 
 def test_failed_editor_publication_removes_only_its_unique_attempt(monkeypatch, tmp_path):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     submission_path = tmp_path / "submission" / "submission.json"
     submission_path.parent.mkdir()
@@ -1000,6 +925,7 @@ def test_failed_editor_publication_removes_only_its_unique_attempt(monkeypatch, 
         allowed_root,
         write_dir,
         published_dir,
+        edited_model,
     ):
         write_dir = Path(write_dir)
         published_dir = Path(published_dir)
@@ -1011,7 +937,7 @@ def test_failed_editor_publication_removes_only_its_unique_attempt(monkeypatch, 
         build = _editor_build(
             tmp_path,
             workbook_path=published_dir / "rating_tables.xlsx",
-            rating_workbook_sha256=editor_candidate.sha256_file(workbook_path),
+            rating_workbook_sha256=editor.sha256_file(workbook_path),
             created_by=created_by,
             publication_receipt_path=str(published_dir / "publication_receipt.json"),
             candidate_artifact_path=str(published_dir / "candidate_bundle.joblib"),
@@ -1028,44 +954,36 @@ def test_failed_editor_publication_removes_only_its_unique_attempt(monkeypatch, 
         )
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_verified_submission",
         lambda *args, **kwargs: submission,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "_resolve_existing_editor_publication",
         lambda *args, **kwargs: None,
         raising=False,
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_parent_candidate",
         lambda *args, **kwargs: parent,
     )
-    monkeypatch.setattr(editor_candidate, "export_edited_model", fake_export)
     monkeypatch.setattr(
-        editor_candidate,
-        "ensure_model_equivalence",
-        lambda completed_build, **kwargs: completed_build.model_copy(
-            update={"model_equivalence_sha256": "f" * 64}
-        ),
+        editor,
+        "_load_edited_model",
+        lambda *args, **kwargs: object(),
     )
+    monkeypatch.setattr(editor, "export_edited_model", fake_export)
     monkeypatch.setattr(
-        editor_candidate,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(editor_candidate, "stage_rating_export", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        editor_candidate,
-        "publish_rating_package",
+        editor,
+        "publish_candidate",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("injected SQL failure")),
     )
 
     for _attempt_no in range(2):
         with pytest.raises(RuntimeError, match="injected SQL failure"):
-            editor_candidate.publish_editor_submission(
+            editor.publish_editor_submission(
                 object(),
                 settings=Settings(workbench_artifact_root=tmp_path),
                 submission_path=str(submission_path),
@@ -1088,7 +1006,7 @@ def test_editor_publication_rejects_workbook_mutated_during_staging(
     monkeypatch,
     tmp_path,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     staging_dir = tmp_path / ".staging" / "attempt"
     final_dir = tmp_path / "attempts" / "attempt"
@@ -1107,50 +1025,28 @@ def test_editor_publication_rejects_workbook_mutated_during_staging(
     def export_model(*args, **kwargs):
         workbook = staging_dir / "rating_tables.xlsx"
         workbook.write_bytes(b"original")
-        return SimpleNamespace(
-            completed_build=_editor_build(
-                tmp_path,
-                workbook_path=final_dir / "rating_tables.xlsx",
-                rating_workbook_sha256=editor_candidate.sha256_file(workbook),
-                created_by=kwargs["created_by"],
-            ),
+        build = _editor_build(
+            tmp_path,
+            workbook_path=final_dir / "rating_tables.xlsx",
+            rating_workbook_sha256=editor.sha256_file(workbook),
+            created_by=kwargs["created_by"],
         )
+        workbook.write_bytes(b"mutated before publication")
+        return SimpleNamespace(completed_build=build)
 
-    def mutate_workbook(*args, **kwargs):
-        (final_dir / "rating_tables.xlsx").write_bytes(b"mutated during staging")
-        return "a" * 64
+    monkeypatch.setattr(editor, "export_edited_model", export_model)
 
-    monkeypatch.setattr(editor_candidate, "load_parent_candidate", lambda *args, **kwargs: parent)
-    monkeypatch.setattr(editor_candidate, "export_edited_model", export_model)
-    monkeypatch.setattr(
-        editor_candidate,
-        "ensure_model_equivalence",
-        lambda completed_build, **kwargs: completed_build.model_copy(
-            update={"model_equivalence_sha256": "f" * 64}
-        ),
-    )
-    monkeypatch.setattr(
-        editor_candidate,
-        "find_equivalent_publication",
-        lambda engine, *, build: None,
-    )
-    monkeypatch.setattr(editor_candidate, "stage_rating_export", mutate_workbook)
-    monkeypatch.setattr(
-        editor_candidate,
-        "publish_rating_package",
-        lambda *args, **kwargs: pytest.fail("mutated workbook reached package publication"),
-    )
-
-    with pytest.raises(editor_candidate.EditorSubmissionError, match="changed during staging"):
-        editor_candidate._publish_new_editor_submission(
-            object(),
+    with pytest.raises(
+        editor.EditorSubmissionError,
+        match="changed before publication",
+    ):
+        editor._export_edited_build(
             submission=submission,
-            allowed_root=tmp_path,
-            attempt=editor_candidate.EditorPublicationAttempt(staging_dir, final_dir),
-            dag_id="pricing_publish_editor_candidate",
-            airflow_run_id="manual__submission-1",
+            parent=parent,
+            edited_model=object(),
             created_by="publisher@example.test",
-            model_config=EDITOR_CONFIG,
+            attempt=editor.EditorPublicationAttempt(staging_dir, final_dir),
+            allowed_root=tmp_path,
         )
 
 
@@ -1162,8 +1058,8 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor_candidate
-    from pricing_pipeline.publishing.superglm_publication_receipt import (
+    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing.metadata import (
         OffsetExportContract,
     )
     from pricing_pipeline.workbench.artifacts import CandidateBundle
@@ -1217,7 +1113,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
             target_name="claim_count",
         ),
         bundle=bundle,
-        champion=editor_candidate.ChampionSnapshot(
+        champion=editor.ChampionSnapshot(
             deployment_slot="HOME_FREQ_UAT",
             rate_package_id=None,
             bundle=None,
@@ -1250,7 +1146,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
     )
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "_load_edited_model",
         lambda *args, **kwargs: {"model": "edited"},
     )
@@ -1266,20 +1162,20 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
         Path(path).write_bytes(b"receipt")
         return "1" * 64
 
-    monkeypatch.setattr(editor_candidate, "export_rating_tables", fake_export_rating_tables)
+    monkeypatch.setattr(editor, "export_rating_tables", fake_export_rating_tables)
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "build_superglm_publication_receipt",
         lambda *args, **kwargs: object(),
     )
-    monkeypatch.setattr(editor_candidate, "write_publication_receipt", fake_write_receipt)
+    monkeypatch.setattr(editor, "write_publication_receipt", fake_write_receipt)
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "training_comparison_metrics",
         lambda *args, **kwargs: ({}, {}),
     )
 
-    exported = editor_candidate.export_edited_model(
+    exported = editor.export_edited_model(
         parent,
         submission,
         created_by="publisher@example.test",
@@ -1290,9 +1186,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
 
     build = exported.completed_build
     assert Path(build.rating_workbook_path) == final_dir / "rating_tables.xlsx"
-    assert build.rating_workbook_sha256 == editor_candidate.sha256_file(
-        write_dir / "rating_tables.xlsx"
-    )
+    assert build.rating_workbook_sha256 == editor.sha256_file(write_dir / "rating_tables.xlsx")
     assert Path(build.publication_receipt_path) == final_dir / "publication_receipt.json"
     assert Path(build.candidate_artifact_path) == final_dir / "candidate_bundle.joblib"
     assert build.created_by == "publisher@example.test"
@@ -1343,7 +1237,7 @@ def test_editor_publication_lock_serializes_the_same_submission(tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
 
-    from pricing_pipeline.publishing.editor_candidate import _editor_publication_lock
+    from pricing_pipeline.publishing.editor import _editor_publication_lock
 
     first_acquired = Event()
     release_first = Event()
@@ -1377,20 +1271,20 @@ def test_parent_candidate_rejects_submission_deployment_slot_mismatch_before_sql
     monkeypatch,
     tmp_path,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     submission = SimpleNamespace(
         model_name="HOME_FREQ",
         deployment_slot="HOME_FREQ_PRODUCTION",
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: pytest.fail("deployment-slot mismatch reached SQL"),
     )
 
-    with pytest.raises(editor_candidate.EditorSubmissionError, match="deployment_slot"):
-        editor_candidate.load_parent_candidate(
+    with pytest.raises(editor.EditorSubmissionError, match="deployment_slot"):
+        editor.load_parent_candidate(
             object(),
             submission,
             allowed_root=tmp_path,
@@ -1412,7 +1306,7 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     submission_relative_path,
     effective_from_date,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     configured_root = tmp_path / "configured-workbench"
     candidate_path = configured_root / "models/HOME_FREQ/runs/deep/candidate.joblib"
@@ -1437,6 +1331,7 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
         "export_id": "parent-export",
         "package_version": submission.source_package_version,
         "rate_package_id": submission.parent_rate_package_id,
+        "package_status": "PUBLISHED",
         "effective_from_date": effective_from_date,
         "effective_to_date": None,
         "model_run_id": submission.parent_model_run_id,
@@ -1506,16 +1401,16 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
         return None, "no champion"
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing", mlops="mlops"),
     )
-    monkeypatch.setattr(editor_candidate, "load_candidate_bundle", fake_load_candidate_bundle)
-    monkeypatch.setattr(editor_candidate, "_load_champion_bundle", fake_load_champion_bundle)
+    monkeypatch.setattr(editor, "load_candidate_bundle", fake_load_candidate_bundle)
+    monkeypatch.setattr(editor, "_load_champion_bundle", fake_load_champion_bundle)
     injected_config = EDITOR_CONFIG
     engine = Engine()
 
-    parent = editor_candidate.load_parent_candidate(
+    parent = editor.load_parent_candidate(
         engine,
         submission,
         allowed_root=configured_root,
@@ -1538,6 +1433,16 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     assert "manifest.model_frame_sha256" in statement
     assert "DATASET_MANIFEST AS manifest" in statement
 
+    row["package_status"] = "DRAFT"
+    with pytest.raises(editor.EditorSubmissionError, match="PUBLISHED"):
+        editor.load_parent_candidate(
+            engine,
+            submission,
+            allowed_root=configured_root,
+            model_config=injected_config,
+        )
+    row["package_status"] = "PUBLISHED"
+
     for sql_digest, bundle_digest in (
         (None, "d" * 64),
         ("not-a-digest", "d" * 64),
@@ -1546,8 +1451,8 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     ):
         row["model_frame_sha256"] = sql_digest
         bundle.model_frame_sha256 = bundle_digest
-        with pytest.raises(editor_candidate.EditorSubmissionError, match="model_frame_sha256"):
-            editor_candidate.load_parent_candidate(
+        with pytest.raises(editor.EditorSubmissionError, match="model_frame_sha256"):
+            editor.load_parent_candidate(
                 engine,
                 submission,
                 allowed_root=configured_root,
@@ -1559,8 +1464,8 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     for field_name in ("model_name", "model_version", "export_id"):
         original = getattr(bundle, field_name)
         setattr(bundle, field_name, f"wrong-{field_name}")
-        with pytest.raises(editor_candidate.EditorSubmissionError, match=field_name):
-            editor_candidate.load_parent_candidate(
+        with pytest.raises(editor.EditorSubmissionError, match=field_name):
+            editor.load_parent_candidate(
                 engine,
                 submission,
                 allowed_root=configured_root,
@@ -1577,7 +1482,7 @@ def test_editor_session_root_cannot_be_widened_by_submission_path(
     tmp_path,
     submission_relative_path,
 ):
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     configured_root = tmp_path / "configured-workbench"
@@ -1589,7 +1494,7 @@ def test_editor_session_root_cannot_be_widened_by_submission_path(
     )
 
     with pytest.raises(EditorSubmissionError, match="outside artifact root"):
-        editor_candidate._load_edited_model(
+        editor._load_edited_model(
             parent,
             submission,
             allowed_root=configured_root,
@@ -1602,7 +1507,7 @@ def test_editor_session_replays_against_verified_parent_model(
 ):
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
     from pricing_pipeline.workbench.submission import sha256_file
 
     configured_root = tmp_path / "configured-workbench"
@@ -1633,7 +1538,7 @@ def test_editor_session_replays_against_verified_parent_model(
         staticmethod(lambda path, *, model: replay),
     )
 
-    loaded, replayed_inputs = editor_candidate._load_edited_model(
+    loaded, replayed_inputs = editor._load_edited_model(
         parent,
         submission,
         allowed_root=configured_root,
@@ -1653,7 +1558,7 @@ def test_v2_submission_loads_final_model_without_replaying_session(monkeypatch, 
     import pandas as pd
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     class Model:
         def __init__(self, features, beta):
@@ -1688,14 +1593,14 @@ def test_v2_submission_loads_final_model_without_replaying_session(monkeypatch, 
         received.update(metadata)
         return edited_model
 
-    monkeypatch.setattr(editor_candidate, "load_edited_model", fake_load, raising=False)
+    monkeypatch.setattr(editor, "load_edited_model", fake_load, raising=False)
     monkeypatch.setattr(
         EditorSession,
         "load",
         staticmethod(lambda *args, **kwargs: pytest.fail("v2 session was replayed")),
     )
 
-    loaded = editor_candidate._load_edited_model(
+    loaded = editor._load_edited_model(
         parent,
         submission,
         allowed_root=tmp_path,
@@ -1724,7 +1629,7 @@ def test_manual_submission_rejects_missing_or_malformed_policy_before_model_load
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     policy = ManualAdjustmentPolicy(
         name="market adjustment",
@@ -1763,7 +1668,7 @@ def test_manual_submission_rejects_missing_or_malformed_policy_before_model_load
     )
     parent = SimpleNamespace(bundle=SimpleNamespace(fitted_model=object()))
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_edited_model",
         lambda *args, **kwargs: pytest.fail(
             "invalid MANUAL_EDIT policy reached trusted object loading"
@@ -1771,10 +1676,10 @@ def test_manual_submission_rejects_missing_or_malformed_policy_before_model_load
     )
 
     with pytest.raises(
-        editor_candidate.EditorSubmissionError,
+        editor.EditorSubmissionError,
         match="MANUAL_EDIT submission has invalid manual adjustment policy",
     ):
-        editor_candidate._load_edited_model(
+        editor._load_edited_model(
             parent,
             submission,
             allowed_root=tmp_path,
@@ -1819,7 +1724,7 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     x = (
         np.zeros(60)
@@ -1909,7 +1814,7 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
             sample_weight=None,
             offset=None,
             cv_report={},
-            offset_contract=editor_candidate.OffsetExportContract(handling="NONE"),
+            offset_contract=editor.OffsetExportContract(handling="NONE"),
             fit_sample_weight_name=None,
             export_weight_name=None,
         )
@@ -1929,13 +1834,13 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
         edited_model_superglm_version="0.13.0",
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_edited_model",
         lambda *args, **kwargs: submitted_model,
     )
 
     def load():
-        return editor_candidate._load_edited_model(
+        return editor._load_edited_model(
             parent,
             submission,
             allowed_root=tmp_path,
@@ -1943,7 +1848,7 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
 
     if error_match is not None:
         with pytest.raises(
-            editor_candidate.EditorSubmissionError,
+            editor.EditorSubmissionError,
             match=error_match,
         ):
             load()
@@ -1965,7 +1870,7 @@ def test_manual_replay_compares_complete_normalized_fitted_runtime_state(mutate_
         ManualAdjustmentRule,
         replay_manual_adjustment_policy,
     )
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     x = np.tile([-1.0, 0.0, 1.0], 30)
     segment = np.repeat(["A", "B", "C"], 30)
@@ -1987,7 +1892,7 @@ def test_manual_replay_compares_complete_normalized_fitted_runtime_state(mutate_
         sample_weight=None,
         offset=None,
         cv_report={},
-        offset_contract=editor_candidate.OffsetExportContract(handling="NONE"),
+        offset_contract=editor.OffsetExportContract(handling="NONE"),
         fit_sample_weight_name=None,
         export_weight_name=None,
     )
@@ -2041,16 +1946,16 @@ def test_manual_replay_compares_complete_normalized_fitted_runtime_state(mutate_
     parent = SimpleNamespace(bundle=bundle)
     if mutate_spline:
         with pytest.raises(
-            editor_candidate.EditorSubmissionError,
+            editor.EditorSubmissionError,
             match="normalized fitted runtime state does not match trusted manual adjustment policy replay",
         ):
-            editor_candidate._require_manual_policy_replay(
+            editor._require_manual_policy_replay(
                 parent,
                 submitted_model,
                 policy,
             )
     else:
-        editor_candidate._require_manual_policy_replay(
+        editor._require_manual_policy_replay(
             parent,
             submitted_model,
             policy,
@@ -2067,7 +1972,7 @@ def test_manual_publisher_replay_preserves_numeric_zero_level_targeting():
         ManualAdjustmentRule,
         replay_manual_adjustment_policy,
     )
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     frame = pd.DataFrame({"segment": np.repeat([0, 1, 2], 20)})
     target = np.tile([1.0, 2.0, 3.0], 20)
@@ -2082,7 +1987,7 @@ def test_manual_publisher_replay_preserves_numeric_zero_level_targeting():
         sample_weight=None,
         offset=None,
         cv_report={},
-        offset_contract=editor_candidate.OffsetExportContract(handling="NONE"),
+        offset_contract=editor.OffsetExportContract(handling="NONE"),
         fit_sample_weight_name=None,
         export_weight_name=None,
     )
@@ -2102,7 +2007,7 @@ def test_manual_publisher_replay_preserves_numeric_zero_level_targeting():
 
     _, submitted_model = replay_manual_adjustment_policy(bundle, policy)
 
-    editor_candidate._require_manual_policy_replay(
+    editor._require_manual_policy_replay(
         SimpleNamespace(bundle=bundle),
         submitted_model,
         policy,
@@ -2124,7 +2029,7 @@ def test_v2_submission_rejects_changed_feature_names(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     parent_model = SimpleNamespace(features={"region": object(), "x": object()})
     edited_model = SimpleNamespace(
@@ -2149,14 +2054,14 @@ def test_v2_submission_rejects_changed_feature_names(
         edited_model_superglm_version="0.13.0",
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_edited_model",
         lambda *args, **kwargs: edited_model,
         raising=False,
     )
 
-    with pytest.raises(editor_candidate.EditorSubmissionError, match="feature names"):
-        editor_candidate._load_edited_model(parent, submission, allowed_root=tmp_path)
+    with pytest.raises(editor.EditorSubmissionError, match="feature names"):
+        editor._load_edited_model(parent, submission, allowed_root=tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -2176,7 +2081,7 @@ def test_v2_submission_rejects_unusable_final_model(
 ):
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     model = SimpleNamespace(
         features={"x": object()},
@@ -2200,14 +2105,14 @@ def test_v2_submission_rejects_unusable_final_model(
         edited_model_superglm_version="0.13.0",
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_edited_model",
         lambda *args, **kwargs: model,
         raising=False,
     )
 
-    with pytest.raises(editor_candidate.EditorSubmissionError, match=message):
-        editor_candidate._load_edited_model(parent, submission, allowed_root=tmp_path)
+    with pytest.raises(editor.EditorSubmissionError, match=message):
+        editor._load_edited_model(parent, submission, allowed_root=tmp_path)
 
 
 def test_collapsed_editor_model_publishes(tmp_path):
@@ -2217,7 +2122,7 @@ def test_collapsed_editor_model_publishes(tmp_path):
     from superglm import Categorical, Numeric, SuperGLM
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor_candidate, staging
+    from pricing_pipeline.publishing import editor, rating_tables
     from pricing_pipeline.workbench.artifacts import CandidateBundle
     from pricing_pipeline.workbench.submission import save_editor_submission
 
@@ -2271,7 +2176,7 @@ def test_collapsed_editor_model_publishes(tmp_path):
         claimed_identity="analyst@example.test",
     )
 
-    parent = editor_candidate.ParentCandidate(
+    parent = editor.ParentCandidate(
         model_id=17,
         model_name="HOME_FREQ",
         model_version="v1",
@@ -2285,7 +2190,7 @@ def test_collapsed_editor_model_publishes(tmp_path):
             target_name="claim_count",
         ),
         bundle=bundle,
-        champion=editor_candidate.ChampionSnapshot(
+        champion=editor.ChampionSnapshot(
             deployment_slot="HOME_FREQ_UAT",
             rate_package_id=None,
             bundle=None,
@@ -2294,7 +2199,7 @@ def test_collapsed_editor_model_publishes(tmp_path):
     )
     write_dir = tmp_path / "publication-staging"
     write_dir.mkdir()
-    exported = editor_candidate.export_edited_model(
+    exported = editor.export_edited_model(
         parent,
         submission,
         created_by="publisher@example.test",
@@ -2307,20 +2212,16 @@ def test_collapsed_editor_model_publishes(tmp_path):
     assert len(loaded.result.beta) < len(parent_model.result.beta)
     assert set(loaded.features) == set(parent_model.features)
 
-    _, rates, _ = staging.build_staging_frames(
-        staging.StagingExport(
+    _, rates, _ = rating_tables.build_staging_frames(
+        rating_tables.StagingExport(
             workbook_path=write_dir / "rating_tables.xlsx",
             export_id="edited-export",
             model_name="HOME_FREQ",
-            target_name="claim_count",
-            model_type="superglm_poisson",
             model_version="v1",
             effective_from=None,
             effective_to=None,
             interaction_features={},
             created_by="publisher@example.test",
-            replace=False,
-            model_id=17,
         )
     )
     region_rows = rates.loc[rates["term_name"] == "region"]
@@ -2346,7 +2247,7 @@ def test_training_comparison_metrics_are_stable_and_scoped():
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import training_comparison_metrics
+    from pricing_pipeline.publishing.editor import training_comparison_metrics
     from pricing_pipeline.workbench.artifacts import CandidateBundle
 
     class Model:
@@ -2396,7 +2297,7 @@ def test_champion_comparison_scores_parent_rows_even_when_training_rows_differ(t
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import _load_champion_bundle
+    from pricing_pipeline.publishing.editor import _load_champion_bundle
     from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
     parent = CandidateBundle(
@@ -2518,7 +2419,7 @@ def test_champion_comparison_rejects_incompatible_offset_contract(
 ):
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor_candidate
+    from pricing_pipeline.publishing import editor
 
     parent = SimpleNamespace(
         X=pd.DataFrame({"x": [1.0]}),
@@ -2568,17 +2469,17 @@ def test_champion_comparison_rejects_incompatible_offset_contract(
             return Begin()
 
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "schema_names_from_connectable",
         lambda engine: SimpleNamespace(pricing="pricing"),
     )
     monkeypatch.setattr(
-        editor_candidate,
+        editor,
         "load_candidate_bundle",
         lambda *args, **kwargs: champion,
     )
 
-    snapshot = editor_candidate._load_champion_bundle(
+    snapshot = editor._load_champion_bundle(
         Engine(),
         model_id=17,
         deployment_slot="HOME_FREQ_UAT",
@@ -2611,7 +2512,7 @@ def test_champion_snapshot_distinguishes_absent_and_unavailable_champion(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import _load_champion_bundle
+    from pricing_pipeline.publishing.editor import _load_champion_bundle
     from pricing_pipeline.workbench.artifacts import CandidateBundle
 
     class Rows:
@@ -2673,8 +2574,9 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import verify_package_sql_parity
+    from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
     from pricing_pipeline.workbench.artifacts import CandidateBundle
+    from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     class Model:
         def predict(self, X, offset=None):
@@ -2691,12 +2593,16 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
             return {"prediction": self.prediction}
 
     class Connection:
-        def __init__(self):
+        def __init__(self, *, mismatch_position=None):
             self.calls = []
+            self.mismatch_position = mismatch_position
 
         def execute(self, statement, params):
             self.calls.append((str(statement), params))
-            return Result(params["x_prediction"])
+            features = json.loads(params["features_json"])
+            if len(self.calls) - 1 == self.mismatch_position:
+                return Result(98765.4321)
+            return Result(float(features["x"]) * 2.0)
 
     bundle = CandidateBundle(
         fitted_model=Model(),
@@ -2724,15 +2630,26 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
         edited_model=bundle.fitted_model,
         bundle=bundle,
         sample_size=5,
-        execute_params_hook=lambda params, expected: {
-            **params,
-            "x_prediction": expected,
-        },
     )
 
     assert len(connection.calls) == 5
     assert all(params["rate_package_id"] == 108 for _sql, params in connection.calls)
     assert all("PREDICT_RATE_PACKAGE" in sql for sql, _params in connection.calls)
+
+    with pytest.raises(EditorSubmissionError) as error:
+        verify_package_sql_parity(
+            Connection(mismatch_position=3),
+            rate_package_id=108,
+            edited_model=bundle.fitted_model,
+            bundle=bundle,
+            sample_size=5,
+        )
+
+    assert str(error.value) == "edited package 108 failed Python/SQL parity verification"
+    assert "sample row" not in str(error.value)
+    assert "3" not in str(error.value)
+    assert "6.0" not in str(error.value)
+    assert "98765.4321" not in str(error.value)
 
 
 def test_package_sql_parity_uses_published_feature_names():
@@ -2740,13 +2657,11 @@ def test_package_sql_parity_uses_published_feature_names():
     import pandas as pd
     from superglm import Numeric, SuperGLM
 
-    from pricing_pipeline.publishing.editor_candidate import verify_package_sql_parity
-    from pricing_pipeline.publishing.superglm_metadata import (
+    from pricing_pipeline.publishing.metadata import (
+        OffsetExportContract,
         build_superglm_publication_receipt,
     )
-    from pricing_pipeline.publishing.superglm_publication_receipt import (
-        OffsetExportContract,
-    )
+    from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
     from pricing_pipeline.workbench.artifacts import CandidateBundle
 
     class Result:
@@ -2764,8 +2679,10 @@ def test_package_sql_parity_uses_published_feature_names():
             self.payloads = []
 
         def execute(self, _statement, params):
-            self.payloads.append(json.loads(params["features_json"]))
-            return Result(params["x_prediction"])
+            payload = json.loads(params["features_json"])
+            self.payloads.append(payload)
+            prediction = model.predict(pd.DataFrame({"a/b": [payload["a_b"]]}))
+            return Result(float(prediction[0]))
 
     training_x = pd.DataFrame({"a/b": np.linspace(0.5, 3.0, 30)})
     training_y = np.random.default_rng(20260714).poisson(1.5, size=len(training_x))
@@ -2803,10 +2720,6 @@ def test_package_sql_parity_uses_published_feature_names():
         edited_model=model,
         bundle=bundle,
         publication_receipt=receipt,
-        execute_params_hook=lambda params, expected: {
-            **params,
-            "x_prediction": expected,
-        },
     )
 
     assert connection.payloads == [{"a_b": 1.5}]
@@ -2832,7 +2745,7 @@ class _ParityConnection:
         if not self.allow_execute:
             raise AssertionError("SQL must not execute for an invalid offset source")
         self.calls.append(params)
-        return _ParityResult(params["x_prediction"])
+        return _ParityResult((2.0, 6.0)[len(self.calls) - 1])
 
 
 def _offset_parity_bundle(*, handling, offset_source=None):
@@ -2894,7 +2807,7 @@ def _offset_parity_bundle(*, handling, offset_source=None):
 def test_package_sql_parity_uses_bound_offset_source_for_exported_factor(weight_kind):
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import verify_package_sql_parity
+    from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
 
     raw_source = pd.Series([12.0, 36.0], name="Term")
     offset_sources = {
@@ -2913,10 +2826,6 @@ def test_package_sql_parity_uses_bound_offset_source_for_exported_factor(weight_
         edited_model=bundle.fitted_model,
         bundle=bundle,
         sample_size=2,
-        execute_params_hook=lambda params, expected: {
-            **params,
-            "x_prediction": expected,
-        },
     )
 
     assert [
@@ -2927,7 +2836,7 @@ def test_package_sql_parity_uses_bound_offset_source_for_exported_factor(weight_
 def test_package_sql_parity_preserves_bound_categorical_offset_source_positionally():
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import verify_package_sql_parity
+    from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
 
     published_levels = pd.Series(
         ["basic", "premium"],
@@ -2947,10 +2856,6 @@ def test_package_sql_parity_preserves_bound_categorical_offset_source_positional
         edited_model=bundle.fitted_model,
         bundle=bundle,
         sample_size=2,
-        execute_params_hook=lambda params, expected: {
-            **params,
-            "x_prediction": expected,
-        },
     )
 
     assert [
@@ -2961,7 +2866,7 @@ def test_package_sql_parity_preserves_bound_categorical_offset_source_positional
 def test_package_sql_parity_applies_fitted_offset_as_sql_exposure():
     import numpy as np
 
-    from pricing_pipeline.publishing.editor_candidate import verify_package_sql_parity
+    from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
 
     bundle, _raw_source = _offset_parity_bundle(handling="ALREADY_APPLIED_SQL_EXPOSURE")
     connection = _ParityConnection()
@@ -2972,10 +2877,6 @@ def test_package_sql_parity_applies_fitted_offset_as_sql_exposure():
         edited_model=bundle.fitted_model,
         bundle=bundle,
         sample_size=2,
-        execute_params_hook=lambda params, expected: {
-            **params,
-            "x_prediction": expected,
-        },
     )
 
     np.testing.assert_allclose(
@@ -2988,7 +2889,7 @@ def test_parent_cv_metrics_are_labeled_as_revision_baseline():
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor_candidate import parent_cv_metrics
+    from pricing_pipeline.publishing.editor import parent_cv_metrics
     from pricing_pipeline.workbench.artifacts import CandidateBundle
 
     bundle = CandidateBundle(

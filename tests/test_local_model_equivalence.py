@@ -17,9 +17,9 @@ from pricing_pipeline.notebook import (
     publish_candidate,
     register_model,
 )
-from pricing_pipeline.publishing.equivalence import (
+from pricing_pipeline.publishing.identity import (
     ModelEquivalenceError,
-    ensure_model_equivalence,
+    bind_model_equivalence,
     find_equivalent_publication,
 )
 
@@ -116,7 +116,10 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
     first_raw_candidate = build("RAW")
     first_raw = publish_candidate(pricing, first_raw_candidate)
 
-    fingerprinted_raw = ensure_model_equivalence(first_raw_candidate.completed_build)
+    fingerprinted_raw = bind_model_equivalence(
+        first_raw_candidate.completed_build,
+        calculated_sha256=first_raw.model_equivalence_sha256,
+    )
     different_split = fingerprinted_raw.model_copy(
         update={"split_set_id": "different-validation-split"}
     )
@@ -213,8 +216,9 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
             {"model_run_id": first_raw.model_run_id},
         )
 
-    reissue_with_new_effective_date = ensure_model_equivalence(
-        first_raw_candidate.completed_build.model_copy(update={"effective_from": "2026-07-01"})
+    reissue_with_new_effective_date = bind_model_equivalence(
+        first_raw_candidate.completed_build.model_copy(update={"effective_from": "2026-07-01"}),
+        calculated_sha256=first_raw.model_equivalence_sha256,
     )
     assert (
         reissue_with_new_effective_date.model_equivalence_sha256
@@ -284,7 +288,7 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
         "manifests": 1,
         "packages": 2,
         "runs": 2,
-        "staged": 2,
+        "staged": 0,
         "reservations": 2,
     }
     assert [row["model_kind"] for row in final_lineage] == [

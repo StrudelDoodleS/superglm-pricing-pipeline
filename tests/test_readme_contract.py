@@ -10,6 +10,8 @@ ROOT_README = Path("README.md")
 NOTEBOOK_GUIDE = Path("docs/notebooks/README.md")
 SQL_GUIDE = Path("docs/sql/README.md")
 SCRIPT_INDEX = Path("scripts/README.md")
+MAINTAINER_GUIDE = Path("docs/MAINTAINERS.md")
+PORTABLE_REPORT_GUIDE = Path("docs/notebooks/portable_underwriter_report.md")
 
 
 def _read(path: Path) -> str:
@@ -22,7 +24,7 @@ def test_root_readme_is_a_concise_entry_point():
     for expected in (
         "notebook-first",
         "scripts/scaffold_pricing_model.py",
-        "pricing_scaffold.example.toml",
+        "pricing_scaffold.toml",
         "01_data_ingestion.ipynb",
         "02_model_exploration.ipynb",
         "03_model_training.ipynb",
@@ -67,9 +69,15 @@ def test_root_readme_documents_the_installed_scaffold_flow_and_dependency_owners
         "installed private Python module",
         "get_engine(database=None)",
         "contains no credentials",
-        "legacy checkout command",
+        "source checkout wrapper",
     ):
         assert expected in readme
+
+    for trace_guide in (MAINTAINER_GUIDE, PORTABLE_REPORT_GUIDE):
+        trace = _read(trace_guide)
+
+        assert "scaffold.service.scaffold_resolved_pricing_model" in trace
+        assert "scaffold.service.scaffold_pricing_model" not in trace
 
 
 def test_notebook_guide_documents_boundaries_and_public_functions():

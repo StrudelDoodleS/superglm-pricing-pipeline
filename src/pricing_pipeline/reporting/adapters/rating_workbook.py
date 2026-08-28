@@ -14,7 +14,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from pricing_pipeline.reporting._core import UnderwriterReportError
 from pricing_pipeline.reporting.evidence import (
     FeatureImportanceEvidence,
     MainEffectEvidence,
@@ -22,6 +21,7 @@ from pricing_pipeline.reporting.evidence import (
     ReportContext,
     SuppressionMetadata,
 )
+from pricing_pipeline.reporting.inputs import UnderwriterReportError
 
 _RATING_SHEET = "Rating Tables"
 _TERM_ROW = 4

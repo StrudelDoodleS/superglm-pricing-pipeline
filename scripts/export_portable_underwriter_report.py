@@ -18,16 +18,18 @@ SOURCE_MODULES = (
         "reporting._underwriter_styles",
         ROOT / "src/pricing_pipeline/reporting/_underwriter_styles.py",
     ),
+    ("reporting.inputs", ROOT / "src/pricing_pipeline/reporting/inputs.py"),
     ("reporting.evidence", ROOT / "src/pricing_pipeline/reporting/evidence.py"),
     (
-        "reporting._underwriter_movement",
-        ROOT / "src/pricing_pipeline/reporting/_underwriter_movement.py",
+        "reporting.movement",
+        ROOT / "src/pricing_pipeline/reporting/movement.py",
     ),
     (
         "reporting._underwriter_html",
         ROOT / "src/pricing_pipeline/reporting/_underwriter_html.py",
     ),
-    ("reporting._core", ROOT / "src/pricing_pipeline/reporting/_core.py"),
+    ("reporting.diagnostics", ROOT / "src/pricing_pipeline/reporting/diagnostics.py"),
+    ("reporting.report", ROOT / "src/pricing_pipeline/reporting/report.py"),
 )
 
 
@@ -130,13 +132,14 @@ def _load_embedded_runtime() -> None:
 
 
 _load_embedded_runtime()
-_core = _sys.modules[f"{_RUNTIME_PREFIX}.reporting._core"]
+_inputs = _sys.modules[f"{_RUNTIME_PREFIX}.reporting.inputs"]
+_report = _sys.modules[f"{_RUNTIME_PREFIX}.reporting.report"]
 _evidence = _sys.modules[f"{_RUNTIME_PREFIX}.reporting.evidence"]
 
-UnderwriterReportError = _core.UnderwriterReportError
-UnderwriterReportOptions = _core.UnderwriterReportOptions
-UnderwriterReportResult = _core.UnderwriterReportResult
-build_scored_model_report = _core.build_scored_model_report
+UnderwriterReportError = _inputs.UnderwriterReportError
+UnderwriterReportOptions = _inputs.UnderwriterReportOptions
+UnderwriterReportResult = _inputs.UnderwriterReportResult
+build_scored_model_report = _report.build_scored_model_report
 
 CapabilityUnavailable = _evidence.CapabilityUnavailable
 EvidenceFact = _evidence.EvidenceFact

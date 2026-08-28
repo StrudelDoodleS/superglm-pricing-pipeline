@@ -21,6 +21,7 @@ The plain-Python fallback, which only works after installation, is:
 
 ```bash
 python -m pricing_pipeline init
+# edit pricing_scaffold.toml
 python -m pricing_pipeline scaffold \
   --model-name CLAIM_FREQUENCY \
   --target-name claim_count
@@ -59,9 +60,11 @@ An explicit `--config` wins, and explicit command-line options win over the
 file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
 notebooks set it to `False`.
 
-For a legacy checkout command, copy `pricing_scaffold.example.toml` to
-`pricing_scaffold.toml` and run `uv run python scripts/scaffold_pricing_model.py`
-with the same model and target options.
+The supported workflow is `pricing-pipeline init` (or
+`python -m pricing_pipeline init`), edit `pricing_scaffold.toml`, then
+`pricing-pipeline scaffold`. The source checkout wrapper, `uv run python
+scripts/scaffold_pricing_model.py`, is only an equivalent way to invoke the
+final scaffold command and has the same project and configuration preconditions.
 
 ## Important rules
 

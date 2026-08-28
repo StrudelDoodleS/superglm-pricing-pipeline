@@ -65,9 +65,7 @@ def _approved_build() -> ApprovedModelBuild:
         model_frame_sha256="e" * 64,
         metrics={"deviance": 0.42},
         metric_scopes={"deviance": "cv"},
-        fold_metrics=(
-            {"fold_no": 1, "metric_name": "deviance", "metric_value": 0.4},
-        ),
+        fold_metrics=({"fold_no": 1, "metric_name": "deviance", "metric_value": 0.4},),
     )
 
 
@@ -85,15 +83,15 @@ def test_record_model_run_derives_audit_evidence_from_approved_build():
     )
 
     assert model_run_id == 501
-    model_run_merge = next(
-        event for event in connection.events if "MERGE pricing.MODEL_RUN" in event[0]
+    model_run_insert = next(
+        event for event in connection.events if "INSERT INTO pricing.MODEL_RUN" in event[0]
     )
-    assert model_run_merge[1]["manifest_id"] == build.manifest_id
-    assert model_run_merge[1]["split_set_id"] == build.split_set_id
-    assert model_run_merge[1]["rating_workbook_sha256"] == build.rating_workbook_sha256
-    assert model_run_merge[1]["run_status"] == "SUCCESS"
-    assert any("MERGE mlops.MODEL_RUN_METRIC" in sql for sql, _ in connection.events)
-    assert any("MERGE pricing.CV_FOLD_METRIC" in sql for sql, _ in connection.events)
+    assert model_run_insert[1]["manifest_id"] == build.manifest_id
+    assert model_run_insert[1]["split_set_id"] == build.split_set_id
+    assert model_run_insert[1]["rating_workbook_sha256"] == build.rating_workbook_sha256
+    assert model_run_insert[1]["run_status"] == "SUCCESS"
+    assert any("INSERT INTO mlops.MODEL_RUN_METRIC" in sql for sql, _ in connection.events)
+    assert any("INSERT INTO pricing.CV_FOLD_METRIC" in sql for sql, _ in connection.events)
     assert list(signature(record_model_run).parameters) == [
         "engine",
         "build",
@@ -106,7 +104,7 @@ def test_record_model_run_derives_audit_evidence_from_approved_build():
 
 
 @pytest.mark.parametrize("parent_model_run_id", [409, None])
-def test_record_model_run_replaces_complete_mutable_lineage_snapshot(
+def test_record_model_run_inserts_complete_lineage_snapshot(
     parent_model_run_id,
 ):
     connection = _Connection()
@@ -121,25 +119,17 @@ def test_record_model_run_replaces_complete_mutable_lineage_snapshot(
         parent_model_run_id=parent_model_run_id,
     )
 
-    split_cleanup = next(event for event in connection.events if "DELETE split_link" in event[0])
-    dataset_cleanup = next(
-        event for event in connection.events if "DELETE dataset_link" in event[0]
+    model_run_insert = next(
+        event for event in connection.events if "INSERT INTO pricing.MODEL_RUN" in event[0]
     )
-    assert "parent_split.model_run_id = :parent_model_run_id" in split_cleanup[0]
-    assert "parent_split.manifest_id = split_link.manifest_id" in split_cleanup[0]
-    assert "parent_split.split_set_id = split_link.split_set_id" in split_cleanup[0]
-    assert "parent_split.dataset_role = split_link.dataset_role" in split_cleanup[0]
-    assert "parent_split.split_role = split_link.split_role" in split_cleanup[0]
-    assert "parent_dataset.model_run_id = :parent_model_run_id" in dataset_cleanup[0]
-    assert "parent_dataset.manifest_id = dataset_link.manifest_id" in dataset_cleanup[0]
-    assert "parent_dataset.dataset_role = dataset_link.dataset_role" in dataset_cleanup[0]
-    assert split_cleanup[1]["parent_model_run_id"] == parent_model_run_id
-    assert dataset_cleanup[1]["parent_model_run_id"] == parent_model_run_id
-    model_run_merge = next(
-        event for event in connection.events if "MERGE pricing.MODEL_RUN" in event[0]
-    )
-    assert "rating_workbook_sha256 = :rating_workbook_sha256" in model_run_merge[0]
-    assert model_run_merge[1]["rating_workbook_sha256"] == "a" * 64
+    assert ":rating_workbook_sha256" in model_run_insert[0]
+    assert model_run_insert[1]["rating_workbook_sha256"] == "a" * 64
+    parent_copies = [
+        event
+        for event in connection.events
+        if "parent.model_run_id = :parent_model_run_id" in event[0]
+    ]
+    assert len(parent_copies) == (2 if parent_model_run_id is not None else 0)
 
 
 def test_record_model_run_rejects_parent_run_from_another_parent_package():

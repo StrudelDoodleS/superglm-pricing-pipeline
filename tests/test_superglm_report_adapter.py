@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import superglm.editor.payloads as editor_payloads
 from superglm import Categorical, Numeric, Spline, SuperGLM, Tweedie
 from superglm.distributions import Gamma
 from superglm.editor import EditorSession
@@ -15,7 +16,6 @@ from superglm.profiling.tweedie import tweedie_logpdf
 
 import pricing_pipeline.reporting.adapters.superglm as superglm_adapter
 from pricing_pipeline.reporting import UnderwriterReportOptions, build_scored_model_report
-from pricing_pipeline.reporting._core import UnderwriterReportError
 from pricing_pipeline.reporting.adapters.rating_workbook import RatingWorkbookAdapter
 from pricing_pipeline.reporting.adapters.superglm import (
     SuperGLMReportAdapter,
@@ -26,6 +26,7 @@ from pricing_pipeline.reporting.evidence import (
     ReportContext,
     normalize_model_evidence,
 )
+from pricing_pipeline.reporting.inputs import UnderwriterReportError
 
 
 def _context(
@@ -51,9 +52,10 @@ def _context(
     )
 
 
-def test_adapter_package_lazily_exports_public_adapters():
+def test_adapter_package_exports_public_adapters_without_dynamic_attributes():
     from pricing_pipeline.reporting import adapters
 
+    assert "__getattr__" not in adapters.__dict__
     assert adapters.RatingWorkbookAdapter is RatingWorkbookAdapter
     assert adapters.SuperGLMReportAdapter is SuperGLMReportAdapter
     assert adapters.SuppliedTweedieLikelihoodAdapter is SuppliedTweedieLikelihoodAdapter
@@ -606,7 +608,7 @@ def test_unsupported_superglm_capabilities_have_stable_plain_text_reasons(monkey
         del args, kwargs
         raise NotImplementedError("<upstream editor implementation detail>")
 
-    monkeypatch.setattr(superglm_adapter.EditorSession, "from_model", unsupported_editor)
+    monkeypatch.setattr(EditorSession, "from_model", unsupported_editor)
     frame = pd.DataFrame(
         {
             "x": np.linspace(0.0, 1.0, 4),
@@ -673,11 +675,11 @@ def _install_editor_result(
 ) -> None:
     session = SimpleNamespace(terms={"x": term})
     monkeypatch.setattr(
-        superglm_adapter.EditorSession,
+        EditorSession,
         "from_model",
         lambda *args, **kwargs: session,
     )
-    monkeypatch.setattr(superglm_adapter, "session_payload", lambda session: payload)
+    monkeypatch.setattr(editor_payloads, "session_payload", lambda session: payload)
 
 
 @pytest.mark.parametrize("edf", [np.nan, np.inf])
@@ -778,7 +780,7 @@ def test_editor_receives_only_positive_weight_aligned_rows(monkeypatch, tmp_path
     ).fit(frame[["x"]], frame["actual"], sample_weight=frame["weight"])
     frame["prediction"] = model.predict(frame[["x"]])
     captured: list[tuple[pd.DataFrame, np.ndarray, np.ndarray]] = []
-    original = superglm_adapter.EditorSession.from_model
+    original = EditorSession.from_model
 
     def capture_train_data(*args, **kwargs):
         train_frame, actual, weight = kwargs["train_data"]
@@ -791,7 +793,7 @@ def test_editor_receives_only_positive_weight_aligned_rows(monkeypatch, tmp_path
         )
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(superglm_adapter.EditorSession, "from_model", capture_train_data)
+    monkeypatch.setattr(EditorSession, "from_model", capture_train_data)
 
     build_scored_model_report(
         frame,

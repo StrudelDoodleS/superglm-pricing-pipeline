@@ -20,12 +20,12 @@ from superglm import (
 from superglm.features.spline import PSpline
 from superglm.types import LambdaPolicy
 
-from pricing_pipeline.publishing.superglm_metadata import (
+from pricing_pipeline.publishing.metadata import (
+    OffsetExportContract,
     _grouping_metadata,
     _json_value,
     build_superglm_publication_receipt,
 )
-from pricing_pipeline.publishing.superglm_publication_receipt import OffsetExportContract
 
 
 def _fit_model(features, *, family="poisson", offset=None, interactions=None):

@@ -100,6 +100,14 @@ RESOURCE_PREFIX = "pricing_pipeline/resources/"
 MIGRATIONS_PREFIX = f"{RESOURCE_PREFIX}migrations/"
 OFFLINE_SQLITE_PREFIX = f"{RESOURCE_PREFIX}offline_sqlite/"
 SCAFFOLD_PREFIX = f"{RESOURCE_PREFIX}scaffold/"
+SCAFFOLD_NOTEBOOK_FILES = (
+    "01_data_ingestion.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
+)
 SCAFFOLD_TEMPLATE = b"""# Connection names only. Keep credentials in the private runtime module or its secret provider.
 
 [notebook_defaults]
@@ -217,6 +225,7 @@ def _expected_resource_names() -> set[str]:
         f"{RESOURCE_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
+        *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
     }

@@ -201,8 +201,25 @@ def test_exporter_writes_deterministic_artifact(tmp_path: Path):
 
 
 def test_checked_in_portable_artifact_matches_canonical_sources():
-    from scripts.export_portable_underwriter_report import PORTABLE_PATH, render_portable_script
+    from scripts.export_portable_underwriter_report import (
+        PORTABLE_PATH,
+        SOURCE_MODULES,
+        render_portable_script,
+    )
 
+    source_names = [name for name, _ in SOURCE_MODULES]
+
+    assert source_names == [
+        "reporting._underwriter_styles",
+        "reporting.inputs",
+        "reporting.evidence",
+        "reporting.movement",
+        "reporting._underwriter_html",
+        "reporting.diagnostics",
+        "reporting.report",
+    ]
+    assert "reporting._core" not in source_names
+    assert "reporting._underwriter_movement" not in source_names
     assert PORTABLE_PATH.read_text(encoding="utf-8") == render_portable_script()
 
 

@@ -16,8 +16,8 @@ from pricing_pipeline.models.spec import (
     ApprovedModelBuildError,
 )
 from pricing_pipeline.orchestration.pipeline import publish_model_export
-from pricing_pipeline.publishing.model_registry import validate_registered_model
-from pricing_pipeline.publishing.lifecycle import CompletedModelPublishResult
+from pricing_pipeline.publishing.publish import CompletedModelPublishResult
+from pricing_pipeline.publishing.sqlserver import validate_registered_model
 from pricing_pipeline.workbench.artifacts import load_candidate_bundle
 
 
@@ -140,9 +140,7 @@ def load_candidate_sql_lineage(
     if not isinstance(raw_pk_columns, list) or not all(
         isinstance(column, str) and column for column in raw_pk_columns
     ):
-        raise ApprovedModelBuildError(
-            f"manifest_id {manifest_id!r} has invalid pk_columns_json"
-        )
+        raise ApprovedModelBuildError(f"manifest_id {manifest_id!r} has invalid pk_columns_json")
 
     if split_set_id is not None:
         if split_row is None:

@@ -11,13 +11,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
 
-from pricing_pipeline.infra.schema import schema_names_from_connectable
-from pricing_pipeline.publishing.model_registry import ModelRegistryError, get_pricing_model
-from pricing_pipeline.publishing.naming import clean_identifier
-from pricing_pipeline.publishing.staging_lock import acquire_staging_export_lock
-from pricing_pipeline.publishing.superglm_publication_receipt import (
+from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.identity import clean_identifier
+from pricing_pipeline.publishing.metadata import (
     SuperGLMPublicationReceipt,
     canonical_receipt_bytes,
     load_publication_receipt,
@@ -62,15 +60,21 @@ class StagingExport:
     workbook_path: Path
     export_id: str
     model_name: str
-    target_name: str
-    model_type: str
     model_version: str | None
     effective_from: str | None
     effective_to: str | None
     interaction_features: Mapping[str, Any]
     created_by: str
-    replace: bool
-    model_id: int | None
+
+
+@dataclass(frozen=True)
+class RatingTables:
+    export_frame: pd.DataFrame
+    rate_cells: pd.DataFrame
+    cell_levels: pd.DataFrame
+    term_metadata: pd.DataFrame
+    staging_content_sha256: str
+    model_equivalence_sha256: str
 
 
 def cell_to_zero_index(cell: str) -> tuple[int, int]:
@@ -158,13 +162,15 @@ def split_interaction_level(level_code: str, features: list[str]) -> list[tuple[
 
 def _normalise_interaction_specs(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, Mapping):
-        raise ValueError("interaction feature metadata must be a JSON object")
+        raise ValueError("interaction feature metadata must be a JSON object")  # noqa: TRY004
     specs: dict[str, dict[str, Any]] = {}
     for term_name, metadata in value.items():
         if isinstance(metadata, list):
             continue
         if not isinstance(metadata, Mapping):
-            raise ValueError(f"interaction metadata for {term_name!r} must be an object")
+            raise ValueError(  # noqa: TRY004
+                f"interaction metadata for {term_name!r} must be an object"
+            )
         source_term_name = str(metadata.get("source_term_name") or "").strip()
         parent_names = metadata.get("parent_names")
         input_column_names = metadata.get("input_column_names")
@@ -522,34 +528,6 @@ def build_staging_frames(
     return export_df, rate_df, level_df
 
 
-def _resolve_registered_model_id(con, args: StagingExport) -> int:
-    model_id = args.model_id
-    if model_id is not None:
-        return int(model_id)
-
-    record = get_pricing_model(con, args.model_name)
-    if record is None:
-        raise ModelRegistryError(
-            f"model_name {args.model_name!r} is not registered; "
-            "run explicit model registration first"
-        )
-
-    mismatches: list[str] = []
-    if record.target_name != args.target_name:
-        mismatches.append(f"target_name db={record.target_name!r} staging={args.target_name!r}")
-    if record.model_type != args.model_type:
-        mismatches.append(f"model_type db={record.model_type!r} staging={args.model_type!r}")
-    if record.model_status != "ACTIVE":
-        mismatches.append(f"model_status db={record.model_status!r} expected='ACTIVE'")
-
-    if mismatches:
-        raise ModelRegistryError(
-            f"registered model {args.model_name!r} does not match staged export: "
-            + "; ".join(mismatches)
-        )
-    return record.model_id
-
-
 def _deterministic_json(data: Any) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
@@ -814,7 +792,7 @@ def _validate_numeric_main_staging(
 
 def _apply_publication_receipt_metadata(
     *,
-    args: StagingExport,
+    export_id: str,
     export_df: pd.DataFrame,
     rate_df: pd.DataFrame,
     level_df: pd.DataFrame,
@@ -881,119 +859,21 @@ def _apply_publication_receipt_metadata(
     export_df["offset_label"] = offset_contract.label
     export_df["metadata_origin"] = receipt.metadata_origin
 
-    return _term_metadata_frame(args.export_id, receipt, staged_terms=staged_terms)
+    return _term_metadata_frame(export_id, receipt, staged_terms=staged_terms)
 
 
-def insert_staging_frames(
-    engine,
-    args: StagingExport,
-    export_df: pd.DataFrame,
-    rate_df: pd.DataFrame,
-    level_df: pd.DataFrame,
-    term_metadata_df: pd.DataFrame | None = None,
-    staging_content_sha256: str | None = None,
-    model_equivalence_sha256: str | None = None,
-) -> None:
-    for field_name, digest in (
-        ("staging_content_sha256", staging_content_sha256),
-        ("model_equivalence_sha256", model_equivalence_sha256),
-    ):
-        if digest is not None and re.fullmatch(r"[0-9a-f]{64}", digest) is None:
-            raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
-    schemas = schema_names_from_connectable(engine)
-    with engine.begin() as con:
-        acquire_staging_export_lock(con, args.export_id)
-        model_id = _resolve_registered_model_id(con, args)
-
-        if args.replace:
-            con.execute(
-                text("DELETE FROM pricing_stg.STG_TERM_METADATA WHERE export_id = :export_id"),
-                {"export_id": args.export_id},
-            )
-            con.execute(
-                text("DELETE FROM pricing_stg.STG_CELL_LEVEL WHERE export_id = :export_id"),
-                {"export_id": args.export_id},
-            )
-            con.execute(
-                text("DELETE FROM pricing_stg.STG_RATE_CELL WHERE export_id = :export_id"),
-                {"export_id": args.export_id},
-            )
-            con.execute(
-                text("DELETE FROM pricing_stg.STG_RATING_EXPORT WHERE export_id = :export_id"),
-                {"export_id": args.export_id},
-            )
-
-        export_df.to_sql(
-            "STG_RATING_EXPORT",
-            con,
-            schema=schemas.pricing_staging,
-            if_exists="append",
-            index=False,
-        )
-        con.execute(
-            text(
-                "UPDATE pricing_stg.STG_RATING_EXPORT "
-                "SET model_id = :model_id, "
-                "staging_content_sha256 = :staging_content_sha256, "
-                "model_equivalence_sha256 = :model_equivalence_sha256 "
-                "WHERE export_id = :export_id"
-            ),
-            {
-                "export_id": args.export_id,
-                "model_id": model_id,
-                "staging_content_sha256": staging_content_sha256,
-                "model_equivalence_sha256": model_equivalence_sha256,
-            },
-        )
-        rate_df.to_sql(
-            "STG_RATE_CELL",
-            con,
-            schema=schemas.pricing_staging,
-            if_exists="append",
-            index=False,
-            chunksize=5000,
-        )
-        level_df.to_sql(
-            "STG_CELL_LEVEL",
-            con,
-            schema=schemas.pricing_staging,
-            if_exists="append",
-            index=False,
-            chunksize=5000,
-        )
-        if term_metadata_df is not None and not term_metadata_df.empty:
-            term_metadata_df.to_sql(
-                "STG_TERM_METADATA",
-                con,
-                schema=schemas.pricing_staging,
-                if_exists="append",
-                index=False,
-                chunksize=5000,
-            )
-
-
-def _verified_staging_frames(
+def _verified_rating_frames(
     *,
     workbook_path: Path,
     export_id: str,
     model_name: str,
     model_version: str | None,
     effective_from: str | None,
-    target_name: str = "ClaimNb",
-    model_type: str = "superglm_poisson",
     effective_to: str | None = None,
     created_by: str = "python",
-    replace: bool = False,
-    model_id: int | None = None,
     publication_receipt_path: str | Path,
     publication_receipt_sha256: str,
-) -> tuple[
-    StagingExport,
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-    pd.DataFrame,
-]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     receipt = load_publication_receipt(
         publication_receipt_path,
         expected_sha256=publication_receipt_sha256,
@@ -1003,26 +883,22 @@ def _verified_staging_frames(
         workbook_path=workbook_path,
         export_id=export_id,
         model_name=model_name,
-        target_name=target_name,
-        model_type=model_type,
         model_version=model_version,
         effective_from=effective_from,
         effective_to=effective_to,
         interaction_features=_receipt_interaction_features(receipt),
         created_by=created_by,
-        replace=replace,
-        model_id=model_id,
     )
     export_df, rate_df, level_df = build_staging_frames(args)
     term_metadata_df = _apply_publication_receipt_metadata(
-        args=args,
+        export_id=export_id,
         export_df=export_df,
         rate_df=rate_df,
         level_df=level_df,
         receipt=receipt,
         receipt_sha256=publication_receipt_sha256,
     )
-    return args, export_df, rate_df, level_df, term_metadata_df
+    return export_df, rate_df, level_df, term_metadata_df
 
 
 def rating_workbook_model_equivalence_sha256(
@@ -1032,27 +908,20 @@ def rating_workbook_model_equivalence_sha256(
     model_name: str,
     model_version: str | None,
     effective_from: str | None,
-    target_name: str = "ClaimNb",
-    model_type: str = "superglm_poisson",
     effective_to: str | None = None,
     created_by: str = "python",
-    model_id: int | None = None,
     publication_receipt_path: str | Path,
     publication_receipt_sha256: str,
 ) -> str:
     """Fingerprint a workbook locally before any staging-table write."""
-    _, export_df, rate_df, level_df, term_metadata_df = _verified_staging_frames(
+    export_df, rate_df, level_df, term_metadata_df = _verified_rating_frames(
         workbook_path=workbook_path,
         export_id=export_id,
         model_name=model_name,
         model_version=model_version,
         effective_from=effective_from,
-        target_name=target_name,
-        model_type=model_type,
         effective_to=effective_to,
         created_by=created_by,
-        replace=False,
-        model_id=model_id,
         publication_receipt_path=publication_receipt_path,
         publication_receipt_sha256=publication_receipt_sha256,
     )
@@ -1064,58 +933,77 @@ def rating_workbook_model_equivalence_sha256(
     )
 
 
-def stage_rating_export(
-    engine,
+def prepare_rating_tables(
     *,
     workbook_path: Path,
-    export_id: str,
-    model_name: str,
-    model_version: str | None,
-    effective_from: str | None,
-    target_name: str = "ClaimNb",
-    model_type: str = "superglm_poisson",
-    effective_to: str | None = None,
-    created_by: str = "python",
-    replace: bool = False,
-    model_id: int | None = None,
-    publication_receipt_path: str | Path,
-    publication_receipt_sha256: str,
-) -> str:
-    args, export_df, rate_df, level_df, term_metadata_df = _verified_staging_frames(
+    build: ApprovedModelBuild,
+    model_config: ModelBuildConfig,
+    effective_to: str | None,
+) -> RatingTables:
+    export_frame, rate_cells, cell_levels, term_metadata = _verified_rating_frames(
         workbook_path=workbook_path,
-        export_id=export_id,
-        model_name=model_name,
-        model_version=model_version,
-        effective_from=effective_from,
-        target_name=target_name,
-        model_type=model_type,
+        export_id=build.export_id,
+        model_name=model_config.model_name,
+        model_version=build.model_version,
+        effective_from=build.effective_from,
         effective_to=effective_to,
-        created_by=created_by,
-        replace=replace,
-        model_id=model_id,
-        publication_receipt_path=publication_receipt_path,
-        publication_receipt_sha256=publication_receipt_sha256,
+        created_by=build.created_by,
+        publication_receipt_path=build.publication_receipt_path,
+        publication_receipt_sha256=build.publication_receipt_sha256,
     )
-    content_sha256 = staging_content_sha256(
-        export_df,
-        rate_df,
-        level_df,
-        term_metadata_df,
+    return RatingTables(
+        export_frame=export_frame,
+        rate_cells=rate_cells,
+        cell_levels=cell_levels,
+        term_metadata=term_metadata,
+        staging_content_sha256=staging_content_sha256(
+            export_frame, rate_cells, cell_levels, term_metadata
+        ),
+        model_equivalence_sha256=model_equivalence_sha256(
+            export_frame, rate_cells, cell_levels, term_metadata
+        ),
     )
-    equivalence_sha256 = model_equivalence_sha256(
-        export_df,
-        rate_df,
-        level_df,
-        term_metadata_df,
+
+
+def build_export_id(model_name: str, run_id: str) -> str:
+    raw = f"{model_name}__{run_id}".lower()
+    raw = raw.replace("-", "").replace(":", "").replace("+", "")
+    safe = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    return safe or "rating_export"
+
+
+def export_rating_tables(
+    model,
+    X,
+    y,
+    export_weight,
+    output_path: Path,
+    *,
+    offset=None,
+    offset_source=None,
+    offset_name: str | None = None,
+    offset_kind: str | None = None,
+    offset_max_exact_levels: int | None = None,
+    n_bins: int = 150,
+) -> Path:
+    export_fn = getattr(model, "export_rating_tables", None)
+    if not callable(export_fn):
+        raise RuntimeError(  # noqa: TRY004
+            "SuperGLM rating table export support is required. Install a SuperGLM "
+            "version that includes PR #109 and exposes model.export_rating_tables()."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    export_kwargs = {"sample_weight": export_weight, "n_bins": n_bins}
+    optional_export_kwargs = {
+        "offset": offset,
+        "offset_source": offset_source,
+        "offset_name": offset_name,
+        "offset_kind": offset_kind,
+        "offset_max_exact_levels": offset_max_exact_levels,
+    }
+    export_kwargs.update(
+        {key: value for key, value in optional_export_kwargs.items() if value is not None}
     )
-    insert_staging_frames(
-        engine,
-        args,
-        export_df,
-        rate_df,
-        level_df,
-        term_metadata_df,
-        staging_content_sha256=content_sha256,
-        model_equivalence_sha256=equivalence_sha256,
-    )
-    return content_sha256
+    export_fn(output_path, X, y, **export_kwargs)
+    return output_path

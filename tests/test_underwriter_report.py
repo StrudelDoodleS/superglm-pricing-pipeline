@@ -15,13 +15,13 @@ from superglm import Categorical, Numeric, Spline, SuperGLM
 from pricing_pipeline.modeling.scratch_diagnostics import weighted_quantile_bins
 from pricing_pipeline.reporting import (
     ModelLikelihoodSpec,
-    UnderwriterReportOptions,
     build_scored_model_report,
     build_underwriter_report,
 )
-from pricing_pipeline.reporting._core import _sampled_curve
 from pricing_pipeline.reporting.adapters.superglm import SuperGLMReportAdapter
+from pricing_pipeline.reporting.diagnostics import _sampled_curve
 from pricing_pipeline.reporting.evidence import EvidenceRequest
+from pricing_pipeline.reporting.inputs import UnderwriterReportOptions
 
 
 class _PrintPageParser(HTMLParser):
@@ -109,23 +109,23 @@ def test_lorenz_curve_does_not_resolve_below_minimum_comparison_units():
 def test_rating_workbook_adapter_imports_without_superglm():
     script = """\
 import builtins
+import sys
 original = builtins.__import__
 def guarded(name, *args, **kwargs):
-    if name.startswith("superglm"):
+    if name == "joblib" or name.startswith("superglm"):
         raise AssertionError(f"forbidden import: {name}")
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
-import pricing_pipeline.reporting.evidence
-import pricing_pipeline.reporting._core
-import pricing_pipeline.reporting._underwriter_html
+import pricing_pipeline.reporting.adapters
 import pricing_pipeline.reporting.adapters.rating_workbook
+assert not any(name == "superglm" or name.startswith("superglm.") for name in sys.modules)
 """
 
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def test_prediction_movement_uses_tie_safe_weighted_rank_bins():
-    from pricing_pipeline.reporting._underwriter_movement import (
+    from pricing_pipeline.reporting.movement import (
         _tie_safe_weighted_bins,
     )
 
@@ -139,7 +139,7 @@ def test_prediction_movement_uses_tie_safe_weighted_rank_bins():
 
 
 def test_double_lift_privacy_bins_keep_tied_ratios_together_independent_of_row_order():
-    from pricing_pipeline.reporting._core import _privacy_safe_bins
+    from pricing_pipeline.reporting.diagnostics import _privacy_safe_bins
 
     ratios = np.array([1.0, 1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     weight = np.array([1.0, 2.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -172,7 +172,7 @@ def test_double_lift_privacy_bins_keep_tied_ratios_together_independent_of_row_o
 
 
 def test_prediction_movement_suppresses_small_cells_and_uses_weighted_aggregates():
-    from pricing_pipeline.reporting._underwriter_movement import (
+    from pricing_pipeline.reporting.movement import (
         prediction_movement_payload,
     )
 
@@ -228,7 +228,7 @@ def test_report_options_reject_invalid_movement_bins(movement_bins):
 
 
 def test_unit_deviance_is_stable_for_large_nearly_equal_values():
-    from pricing_pipeline.reporting.underwriter import _unit_tweedie_deviance
+    from pricing_pipeline.reporting.diagnostics import _unit_tweedie_deviance
 
     actual = np.array([99_999_999.0, 100_000_001.0])
     prediction = np.full(2, 100_000_000.0)
@@ -252,7 +252,7 @@ def test_weighted_line_agreement_is_bounded(
     expected_signed: float,
     expected_agreement: float,
 ):
-    from pricing_pipeline.reporting.underwriter import _weighted_line_agreement
+    from pricing_pipeline.reporting.diagnostics import _weighted_line_agreement
 
     signed, agreement = _weighted_line_agreement(
         np.array([1.0, 2.0, 3.0]),
@@ -265,7 +265,7 @@ def test_weighted_line_agreement_is_bounded(
 
 
 def test_weighted_line_agreement_handles_equal_constant_lines():
-    from pricing_pipeline.reporting.underwriter import _weighted_line_agreement
+    from pricing_pipeline.reporting.diagnostics import _weighted_line_agreement
 
     signed, agreement = _weighted_line_agreement(
         np.full(3, 2.0),
@@ -832,7 +832,7 @@ def test_double_lift_uses_exact_nll_when_both_models_have_training_metadata(
 
 
 def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monkeypatch):
-    import pricing_pipeline.reporting.adapters.superglm as superglm_adapter
+    from superglm.profiling import tweedie as tweedie_profile
 
     frame = pd.DataFrame(
         {
@@ -843,7 +843,7 @@ def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monke
             "model_b": [0.3, 0.25, 1.8, 3.7, 5.5],
         }
     )
-    original = superglm_adapter.tweedie_logpdf
+    original = tweedie_profile.tweedie_logpdf
     calls = 0
 
     def counted(*args, **kwargs):
@@ -851,7 +851,7 @@ def test_exact_tweedie_density_is_evaluated_once_per_model(tmp_path: Path, monke
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(superglm_adapter, "tweedie_logpdf", counted)
+    monkeypatch.setattr(tweedie_profile, "tweedie_logpdf", counted)
     build_underwriter_report(
         frame,
         actual="actual",

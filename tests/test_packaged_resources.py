@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import text
 
 from pricing_pipeline.infra.migrations import migration_files
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
-from pricing_pipeline.resources import migration_root, offline_sqlite_root
+from pricing_pipeline.resources import migration_root, offline_sqlite_root, scaffold_root
 
 OFFLINE_NAMES = ("mlops.sql", "pricing.sql", "pricing_stg.sql", "pricing_views.sql")
+SCAFFOLD_NOTEBOOKS = (
+    "01_data_ingestion.ipynb",
+    "02_model_exploration.ipynb",
+    "03_model_training.ipynb",
+    "04_model_editor.ipynb",
+    "05_manual_adjustment.ipynb",
+    "06_model_deployment.ipynb",
+)
 
 EXPECTED_MIGRATIONS = (
     "V001__dataset_manifest_cv.sql",
@@ -54,6 +64,18 @@ def test_offline_sqlite_resource_inventory_is_exact():
     root = offline_sqlite_root()
     assert tuple(sorted(item.name for item in root.iterdir() if item.is_file())) == OFFLINE_NAMES
     assert all(root.joinpath(name).read_text(encoding="utf-8").strip() for name in OFFLINE_NAMES)
+
+
+def test_scaffold_notebook_resources_are_exact_valid_notebooks():
+    root = scaffold_root().joinpath("notebooks")
+    assert root.is_dir()
+    assert tuple(sorted(item.name for item in root.iterdir() if item.is_file())) == (
+        SCAFFOLD_NOTEBOOKS
+    )
+    for name in SCAFFOLD_NOTEBOOKS:
+        notebook = json.loads(root.joinpath(name).read_text(encoding="utf-8"))
+        assert notebook["nbformat"] == 4
+        assert notebook["cells"]
 
 
 def test_sql_server_migration_inventory_is_exact_and_ordered(monkeypatch, tmp_path):
