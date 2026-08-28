@@ -86,7 +86,7 @@ BASE_REQUIREMENTS = (
     "python-dotenv",
     "scikit-learn",
     "sqlalchemy",
-    "superglm>=0.26,<0.27",
+    "superglm>=0.30",
 )
 OPTIONAL_REQUIREMENTS = {
     "sqlserver": ("pyodbc",),

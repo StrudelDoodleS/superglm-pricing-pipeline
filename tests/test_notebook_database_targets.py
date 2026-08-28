@@ -91,7 +91,7 @@ def test_connect_local_creates_persistent_attached_schema_databases(tmp_path):
     assert (
         first.settings.validation_split_artifact_root == local_root.resolve() / "validation_splits"
     )
-    assert first.settings.workbench_artifact_root == local_root.resolve() / "workbench_artifacts"
+    assert first.settings.workbench_artifact_root == local_root.resolve()
 
     with first.engine.begin() as connection:
         connection.execute(

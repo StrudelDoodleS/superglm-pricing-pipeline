@@ -159,7 +159,7 @@ def run_standard_superglm_build(
     )
     run_dir = _manifest_attempt_directory(output_dir, manifest.manifest_id)
     try:
-        workbook_path = run_dir / "rating_tables.xlsx"
+        workbook_path = run_dir / "rating.xlsx"
         export_options: dict[str, Any] = {}
         if inputs.offset is not None:
             export_options["offset"] = inputs.offset
@@ -184,7 +184,7 @@ def run_standard_superglm_build(
             fit_sample_weight_name=fit_weight_name,
             export_weight_name=export_weight_name,
         )
-        receipt_path = run_dir / "publication_receipt.json"
+        receipt_path = run_dir / "receipt.json"
         receipt_sha256 = write_publication_receipt(receipt, receipt_path)
 
         cv_report = dict(evidence.report)
@@ -225,7 +225,7 @@ def run_standard_superglm_build(
             offset_source_name=offset_source_name,
             export_weight_name=export_weight_name,
         )
-        artifact = save_candidate_bundle(bundle, run_dir / "candidate_bundle.joblib")
+        artifact = save_candidate_bundle(bundle, run_dir / "model.joblib")
         fold_metric_records = tuple(
             {
                 "fold_no": metric.fold_no,
@@ -787,21 +787,25 @@ def _manifest_attempt_directory(output_dir: str | Path, manifest_id: str) -> Pat
         raise StandardSuperGLMError(
             "manifest_id must be a safe path component using letters, numbers, '.', '_', or '-'"
         )
-    output_root = Path(output_dir).expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    # The full manifest ID remains in the candidate bundle and SQL lineage.  A
-    # compact digest keeps deeply nested state paths usable in Windows Explorer.
-    attempt_component = f"mf_{hashlib.sha256(manifest_id.encode('utf-8')).hexdigest()[:16]}"
-    attempt_dir = (output_root / attempt_component).resolve()
-    if attempt_dir.parent != output_root:
+    proposed_attempt = Path(output_dir).expanduser().resolve()
+    artifact_root = proposed_attempt.parent
+    run_key = proposed_attempt.name
+    if not _SAFE_ATTEMPT_COMPONENT.fullmatch(run_key):
         raise StandardSuperGLMError(
-            f"manifest attempt directory is outside run output directory {output_root}"
+            "output_dir must end in a safe run key using letters, numbers, '.', '_', or '-'"
+        )
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    manifest_digest = hashlib.sha256(manifest_id.encode("utf-8")).hexdigest()[:8]
+    attempt_dir = (artifact_root / f"{run_key}-{manifest_digest}").resolve()
+    if attempt_dir.parent != artifact_root:
+        raise StandardSuperGLMError(
+            f"manifest attempt directory is outside artifact root {artifact_root}"
         )
     try:
         attempt_dir.mkdir(exist_ok=False)
     except FileExistsError as exc:
         raise StandardSuperGLMError(
-            f"manifest attempt directory already exists; refusing to overwrite: {attempt_dir}"
+            f"artifact attempt directory already exists; refusing to overwrite: {attempt_dir}"
         ) from exc
     return attempt_dir
 
