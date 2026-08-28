@@ -16,7 +16,6 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from pricing_pipeline.reporting import _core
 from pricing_pipeline.reporting._core import (
     UnderwriterReportError,
     UnderwriterReportOptions,
@@ -28,11 +27,6 @@ from pricing_pipeline.reporting.evidence import EvidenceRequest
 ProblemType = Literal["frequency", "severity", "burn_cost"]
 ColumnOrValues = str | Sequence[float] | np.ndarray | pd.Series
 ComparisonUnit = str | Sequence[Any] | np.ndarray | pd.Series
-
-# Compatibility re-exports used by established tests and downstream callers.
-_unit_tweedie_deviance = _core._unit_tweedie_deviance
-_weighted_line_agreement = _core._weighted_line_agreement
-
 
 @dataclass(frozen=True)
 class ModelLikelihoodSpec:

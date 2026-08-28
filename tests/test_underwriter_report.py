@@ -18,8 +18,8 @@ from pricing_pipeline.reporting import (
     build_scored_model_report,
     build_underwriter_report,
 )
-from pricing_pipeline.reporting._core import _sampled_curve
 from pricing_pipeline.reporting.adapters.superglm import SuperGLMReportAdapter
+from pricing_pipeline.reporting.diagnostics import _sampled_curve
 from pricing_pipeline.reporting.evidence import EvidenceRequest
 from pricing_pipeline.reporting.inputs import UnderwriterReportOptions
 
@@ -125,7 +125,7 @@ import pricing_pipeline.reporting.adapters.rating_workbook
 
 
 def test_prediction_movement_uses_tie_safe_weighted_rank_bins():
-    from pricing_pipeline.reporting._underwriter_movement import (
+    from pricing_pipeline.reporting.movement import (
         _tie_safe_weighted_bins,
     )
 
@@ -139,7 +139,7 @@ def test_prediction_movement_uses_tie_safe_weighted_rank_bins():
 
 
 def test_double_lift_privacy_bins_keep_tied_ratios_together_independent_of_row_order():
-    from pricing_pipeline.reporting._core import _privacy_safe_bins
+    from pricing_pipeline.reporting.diagnostics import _privacy_safe_bins
 
     ratios = np.array([1.0, 1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
     weight = np.array([1.0, 2.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0])
@@ -172,7 +172,7 @@ def test_double_lift_privacy_bins_keep_tied_ratios_together_independent_of_row_o
 
 
 def test_prediction_movement_suppresses_small_cells_and_uses_weighted_aggregates():
-    from pricing_pipeline.reporting._underwriter_movement import (
+    from pricing_pipeline.reporting.movement import (
         prediction_movement_payload,
     )
 
@@ -228,7 +228,7 @@ def test_report_options_reject_invalid_movement_bins(movement_bins):
 
 
 def test_unit_deviance_is_stable_for_large_nearly_equal_values():
-    from pricing_pipeline.reporting.underwriter import _unit_tweedie_deviance
+    from pricing_pipeline.reporting.diagnostics import _unit_tweedie_deviance
 
     actual = np.array([99_999_999.0, 100_000_001.0])
     prediction = np.full(2, 100_000_000.0)
@@ -252,7 +252,7 @@ def test_weighted_line_agreement_is_bounded(
     expected_signed: float,
     expected_agreement: float,
 ):
-    from pricing_pipeline.reporting.underwriter import _weighted_line_agreement
+    from pricing_pipeline.reporting.diagnostics import _weighted_line_agreement
 
     signed, agreement = _weighted_line_agreement(
         np.array([1.0, 2.0, 3.0]),
@@ -265,7 +265,7 @@ def test_weighted_line_agreement_is_bounded(
 
 
 def test_weighted_line_agreement_handles_equal_constant_lines():
-    from pricing_pipeline.reporting.underwriter import _weighted_line_agreement
+    from pricing_pipeline.reporting.diagnostics import _weighted_line_agreement
 
     signed, agreement = _weighted_line_agreement(
         np.full(3, 2.0),

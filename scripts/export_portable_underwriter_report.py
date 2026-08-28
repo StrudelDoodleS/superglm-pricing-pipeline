@@ -21,13 +21,14 @@ SOURCE_MODULES = (
     ("reporting.inputs", ROOT / "src/pricing_pipeline/reporting/inputs.py"),
     ("reporting.evidence", ROOT / "src/pricing_pipeline/reporting/evidence.py"),
     (
-        "reporting._underwriter_movement",
-        ROOT / "src/pricing_pipeline/reporting/_underwriter_movement.py",
+        "reporting.movement",
+        ROOT / "src/pricing_pipeline/reporting/movement.py",
     ),
     (
         "reporting._underwriter_html",
         ROOT / "src/pricing_pipeline/reporting/_underwriter_html.py",
     ),
+    ("reporting.diagnostics", ROOT / "src/pricing_pipeline/reporting/diagnostics.py"),
     ("reporting._core", ROOT / "src/pricing_pipeline/reporting/_core.py"),
 )
 
