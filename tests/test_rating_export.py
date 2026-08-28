@@ -836,6 +836,20 @@ def _retry_export(tmp_path: Path) -> ModelExportResult:
     )
 
 
+def _retry_prepared(tmp_path: Path, *, parent_model_run_id: int | None = None):
+    export = _retry_export(tmp_path).model_copy(update={"model_equivalence_sha256": "f" * 64})
+    return publication.prepare_publication(
+        publication.PublicationRequest(
+            build=export,
+            model_config=MODEL_CONFIG,
+            execution_name="notebook",
+            execution_id=export.export_id,
+            allowed_artifact_root=tmp_path,
+            parent_model_run_id=parent_model_run_id,
+        )
+    )
+
+
 def _retry_evidence(tmp_path: Path):
     workbook = (tmp_path / "rating_tables.xlsx").resolve()
     if not workbook.exists():
@@ -858,14 +872,18 @@ def _retry_evidence(tmp_path: Path):
             "source_file": workbook_path,
             "package_publication_receipt_sha256": artifacts["publication_receipt_sha256"],
             "model_run_id": 501,
+            "parent_model_run_id": None,
             "run_status": "SUCCESS",
             "run_export_id": "export-1",
             "run_model_id": 17,
             "run_model_name": "MTPL_FREQ",
             "run_model_version": "v1",
+            "model_kind": "RAW",
+            "model_equivalence_sha256": "f" * 64,
             "dag_id": "notebook",
             "airflow_run_id": "export-1",
             "manifest_id": "manifest-1",
+            "split_set_id": "split-1",
             "rating_workbook_path": workbook_path,
             "rating_workbook_sha256": workbook_sha256,
             "mlflow_run_id": None,
@@ -899,7 +917,8 @@ class _EvidenceConnection:
     def execute(self, statement, params):
         sql = str(statement)
         if "FROM pricing.PRICING_RATE_PACKAGE AS rp" in sql:
-            return _Result(rows=[self.evidence["row"]])
+            rows = [] if self.evidence["row"]["model_run_id"] is None else [self.evidence["row"]]
+            return _Result(rows=rows)
         if "FROM mlops.MODEL_RUN_DATASET" in sql:
             return _Result(rows=self.evidence["datasets"])
         if "FROM mlops.MODEL_RUN_SPLIT_SET" in sql:
@@ -912,13 +931,16 @@ class _EvidenceConnection:
 
 
 def test_existing_published_run_requires_exact_complete_evidence(tmp_path: Path):
-    export = _retry_export(tmp_path)
+    prepared = _retry_prepared(tmp_path)
+    export = prepared.build
     evidence = _retry_evidence(tmp_path)
 
-    result = pipeline._resolve_existing_published_run(
-        _Engine(_EvidenceConnection(evidence)),
-        export,
-        allowed_artifact_root=tmp_path,
+    result = sqlserver._completed_package(
+        _EvidenceConnection(evidence),
+        prepared=prepared,
+        rate_package_id=42,
+        was_existing=True,
+        deduplicated=False,
     )
 
     assert result == CompletedModelPublishResult(
@@ -937,53 +959,73 @@ def test_existing_published_run_requires_exact_complete_evidence(tmp_path: Path)
         publication_receipt_path=export.publication_receipt_path,
         publication_receipt_sha256=export.publication_receipt_sha256,
         was_existing=True,
+        model_equivalence_sha256="f" * 64,
     )
 
     evidence["row"]["model_run_id"] = None
-    with pytest.raises(pipeline.PublishedRunIntegrityError, match="manual repair"):
-        pipeline._resolve_existing_published_run(
-            _Engine(_EvidenceConnection(evidence)),
-            export,
-            allowed_artifact_root=tmp_path,
+    with pytest.raises(RuntimeError, match="exactly one successful model run"):
+        sqlserver._completed_package(
+            _EvidenceConnection(evidence),
+            prepared=prepared,
+            rate_package_id=42,
+            was_existing=True,
+            deduplicated=False,
         )
 
 
 @pytest.mark.parametrize(
-    ("mutation", "field_name"),
+    ("mutation", "parent_model_run_id", "field_name"),
     [
-        (lambda evidence: evidence["row"].update(dag_id="other"), "dag_id"),
+        (lambda evidence: evidence["row"].update(dag_id="other"), None, "dag_id"),
         (
             lambda evidence: evidence["datasets"].append(
                 {"manifest_id": "extra", "dataset_role": "training"}
             ),
+            None,
             "dataset links",
         ),
         (
             lambda evidence: evidence["splits"][0].update(split_set_id="other"),
+            None,
             "split links",
         ),
         (
             lambda evidence: evidence["metrics"][0].update(metric_value=9.0),
+            None,
             "metrics",
+        ),
+        (
+            lambda evidence: evidence["row"].update(parent_model_run_id=409),
+            None,
+            "parent_model_run_id",
+        ),
+        (
+            lambda evidence: None,
+            409,
+            "parent_model_run_id",
         ),
     ],
 )
 def test_existing_published_run_rejects_conflicting_evidence(
     tmp_path: Path,
     mutation,
+    parent_model_run_id,
     field_name,
 ):
     evidence = deepcopy(_retry_evidence(tmp_path))
     mutation(evidence)
+    prepared = _retry_prepared(tmp_path, parent_model_run_id=parent_model_run_id)
 
     with pytest.raises(
-        pipeline.PublishedRunIntegrityError,
+        RuntimeError,
         match=rf"incompatible evidence.*{field_name}",
     ):
-        pipeline._resolve_existing_published_run(
-            _Engine(_EvidenceConnection(evidence)),
-            _retry_export(tmp_path),
-            allowed_artifact_root=tmp_path,
+        sqlserver._completed_package(
+            _EvidenceConnection(evidence),
+            prepared=prepared,
+            rate_package_id=42,
+            was_existing=True,
+            deduplicated=False,
         )
 
 
@@ -1022,15 +1064,26 @@ def test_existing_published_run_verifies_candidate_bundle_identity(tmp_path: Pat
     }
     evidence["row"].update(artifact_fields)
     export = ModelExportResult(**{**_retry_export(tmp_path).model_dump(), **artifact_fields})
+    prepared = publication.prepare_publication(
+        publication.PublicationRequest(
+            build=export.model_copy(update={"model_equivalence_sha256": "f" * 64}),
+            model_config=MODEL_CONFIG,
+            execution_name="notebook",
+            execution_id=export.export_id,
+            allowed_artifact_root=tmp_path,
+        )
+    )
 
     with pytest.raises(
-        pipeline.PublishedRunIntegrityError,
+        RuntimeError,
         match="candidate artifact source hash does not match model-run lineage",
     ):
-        pipeline._resolve_existing_published_run(
-            _Engine(_EvidenceConnection(evidence)),
-            export,
-            allowed_artifact_root=tmp_path,
+        sqlserver._completed_package(
+            _EvidenceConnection(evidence),
+            prepared=prepared,
+            rate_package_id=42,
+            was_existing=True,
+            deduplicated=False,
         )
 
 

@@ -2576,6 +2576,7 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
 
     from pricing_pipeline.publishing.sqlserver import verify_package_sql_parity
     from pricing_pipeline.workbench.artifacts import CandidateBundle
+    from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     class Model:
         def predict(self, X, offset=None):
@@ -2592,12 +2593,15 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
             return {"prediction": self.prediction}
 
     class Connection:
-        def __init__(self):
+        def __init__(self, *, mismatch_position=None):
             self.calls = []
+            self.mismatch_position = mismatch_position
 
         def execute(self, statement, params):
             self.calls.append((str(statement), params))
             features = json.loads(params["features_json"])
+            if len(self.calls) - 1 == self.mismatch_position:
+                return Result(98765.4321)
             return Result(float(features["x"]) * 2.0)
 
     bundle = CandidateBundle(
@@ -2631,6 +2635,21 @@ def test_package_specific_parity_uses_bounded_rows_and_explicit_package_id():
     assert len(connection.calls) == 5
     assert all(params["rate_package_id"] == 108 for _sql, params in connection.calls)
     assert all("PREDICT_RATE_PACKAGE" in sql for sql, _params in connection.calls)
+
+    with pytest.raises(EditorSubmissionError) as error:
+        verify_package_sql_parity(
+            Connection(mismatch_position=3),
+            rate_package_id=108,
+            edited_model=bundle.fitted_model,
+            bundle=bundle,
+            sample_size=5,
+        )
+
+    assert str(error.value) == "edited package 108 failed Python/SQL parity verification"
+    assert "sample row" not in str(error.value)
+    assert "3" not in str(error.value)
+    assert "6.0" not in str(error.value)
+    assert "98765.4321" not in str(error.value)
 
 
 def test_package_sql_parity_uses_published_feature_names():

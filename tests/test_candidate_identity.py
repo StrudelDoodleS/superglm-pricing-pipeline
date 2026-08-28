@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -18,6 +17,8 @@ from pricing_pipeline.orchestration.publish_completed_build import (
     CandidateSQLLineage,
     _verify_candidate_artifact,
 )
+from pricing_pipeline.publishing import publish as publication
+from pricing_pipeline.publishing import sqlserver
 from pricing_pipeline.publishing.sqlite import _publish_sqlite_candidate_locked
 from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
@@ -214,7 +215,6 @@ def test_local_publication_rejects_model_frame_digest_mismatch_before_staging(
 @pytest.mark.parametrize("field_name", ["model_name", "model_version", "export_id"])
 def test_existing_sql_run_rejects_candidate_model_identity_mismatch(
     tmp_path,
-    monkeypatch,
     field_name,
 ):
     bundle, build = _candidate(tmp_path)
@@ -233,15 +233,29 @@ def test_existing_sql_run_rejects_candidate_model_identity_mismatch(
         "rate_package_id": 42,
         "package_version": 7,
         "package_status": "PUBLISHED",
+        "parent_rate_package_id": None,
+        "effective_from_date": None,
+        "effective_to_date": None,
+        "source_file": str(workbook),
+        "package_publication_receipt_sha256": build.publication_receipt_sha256,
         "model_run_id": 901,
+        "parent_model_run_id": None,
         "run_status": "SUCCESS",
+        "run_model_id": 17,
         "run_model_name": "CLAIM_FREQ",
         "run_model_version": "20260603",
         "run_export_id": "export-1",
         "manifest_id": "manifest-1",
+        "split_set_id": "split-1",
+        "model_kind": "RAW",
+        "model_equivalence_sha256": None,
+        "dag_id": "notebook",
+        "airflow_run_id": "export-1",
         "rating_workbook_path": str(workbook),
         "rating_workbook_sha256": workbook_sha256,
-        "mlflow_run_id": "",
+        "mlflow_run_id": None,
+        "publication_receipt_path": build.publication_receipt_path,
+        "publication_receipt_sha256": build.publication_receipt_sha256,
         "candidate_artifact_path": artifact.path,
         "candidate_artifact_sha256": artifact.sha256,
         "candidate_artifact_format": artifact.format,
@@ -273,16 +287,24 @@ def test_existing_sql_run_rejects_candidate_model_identity_mismatch(
 
         def execute(self, statement, params):
             del params
-            if "PRICING_RATE_PACKAGE AS rp" in str(statement):
+            sql = str(statement)
+            if "PRICING_RATE_PACKAGE AS rp" in sql:
                 return Rows([row])
+            if "MODEL_RUN_DATASET" in sql:
+                return Rows([{"manifest_id": "manifest-1", "dataset_role": "training"}])
+            if "MODEL_RUN_SPLIT_SET" in sql:
+                return Rows(
+                    [
+                        {
+                            "manifest_id": "manifest-1",
+                            "split_set_id": "split-1",
+                            "dataset_role": "training",
+                            "split_role": "validation",
+                        }
+                    ]
+                )
             return Rows([])
 
-    monkeypatch.setattr(
-        pipeline,
-        "schema_names_from_connectable",
-        lambda engine: SimpleNamespace(pricing="pricing", mlops="mlops"),
-    )
-    monkeypatch.setattr(pipeline, "_retry_evidence_conflicts", lambda **kwargs: [])
     export = ModelExportResult(
         model_id=17,
         model_name="CLAIM_FREQ",
@@ -300,19 +322,36 @@ def test_existing_sql_run_rejects_candidate_model_identity_mismatch(
         created_by="pytest",
         publication_receipt_path=build.publication_receipt_path,
         publication_receipt_sha256=build.publication_receipt_sha256,
-        candidate_artifact_path=build.candidate_artifact_path,
-        candidate_artifact_sha256=build.candidate_artifact_sha256,
-        candidate_artifact_format=build.candidate_artifact_format,
-        candidate_artifact_size_bytes=build.candidate_artifact_size_bytes,
-        candidate_python_version=build.candidate_python_version,
-        candidate_superglm_version=build.candidate_superglm_version,
+        candidate_artifact_path=artifact.path,
+        candidate_artifact_sha256=artifact.sha256,
+        candidate_artifact_format=artifact.format,
+        candidate_artifact_size_bytes=artifact.size_bytes,
+        candidate_python_version=artifact.python_version,
+        candidate_superglm_version=artifact.superglm_version,
         model_source_sha256=build.model_source_sha256,
         model_frame_sha256=build.model_frame_sha256,
     )
-
-    with pytest.raises(pipeline.PublishedRunIntegrityError, match=field_name):
-        pipeline._resolve_existing_published_run(
-            Engine(),
-            export,
+    prepared = publication.prepare_publication(
+        publication.PublicationRequest(
+            build=export,
+            model_config=ModelBuildConfig(
+                model_name="CLAIM_FREQ",
+                model_label="Claim frequency",
+                target_name="claim_count",
+                model_type="superglm_poisson",
+                deployment_slot="CLAIM_FREQ_UAT",
+            ),
+            execution_name="notebook",
+            execution_id=export.export_id,
             allowed_artifact_root=tmp_path,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match=field_name):
+        sqlserver._completed_package(
+            Engine(),
+            prepared=prepared,
+            rate_package_id=42,
+            was_existing=True,
+            deduplicated=False,
         )

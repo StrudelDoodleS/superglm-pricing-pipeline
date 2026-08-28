@@ -339,6 +339,7 @@ def _retry_evidence_conflicts(
     integer_fields = {
         "model_id",
         "run_model_id",
+        "parent_model_run_id",
         "candidate_artifact_size_bytes",
     }
     expected_scalars = {
@@ -355,6 +356,7 @@ def _retry_evidence_conflicts(
         "run_model_id": export.model_id,
         "run_model_name": export.model_name,
         "run_model_version": export.model_version,
+        "parent_model_run_id": prepared.parent_model_run_id,
         "model_kind": export.model_kind,
         "model_equivalence_sha256": export.model_equivalence_sha256,
         "dag_id": prepared.execution_name,
@@ -517,6 +519,7 @@ def _completed_package(
                     rp.source_file,
                     rp.publication_receipt_sha256 AS package_publication_receipt_sha256,
                     mr.model_run_id,
+                    mr.parent_model_run_id,
                     mr.run_status,
                     mr.export_id AS run_export_id,
                     mr.model_id AS run_model_id,
@@ -1579,8 +1582,7 @@ def verify_package_sql_parity(
         actual = float(connection.execute(statement, params).mappings().one()["prediction"])
         if not np.isclose(actual, expected[position], rtol=rtol, atol=atol):
             raise EditorSubmissionError(
-                "edited package failed Python/SQL parity at sample row "
-                f"{position}: python={expected[position]!r}, sql={actual!r}"
+                f"edited package {int(rate_package_id)} failed Python/SQL parity verification"
             )
 
 
