@@ -1,1 +1,1 @@
-"""Installed pricing-model scaffold commands and legacy implementation."""
+"""Installed pricing-model scaffold commands and service."""

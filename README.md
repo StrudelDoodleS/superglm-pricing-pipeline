@@ -59,8 +59,9 @@ An explicit `--config` wins, and explicit command-line options win over the
 file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
 notebooks set it to `False`.
 
-For a legacy checkout command, copy `pricing_scaffold.example.toml` to
-`pricing_scaffold.toml` and run `uv run python scripts/scaffold_pricing_model.py`
+For a legacy checkout command from a source checkout, copy
+`pricing_scaffold.example.toml` to `pricing_scaffold.toml`; `uv run python
+scripts/scaffold_pricing_model.py` calls the same installed scaffold command
 with the same model and target options.
 
 ## Important rules

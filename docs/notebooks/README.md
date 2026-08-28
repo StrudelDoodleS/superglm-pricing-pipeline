@@ -282,10 +282,13 @@ carry_forward = true
 ```
 
 ```bash
-uv run python scripts/scaffold_pricing_model.py \
+uv run pricing-pipeline scaffold \
   --model-name CLAIM_FREQUENCY \
   --target-name claim_count
 ```
+
+From a source checkout, `uv run python scripts/scaffold_pricing_model.py` calls
+the same installed scaffold command with the same options.
 
 Precedence is command line, explicit `--config`, auto-discovered
 `<root>/pricing_scaffold.toml`, then built-in local defaults. Unknown sections

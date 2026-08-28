@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -10,13 +11,10 @@ from pathlib import Path
 
 import pytest
 
-import scripts.scaffold_pricing_model as scaffold_module
-from scripts.scaffold_pricing_model import (
-    _NOTEBOOK_NAMES,
-    ScaffoldOptions,
-    load_scaffold_config,
-    scaffold_pricing_model,
-)
+from pricing_pipeline import cli
+from pricing_pipeline.scaffold.config import ScaffoldOptions, load_scaffold_config
+from pricing_pipeline.scaffold.render import NOTEBOOK_NAMES as _NOTEBOOK_NAMES
+from pricing_pipeline.scaffold.service import scaffold_pricing_model
 
 NOTEBOOK_NAME = re.compile(r"^\d{2}_[a-z0-9]+(?:_[a-z0-9]+)*\.ipynb$")
 EXPECTED_NOTEBOOKS = (
@@ -106,17 +104,12 @@ def test_scaffold_has_one_strict_ordered_notebook_contract():
     assert all(NOTEBOOK_NAME.fullmatch(name) for name in _NOTEBOOK_NAMES)
 
 
-def test_legacy_scaffold_adapter_exports_focused_implementation():
-    try:
-        from pricing_pipeline.scaffold import config, service
-    except ModuleNotFoundError:
-        pytest.fail("focused scaffold modules are missing")
-
-    assert scaffold_module.ScaffoldConfig is config.ScaffoldConfig
-    assert scaffold_module.ScaffoldOptions is config.ScaffoldOptions
-    assert scaffold_module.ScaffoldResult is service.ScaffoldResult
-    assert scaffold_module.load_scaffold_config is config.load_scaffold_config
-    assert scaffold_module.scaffold_pricing_model is service.scaffold_pricing_model
+def test_scaffold_has_one_cli_and_no_legacy_module():
+    assert importlib.util.find_spec("pricing_pipeline.scaffold.legacy") is None
+    source = Path("scripts/scaffold_pricing_model.py").read_text(encoding="utf-8")
+    assert "pricing_pipeline.cli" in source
+    assert "sys.modules" not in source
+    assert "scaffold.legacy" not in source
 
 
 @pytest.mark.parametrize(
@@ -900,6 +893,8 @@ def test_scaffold_script_help_has_no_legacy_factory_options():
 
 
 def test_scaffold_script_reports_all_notebook_paths(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "consumer"\n', encoding="utf-8")
+    assert cli.main(["init", "--root", str(tmp_path)]) == 0
     result = subprocess.run(
         [
             sys.executable,
