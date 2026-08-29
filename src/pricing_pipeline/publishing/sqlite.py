@@ -316,7 +316,7 @@ def _date_identity(value: object) -> str | None:
 
 def _local_lock_root(engine: Engine, prepared: PreparedPublication) -> Path:
     if prepared.allowed_artifact_root is not None:
-        return Path(prepared.allowed_artifact_root).expanduser().resolve().parent
+        return Path(prepared.allowed_artifact_root).expanduser().resolve()
     database = getattr(getattr(engine, "url", None), "database", None)
     if database:
         return Path(str(database)).expanduser().resolve().parent

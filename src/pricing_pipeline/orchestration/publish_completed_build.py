@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from dataclasses import dataclass
@@ -261,8 +262,15 @@ def _discard_redundant_completed_build_attempt(
     if not attempt_dir.is_relative_to(root):
         return
     relative_attempt = attempt_dir.relative_to(root)
-    if len(relative_attempt.parts) < 3:
+    if not relative_attempt.parts:
         return
+    if len(relative_attempt.parts) < 3:
+        manifest_digest = hashlib.sha256(build.manifest_id.encode("utf-8")).hexdigest()[:8]
+        is_compact_layout = len(relative_attempt.parts) == 1 or (
+            len(relative_attempt.parts) == 2 and relative_attempt.parts[0] == "runs"
+        )
+        if not is_compact_layout or not attempt_dir.name.endswith(f"-{manifest_digest}"):
+            return
     canonical_values = [
         publish_result.rating_workbook_path,
         publish_result.publication_receipt_path,
