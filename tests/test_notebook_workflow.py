@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from dataclasses import replace
 from inspect import signature
@@ -63,18 +64,13 @@ def _registered_model(api, tmp_path: Path):
     )
 
 
-def test_notebook_state_components_are_compact_but_full_identity_stays_external():
+def test_notebook_run_key_is_short_and_windows_safe():
     from pricing_pipeline import notebook as api
 
-    model_name = "VERY_LONG_PRICING_MODEL_NAME_" * 8
-    model_component = api._compact_model_state_component(model_name)
     run_key = api._new_notebook_run_key()
 
-    assert model_name not in model_component
-    assert model_component.startswith("m_very_long_pricing_")
-    assert len(model_component) <= 29
-    assert run_key.startswith("nb_")
-    assert len(run_key) == 24
+    assert re.fullmatch(r"[0-9]{12}-[0-9a-f]{8}", run_key)
+    assert len(run_key) == 21
 
 
 def _registered_spec_model(api, tmp_path: Path, **spec_overrides):
@@ -525,9 +521,15 @@ def test_build_candidate_delegates_model_state_to_standard_runner(
         "resolve_sqlite_model_version",
         lambda *args, **kwargs: "v7",
     )
+    monkeypatch.setattr(
+        api,
+        "_new_notebook_run_key",
+        lambda: "260828192922-4f4c24e3",
+    )
 
     def fake_standard_build(*args, **kwargs):
         captured["superglm_model"] = kwargs["superglm_model"]
+        captured["output_dir"] = kwargs["output_dir"]
         return _approved_build(tmp_path)
 
     monkeypatch.setattr(
@@ -545,6 +547,7 @@ def test_build_candidate_delegates_model_state_to_standard_runner(
     )
 
     assert captured["superglm_model"] is model_with_fitted_state
+    assert captured["output_dir"] == tmp_path / "workbench" / "runs" / "260828192922-4f4c24e3"
     assert candidate.completed_build.model_version == "v7"
 
 

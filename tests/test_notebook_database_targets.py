@@ -91,7 +91,7 @@ def test_connect_local_creates_persistent_attached_schema_databases(tmp_path):
     assert (
         first.settings.validation_split_artifact_root == local_root.resolve() / "validation_splits"
     )
-    assert first.settings.workbench_artifact_root == local_root.resolve() / "workbench_artifacts"
+    assert first.settings.workbench_artifact_root == local_root.resolve()
 
     with first.engine.begin() as connection:
         connection.execute(
@@ -638,6 +638,8 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
     assert second.mlflow_run_id == "mlflow-old"
     assert second.was_existing is True
     assert prepared_digests == ["d" * 64, "d" * 64]
+    assert (model_root / ".local" / ".publish.lock").is_file()
+    assert not (model_root / ".publish.lock").exists()
 
     workbook.write_bytes(b"mutated local workbook")
     with pytest.raises(CompletedModelBuildError, match="rating workbook SHA-256"):

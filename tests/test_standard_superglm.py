@@ -1019,15 +1019,16 @@ def test_manifest_attempt_directory_rejects_unsafe_path_components(
         api._manifest_attempt_directory(tmp_path / "run", manifest_id)
 
 
-def test_manifest_attempt_directory_uses_compact_digest_not_full_sql_identity(tmp_path):
+def test_manifest_attempt_directory_flattens_identity_into_one_short_component(tmp_path):
     api = _api()
     manifest_id = "an_extremely_long_dataset_manifest_identity_20260810_0123456789abcdef"
 
     attempt = api._manifest_attempt_directory(tmp_path / "run", manifest_id)
 
-    assert re.fullmatch(r"mf_[0-9a-f]{16}", attempt.name)
+    assert attempt.parent == tmp_path.resolve()
+    assert re.fullmatch(r"run-[0-9a-f]{8}", attempt.name)
     assert manifest_id not in str(attempt)
-    assert len(attempt.name) == 19
+    assert len(attempt.name) == 12
 
 
 def test_standard_runner_removes_partial_attempt_but_keeps_manifest_evidence(
@@ -1252,7 +1253,7 @@ def test_standard_runner_uses_model_config_and_returns_approved_build(
         expected_format=result.candidate_artifact_format,
         expected_python_version=result.candidate_python_version,
         expected_superglm_version=result.candidate_superglm_version,
-        allowed_root=tmp_path / "run",
+        allowed_root=tmp_path,
     )
     assert bundle.model_name == "HOME_FREQ"
     assert bundle.model_version == "v1"
@@ -1308,12 +1309,15 @@ def test_standard_runner_uses_model_config_and_returns_approved_build(
     second_parent = next(iter({path.parent for path in second_paths.values()}))
     assert {path.parent for path in first_paths.values()} == {first_parent}
     assert {path.parent for path in second_paths.values()} == {second_parent}
-    assert first_parent.parent == (tmp_path / "run").resolve()
-    assert second_parent.parent == (tmp_path / "run").resolve()
-    assert re.fullmatch(r"mf_[0-9a-f]{16}", first_parent.name)
-    assert re.fullmatch(r"mf_[0-9a-f]{16}", second_parent.name)
+    assert first_parent.parent == tmp_path.resolve()
+    assert second_parent.parent == tmp_path.resolve()
+    assert re.fullmatch(r"run-[0-9a-f]{8}", first_parent.name)
+    assert re.fullmatch(r"run-[0-9a-f]{8}", second_parent.name)
     assert first_parent != second_parent
     assert set(first_paths.values()).isdisjoint(second_paths.values())
+    assert first_paths["workbook"].name == "rating.xlsx"
+    assert first_paths["receipt"].name == "receipt.json"
+    assert first_paths["candidate"].name == "model.joblib"
     assert {name: path.read_bytes() for name, path in first_paths.items()} == first_bytes
     assert Path(result.candidate_artifact_path).exists()
     assert result.candidate_artifact_sha256

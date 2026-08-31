@@ -2204,7 +2204,7 @@ wheels = [
 
 [[package]]
 name = "superglm"
-version = "0.26.0"
+version = "0.30.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -2220,9 +2220,9 @@ dependencies = [
     { name = "threadpoolctl" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/17/29/f311f890d72604fa6ebb9784457d3b42e3c793e7be8fc9cf099f3825ff0c/superglm-0.26.0.tar.gz", hash = "sha256:fb6713b4a34ab7107067dedaf5e7d46bb55b0d1829b7a57e2aa40f20577ea543", size = 1049702, upload-time = "2026-08-11T14:13:06.783Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/96/cb7085e62f40433e695709cff8061ce3c52d7b90865742d638b7b746ea3e/superglm-0.30.0.tar.gz", hash = "sha256:b71d1494ec1eba49ab33777bf6f0125f04725ce4f123e3183ec00b3705a68bfd", size = 1296235, upload-time = "2026-08-25T08:07:11.401Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/58/d20330126ef9a00153cdca57adaa2343df51f5524c5e8744ad10f2052253/superglm-0.26.0-py3-none-any.whl", hash = "sha256:8dd5d0af42abbec9e6c1f0a9cae56867414a934e4fa29fe6ece2c2ca9ba91dab", size = 1186565, upload-time = "2026-08-11T14:13:04.851Z" },
+    { url = "https://files.pythonhosted.org/packages/70/50/6cffb38fa59efdca4d5c9b3854691ed7dc72eb2eec261c7ad1e7d9ee3996/superglm-0.30.0-py3-none-any.whl", hash = "sha256:bff83b0e4b7967e98d968bcfa59f1916a643008cf32f8629b6d50ffde46c0421", size = 1439096, upload-time = "2026-08-25T08:07:09.423Z" },
 ]
 
 [[package]]
@@ -2300,7 +2300,7 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'report'" },
     { name = "scipy", marker = "extra == 'scratch'" },
     { name = "sqlalchemy" },
-    { name = "superglm", specifier = ">=0.26,<0.27" },
+    { name = "superglm", specifier = ">=0.30" },
     { name = "xgboost", marker = "extra == 'scratch'" },
 ]
 provides-extras = ["sqlserver", "azure", "report", "notebook", "scratch", "mlflow"]

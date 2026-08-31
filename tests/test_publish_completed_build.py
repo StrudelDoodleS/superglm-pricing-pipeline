@@ -17,6 +17,7 @@ from pricing_pipeline.orchestration import pipeline
 from pricing_pipeline.orchestration.publish_completed_build import (
     CandidateSQLLineage,
     CompletedModelPublishResult,
+    _discard_redundant_completed_build_attempt,
     publish_completed_model_build,
 )
 from pricing_pipeline.publishing import publish as publication
@@ -329,6 +330,35 @@ def test_model_export_publisher_returns_existing_result_unchanged(
     )
 
     assert result is existing
+
+
+def test_published_retry_discards_flat_attempt_directory(tmp_path):
+    artifact_root = tmp_path / "artifacts"
+    manifest_digest = hashlib.sha256(b"manifest-existing").hexdigest()[:8]
+    attempt_dir = artifact_root / f"260829120000-1234abcd-{manifest_digest}"
+    attempt_dir.mkdir(parents=True)
+    workbook = attempt_dir / "rating.xlsx"
+    workbook.write_bytes(b"rating workbook")
+    build = _approved_build(
+        attempt_dir,
+        workbook=workbook,
+        candidate_metadata=_candidate_metadata(attempt_dir),
+    )
+    canonical_dir = artifact_root / "canonical"
+    result = _completed_publish_result(
+        build,
+        was_existing=True,
+        rating_workbook_path=str(canonical_dir / "rating.xlsx"),
+        publication_receipt_path=str(canonical_dir / "receipt.json"),
+    )
+
+    _discard_redundant_completed_build_attempt(
+        build,
+        publish_result=result,
+        artifact_root=artifact_root,
+    )
+
+    assert not attempt_dir.exists()
 
 
 def test_completed_publication_requires_prebuilt_manifest_evidence():

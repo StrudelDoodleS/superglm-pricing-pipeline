@@ -7,7 +7,6 @@ identifiers, audit records, artifact locations, and publication plumbing.
 from __future__ import annotations
 
 import getpass
-import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -293,18 +292,10 @@ def _created_by(value: str | None) -> str:
     return identity
 
 
-def _compact_model_state_component(model_name: str) -> str:
-    """Keep the full SQL identity out of filesystem component lengths."""
-    cleaned = clean_identifier(model_name).lower()
-    digest = hashlib.sha256(model_name.encode("utf-8")).hexdigest()[:8]
-    readable = cleaned[:18].rstrip("_")
-    return f"m_{readable}_{digest}"
-
-
 def _new_notebook_run_key() -> str:
     """Return a compact, readable and collision-resistant notebook run key."""
     timestamp = datetime.now(UTC).strftime("%y%m%d%H%M%S")
-    return f"nb_{timestamp}_{uuid4().hex[:8]}"
+    return f"{timestamp}-{uuid4().hex[:8]}"
 
 
 def _local_notebook_settings(root: Path) -> Settings:
@@ -315,7 +306,7 @@ def _local_notebook_settings(root: Path) -> Settings:
         skip_database_create=True,
         rating_export_root=root / "rating_exports",
         validation_split_artifact_root=root / "validation_splits",
-        workbench_artifact_root=root / "workbench_artifacts",
+        workbench_artifact_root=root,
     )
 
 
@@ -661,6 +652,9 @@ def build_candidate(
         export_weight_name=spec.export_weight_column,
         row_ids=row_ids,
     )
+    artifact_root = Path(pricing.settings.workbench_artifact_root)
+    if pricing.mode == "local":
+        artifact_root /= "runs"
     completed_build = run_standard_superglm_build(
         pricing.engine,
         frame=frame,
@@ -669,11 +663,7 @@ def build_candidate(
         split_indices=resolved_split_indices,
         fit_mode=spec.fit_mode,
         scoring=spec.scoring,
-        output_dir=(
-            Path(pricing.settings.workbench_artifact_root)
-            / _compact_model_state_component(model.name)
-            / resolved_run_key
-        ),
+        output_dir=artifact_root / resolved_run_key,
         model_id=model.model_id,
         model_config=model.config,
         model_kind=resolved_model_kind,

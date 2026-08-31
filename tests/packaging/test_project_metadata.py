@@ -69,7 +69,7 @@ def test_dependency_contract_is_exact():
         "python-dotenv",
         "scikit-learn",
         "sqlalchemy",
-        "superglm>=0.26,<0.27",
+        "superglm>=0.30",
     ]
     assert project["optional-dependencies"] == {
         "sqlserver": ["pyodbc"],
