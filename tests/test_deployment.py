@@ -1,3 +1,7 @@
+# SQL Server DATETIME2 values are UTC datetimes without tzinfo.
+# ruff: noqa: DTZ001
+
+from datetime import datetime
 from inspect import signature
 
 import pytest
@@ -35,6 +39,12 @@ class FakeConnection:
     def __init__(self, *, package_row=None, current_row=None, lock_result=0):
         self.package_row = package_row
         self.current_row = current_row
+        if self.current_row is not None:
+            self.current_row = {
+                "effective_from_ts": datetime(2026, 9, 11),
+                **self.current_row,
+            }
+        self.server_time = datetime(2026, 9, 11)
         self.lock_result = lock_result
         self.events = []
 
@@ -42,8 +52,12 @@ class FakeConnection:
         sql = str(statement)
         params = params or {}
         self.events.append((sql, params))
+        if "PRICING_PACKAGE_POINTER" in sql:
+            raise RuntimeError("Invalid object name: retired PRICING_PACKAGE_POINTER")
         if "sys.sp_getapplock" in sql:
             return FakeResult(scalar=self.lock_result)
+        if sql.strip().startswith("SELECT CAST(SYSUTCDATETIME()"):
+            return FakeResult(scalar=self.server_time)
         if "FROM pricing.PRICING_RATE_PACKAGE" in sql:
             return FakeResult(self.package_row)
         if "FROM pricing.PRICING_MODEL_DEPLOYMENT" in sql:
@@ -80,14 +94,20 @@ class StatefulConnection:
         self.current_rate_package_id = current_rate_package_id
         self.current_deployed_by = "previous deployer"
         self.current_deployment_note = "previous deployment"
+        self.current_effective_from_ts = datetime(2026, 9, 11)
+        self.server_time = datetime(2026, 9, 11)
         self.events = []
 
     def execute(self, statement, params=None):
         sql = str(statement)
         params = params or {}
         self.events.append((sql, params))
+        if "PRICING_PACKAGE_POINTER" in sql:
+            raise RuntimeError("Invalid object name: retired PRICING_PACKAGE_POINTER")
         if "sys.sp_getapplock" in sql:
             return FakeResult(scalar=0)
+        if sql.strip().startswith("SELECT CAST(SYSUTCDATETIME()"):
+            return FakeResult(scalar=self.server_time)
         if "FROM pricing.PRICING_RATE_PACKAGE" in sql:
             if params.get("rate_package_id") is not None:
                 package = self.packages.get(int(params["rate_package_id"]))
@@ -110,6 +130,7 @@ class StatefulConnection:
                     "rate_package_id": self.current_rate_package_id,
                     "deployed_by": self.current_deployed_by,
                     "deployment_note": self.current_deployment_note,
+                    "effective_from_ts": self.current_effective_from_ts,
                 }
             )
             return FakeResult(current)
@@ -117,6 +138,7 @@ class StatefulConnection:
             self.current_rate_package_id = int(params["rate_package_id"])
             self.current_deployed_by = params["deployed_by"]
             self.current_deployment_note = params["deployment_note"]
+            self.current_effective_from_ts = params.get("transition_ts", self.server_time)
         return FakeResult()
 
 
@@ -166,7 +188,46 @@ def executed_sql(engine):
     return [sql for sql, _params in engine.connection.events]
 
 
-def test_deploy_rate_package_by_id_closes_current_row_inserts_deployment_and_updates_pointer():
+@pytest.mark.parametrize(
+    ("previous_start", "expected_transition"),
+    [
+        (None, datetime(2026, 9, 11)),
+        (datetime(2026, 9, 10), datetime(2026, 9, 11)),
+        (datetime(2026, 9, 11), datetime(2026, 9, 11, microsecond=1000)),
+        (datetime(2026, 9, 12), datetime(2026, 9, 12, microsecond=1000)),
+    ],
+    ids=["first-deployment", "later-clock", "same-millisecond", "clock-moved-back"],
+)
+def test_deployment_uses_one_strictly_later_boundary(previous_start, expected_transition):
+    current = (
+        None
+        if previous_start is None
+        else {"rate_package_id": 99, "effective_from_ts": previous_start}
+    )
+    engine = FakeEngine(package_row=published_package(), current_row=current)
+
+    deploy_rate_package(
+        engine,
+        config(),
+        rate_package_id=101,
+        expected_current_rate_package_id=None if current is None else 99,
+        deployment_reason="approved",
+        deployed_by="airflow",
+        model_id=17,
+    )
+
+    writes = [
+        (sql, params)
+        for sql, params in engine.connection.events
+        if sql.lstrip().startswith(("UPDATE", "INSERT"))
+    ]
+    assert len(writes) == 2
+    for sql, params in writes:
+        assert params.get("transition_ts") == expected_transition
+        assert ":transition_ts" in sql
+
+
+def test_deploy_rate_package_records_history_with_pointer_table_retired():
     engine = FakeEngine(
         package_row=published_package(),
         current_row={"rate_package_id": 99},
@@ -210,14 +271,10 @@ def test_deploy_rate_package_by_id_closes_current_row_inserts_deployment_and_upd
         for i, statement in enumerate(sql)
         if "INSERT INTO pricing.PRICING_MODEL_DEPLOYMENT" in statement
     )
-    merge_index = next(
-        i for i, statement in enumerate(sql) if "MERGE pricing.PRICING_PACKAGE_POINTER" in statement
-    )
 
     assert lock_index < package_select_index < current_select_index < update_index
-    assert update_index < insert_index < merge_index
+    assert update_index < insert_index
     assert "deployment_note" in sql[insert_index]
-    assert "MERGE pricing.PRICING_PACKAGE_POINTER WITH (HOLDLOCK) AS tgt" in sql[merge_index]
 
     package_params = engine.connection.events[package_select_index][1]
     assert package_params == {"rate_package_id": 101}
@@ -232,11 +289,6 @@ def test_deploy_rate_package_by_id_closes_current_row_inserts_deployment_and_upd
     assert insert_params["deployment_note"] == "approved for launch"
     assert insert_params["deployed_by"] == "airflow"
     assert insert_params["deployment_slot"] == "MTPL_FREQ_PROD"
-
-    merge_params = engine.connection.events[merge_index][1]
-    assert merge_params["pointer_name"] == "MTPL_FREQ_PROD"
-    assert merge_params["updated_by"] == "airflow"
-    assert merge_params["rate_package_id"] == 101
 
 
 def test_deploy_rate_package_canonicalizes_configured_slot_before_lock_and_writes():
@@ -259,16 +311,12 @@ def test_deploy_rate_package_canonicalizes_configured_slot_before_lock_and_write
         for i, statement in enumerate(sql)
         if "INSERT INTO pricing.PRICING_MODEL_DEPLOYMENT" in statement
     )
-    merge_index = next(
-        i for i, statement in enumerate(sql) if "MERGE pricing.PRICING_PACKAGE_POINTER" in statement
-    )
 
     assert result.deployment_slot == "MTPL_FREQ_PROD"
     assert engine.connection.events[lock_index][1]["lock_resource"] == (
         "pricing_model_deployment:17:MTPL_FREQ_PROD"
     )
     assert engine.connection.events[insert_index][1]["deployment_slot"] == "MTPL_FREQ_PROD"
-    assert engine.connection.events[merge_index][1]["pointer_name"] == "MTPL_FREQ_PROD"
 
 
 def test_deploy_rate_package_rejects_blank_default_deployment_slot():

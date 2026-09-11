@@ -82,6 +82,8 @@ schema resources, documentation, and development tooling.
 
 ## Guides
 
+- [Runnable freMTPL frequency demo](tutorials/fremtpl_frequency/demo.ipynb),
+  with [setup and terminal instructions](tutorials/README.md).
 - [Notebook workflow and function reference](docs/notebooks/README.md)
 - [SQL schema, relationships, triggers, views, and migration runbook](docs/sql/README.md)
 - [Script command index](scripts/README.md)

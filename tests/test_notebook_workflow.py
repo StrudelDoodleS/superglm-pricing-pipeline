@@ -274,7 +274,7 @@ def test_notebook_build_api_only_accepts_declared_model_inputs():
         "source_root",
         "created_by",
     )
-    build_parameters = signature(api.build_candidate).parameters
+    build_parameters = signature(api.fit_model).parameters
     assert tuple(build_parameters) == (
         "pricing",
         "model",
@@ -293,11 +293,11 @@ def test_notebook_build_api_only_accepts_declared_model_inputs():
         "reason",
         "created_by",
     )
-    assert tuple(signature(api.publish_candidate).parameters) == (
+    assert tuple(signature(api.save_model_version).parameters) == (
         "pricing",
         "candidate",
     )
-    assert tuple(signature(api.deploy_package).parameters) == (
+    assert tuple(signature(api.deploy_model_version).parameters) == (
         "pricing",
         "package",
         "reason",
@@ -538,7 +538,7 @@ def test_build_candidate_delegates_model_state_to_standard_runner(
         fake_standard_build,
     )
 
-    candidate = api.build_candidate(
+    candidate = api.fit_model(
         context,
         model=model,
         frame=frame,
@@ -603,7 +603,7 @@ def test_build_candidate_validates_stratifier_before_reserving_model_version(
     )
 
     with pytest.raises(ValueError, match=match):
-        api.build_candidate(
+        api.fit_model(
             context,
             model=model,
             frame=frame,
@@ -662,7 +662,7 @@ def test_build_candidate_keeps_offset_source_and_weights_independent(monkeypatch
     monkeypatch.setattr(api, "run_standard_superglm_build", run_build)
 
     superglm_model = object()
-    candidate = api.build_candidate(
+    candidate = api.fit_model(
         context,
         model=model,
         frame=frame,
@@ -775,7 +775,7 @@ def test_build_candidate_aligns_composite_primary_key_inputs(
     monkeypatch.setattr(api, "run_standard_superglm_build", run_build)
 
     superglm_model = object()
-    api.build_candidate(
+    api.fit_model(
         context,
         model=model,
         frame=frame,
@@ -834,7 +834,7 @@ def test_publish_candidate_returns_generated_sql_ids(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "publish_completed_model_build", publish)
 
-    result = api.publish_candidate(context, candidate)
+    result = api.save_model_version(context, candidate)
 
     assert result is expected
     assert result.model_id == 17
@@ -867,7 +867,7 @@ def test_open_candidate_uses_registered_python_config(monkeypatch, tmp_path):
 
     monkeypatch.setattr(api, "Workbench", FakeWorkbench)
 
-    result = api.open_candidate(
+    result = api.load_model_version(
         context,
         model=model,
         package_version=4,
@@ -895,13 +895,13 @@ def test_open_deployed_candidate_resolves_the_current_package(monkeypatch, tmp_p
             "current_deployment_id": [708, 708],
         }
     )
-    monkeypatch.setattr(api, "list_candidate_versions", lambda *args, **kwargs: history)
+    monkeypatch.setattr(api, "list_model_versions", lambda *args, **kwargs: history)
 
-    def open_candidate(*args, **kwargs):
+    def load_model_version(*args, **kwargs):
         opened.update(kwargs)
         return expected
 
-    monkeypatch.setattr(api, "open_candidate", open_candidate)
+    monkeypatch.setattr(api, "load_model_version", load_model_version)
 
     assert api.open_deployed_candidate(context, model=model) is expected
     assert opened == {"model": model, "package_version": 8}
@@ -920,7 +920,7 @@ def test_open_deployed_candidate_rejects_a_missing_deployment(monkeypatch, tmp_p
             "current_deployment_id": [None],
         }
     )
-    monkeypatch.setattr(api, "list_candidate_versions", lambda *args, **kwargs: history)
+    monkeypatch.setattr(api, "list_model_versions", lambda *args, **kwargs: history)
 
     with pytest.raises(LookupError, match="current deployment"):
         api.open_deployed_candidate(context, model=model)
@@ -1066,7 +1066,7 @@ def test_deploy_package_uses_the_champion_snapshot_seen_during_review(monkeypatc
 
     monkeypatch.setattr(api, "deploy_rate_package", deploy)
 
-    result = api.deploy_package(
+    result = api.deploy_model_version(
         context,
         package=package,
         reason="Approved at August pricing meeting",
@@ -1112,7 +1112,7 @@ def test_deploy_package_rejects_package_opened_with_different_context(monkeypatc
     )
 
     with pytest.raises(ValueError, match="different notebook context"):
-        api.deploy_package(
+        api.deploy_model_version(
             deployment_context,
             package=package,
             reason="Approved at August pricing meeting",
@@ -1123,8 +1123,8 @@ def test_deploy_package_rejects_package_opened_with_different_context(monkeypatc
 def test_deploy_package_rejects_a_package_that_was_not_opened_for_review(tmp_path):
     from pricing_pipeline import notebook as api
 
-    with pytest.raises(TypeError, match="open_candidate"):
-        api.deploy_package(
+    with pytest.raises(TypeError, match="load_model_version"):
+        api.deploy_model_version(
             _context(api, tmp_path),
             package=SimpleNamespace(rate_package_id=72),
             reason="Approved at August pricing meeting",

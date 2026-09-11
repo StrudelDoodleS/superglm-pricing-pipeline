@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from packaging.version import InvalidVersion, Version
 
+from pricing_pipeline.data.transforms import transforms_from_metadata, transforms_metadata
 from pricing_pipeline.publishing.metadata import OffsetExportContract
 
 BUNDLE_FORMAT = "superglm-candidate-joblib-v2"
@@ -48,8 +49,20 @@ class CandidateBundle:
     offset_source_name: str | None = None
     export_weight_name: str | None = None
     model_frame_sha256: str | None = None
+    input_transforms: dict[str, dict[str, Any]] | None = None
+    continuous_kind: str = "binned"
 
     def __post_init__(self) -> None:
+        if self.continuous_kind not in {"ppform", "binned"}:
+            raise CandidateArtifactError("continuous_kind must be 'ppform' or 'binned'")
+        metadata = getattr(self, "input_transforms", None)
+        try:
+            preparation = transforms_metadata(
+                transforms_from_metadata({} if metadata is None else metadata)
+            )
+        except (TypeError, ValueError) as exc:
+            raise CandidateArtifactError(f"invalid input_transforms: {exc}") from exc
+        object.__setattr__(self, "input_transforms", preparation or None)
         try:
             contract = OffsetExportContract.model_validate(self.offset_contract)
         except ValueError as exc:

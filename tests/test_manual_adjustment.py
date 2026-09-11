@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from superglm import Categorical, Numeric, SuperGLM
+from superglm import Categorical, Numeric, Spline, SuperGLM
 from superglm.editor import EditorSession
 
 from pricing_pipeline.infra.config import Settings
@@ -28,16 +28,17 @@ def _candidate(
     tmp_path: Path,
     *,
     segment_levels: tuple[object, object, object] = ("A", "B", "C"),
+    spline: bool = False,
 ) -> Candidate:
     frame = pd.DataFrame(
         {
             "segment": list(segment_levels) * 20,
-            "x": np.tile([0.0, 1.0, 2.0], 20),
+            "x": np.linspace(0.0, 2.0, 60) if spline else np.tile([0.0, 1.0, 2.0], 20),
         }
     )
     target = np.tile([1.0, 2.0, 3.0], 20)
     model = SuperGLM(
-        features={"segment": Categorical(base="first"), "x": Numeric()},
+        features={"segment": Categorical(base="first"), "x": Spline(k=5) if spline else Numeric()},
         selection_penalty=0.0,
     ).fit(frame, target)
     engine = object()
@@ -121,6 +122,28 @@ def test_relative_policy_changes_only_selected_level_and_reports_impact(tmp_path
     assert review.impact["Data as-at"] == "2026-07-31"
     assert review.impact["Changed rows"] == 20
     assert review.rules.loc[0, "Change"] == "+5.00%"
+
+
+def test_manual_categorical_adjustment_preserves_exact_spline_export(tmp_path):
+    candidate = _candidate(tmp_path, spline=True)
+    review = apply_manual_adjustment_policy(candidate, _policy())
+    bundle = candidate.bundle
+    frames = []
+    for name, model in [("base", bundle.fitted_model), ("edited", review.edited_model)]:
+        workbook = tmp_path / f"{name}.xlsx"
+        model.export_rating_tables(workbook, bundle.X, bundle.y, continuous_kind="ppform")
+        frames.append(pd.read_excel(workbook, sheet_name="Rating Tables", header=None))
+    x_columns = [
+        next(c for c in range(frame.shape[1]) if frame.iat[4, c] == "x") for frame in frames
+    ]
+    for frame, column in zip(frames, x_columns, strict=True):
+        assert frame.iloc[6, column + 3 : column + 7].tolist() == ["a", "b", "c", "d"]
+    pd.testing.assert_frame_equal(
+        frames[0].iloc[7:, x_columns[0] : x_columns[0] + 7],
+        frames[1].iloc[7:, x_columns[1] : x_columns[1] + 7],
+    )
+    ratio = review.edited_model.predict(bundle.X) / bundle.fitted_model.predict(bundle.X)
+    assert ratio == pytest.approx(np.where(bundle.X["segment"].eq("B"), 1.05, 1.0))
 
 
 def test_policy_payload_is_canonical_replayable_and_rejects_overlap():

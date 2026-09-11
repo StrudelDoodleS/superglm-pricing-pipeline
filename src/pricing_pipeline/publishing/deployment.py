@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import text
@@ -77,10 +78,20 @@ def deploy_rate_package(
                 deployment_reason=str(current["deployment_note"]),
             )
 
+        transition_ts = con.execute(
+            text("SELECT CAST(SYSUTCDATETIME() AS DATETIME2(3))")
+        ).scalar_one()
+        if current is not None:
+            # DATETIME2(3) intervals must have positive length, even within one clock tick.
+            transition_ts = max(
+                transition_ts,
+                current["effective_from_ts"] + timedelta(milliseconds=1),
+            )
+
         con.execute(
             text("""
             UPDATE pricing.PRICING_MODEL_DEPLOYMENT
-            SET effective_to_ts = SYSUTCDATETIME()
+            SET effective_to_ts = :transition_ts
             WHERE model_id = :model_id
               AND deployment_slot = :deployment_slot
               AND effective_to_ts IS NULL;
@@ -88,6 +99,7 @@ def deploy_rate_package(
             {
                 "model_id": model_id,
                 "deployment_slot": slot,
+                "transition_ts": transition_ts,
             },
         )
 
@@ -97,6 +109,7 @@ def deploy_rate_package(
                 model_id,
                 rate_package_id,
                 deployment_slot,
+                effective_from_ts,
                 deployed_by,
                 deployment_note
             )
@@ -104,6 +117,7 @@ def deploy_rate_package(
                 :model_id,
                 :rate_package_id,
                 :deployment_slot,
+                :transition_ts,
                 :deployed_by,
                 :deployment_note
             );
@@ -112,37 +126,9 @@ def deploy_rate_package(
                 "model_id": model_id,
                 "rate_package_id": resolved_rate_package_id,
                 "deployment_slot": slot,
+                "transition_ts": transition_ts,
                 "deployed_by": deployed_by,
                 "deployment_note": deployment_reason,
-            },
-        )
-
-        con.execute(
-            text("""
-            MERGE pricing.PRICING_PACKAGE_POINTER WITH (HOLDLOCK) AS tgt
-            USING (
-                SELECT
-                    :model_id AS model_id,
-                    :pointer_name AS pointer_name,
-                    :rate_package_id AS rate_package_id,
-                    :updated_by AS updated_by
-            ) AS src
-            ON tgt.model_id = src.model_id
-               AND tgt.pointer_name = src.pointer_name
-            WHEN MATCHED THEN
-                UPDATE SET
-                    rate_package_id = src.rate_package_id,
-                    updated_ts = SYSUTCDATETIME(),
-                    updated_by = src.updated_by
-            WHEN NOT MATCHED THEN
-                INSERT (model_id, pointer_name, rate_package_id, updated_by)
-                VALUES (src.model_id, src.pointer_name, src.rate_package_id, src.updated_by);
-        """),
-            {
-                "model_id": model_id,
-                "pointer_name": slot,
-                "rate_package_id": resolved_rate_package_id,
-                "updated_by": deployed_by,
             },
         )
 
@@ -223,6 +209,7 @@ def _current_deployment(con, *, model_id: int, deployment_slot: str) -> dict[str
             text("""
         SELECT
             rate_package_id,
+            effective_from_ts,
             deployed_by,
             COALESCE(deployment_note, '') AS deployment_note
         FROM pricing.PRICING_MODEL_DEPLOYMENT

@@ -22,12 +22,12 @@ def test_reset_sql_deletes_dependent_pricing_tables_before_parent_tables():
         "DELETE FROM pricing.CV_FOLD_METRIC",
         "DELETE FROM pricing.MODEL_RUN",
         "DELETE FROM pricing.PRICING_MODEL_DEPLOYMENT",
-        "DELETE FROM pricing.PRICING_PACKAGE_POINTER",
         "DELETE FROM pricing.PRICING_COMPILED_1D_RATE_BAND",
         "DELETE FROM pricing.PRICING_COMPILED_RATE_CELL",
         "DELETE FROM pricing.PRICING_RATE_CELL_LEVEL",
         "DELETE FROM pricing.PRICING_RATE_CELL",
         "DELETE FROM pricing.PRICING_TERM_FEATURE",
+        "DELETE FROM pricing.PRICING_SPLINE_SEGMENT",
         "DELETE FROM pricing.PRICING_TERM",
         "DELETE FROM pricing.PRICING_RATE_PACKAGE",
         "DELETE FROM pricing.PRICING_FEATURE_LEVEL",
@@ -225,12 +225,12 @@ def _seed_offline_monitoring_graph(engine) -> None:
                     variant_code, run_signature_sha256, run_status, invariant_status,
                     invariant_evidence_sha256, invariant_evidence_json,
                     model_frame_sha256, fit_configuration_json,
-                    result_evidence_sha256, started_ts, completed_ts, created_by
+                    result_evidence_sha256, started_ts, completed_ts, created_by, evidence_sealed
                 ) VALUES (
                     'monitor-1', 'contract-1', 3, 1, 2, 'manifest-1', 'OTHER',
                     'STATIC_SCORE', :signature, 'SUCCESS', 'VERIFIED',
                     :invariant_sha, '{}', :frame_sha, '{}', :result_sha,
-                    '2026-08-24 00:00:00', '2026-08-24 00:01:00', 'pytest'
+                    '2026-08-24 00:00:00', '2026-08-24 00:01:00', 'pytest', 0
                 )
                 """
             ),
@@ -278,6 +278,13 @@ def _seed_offline_monitoring_graph(engine) -> None:
                     monitor_run_id, metric_name, metric_value
                 ) VALUES ('monitor-1', 'deviance', 1.0)
                 """
+            )
+        )
+
+        connection.execute(
+            text(
+                "UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1 "
+                "WHERE monitor_run_id = 'monitor-1'"
             )
         )
 

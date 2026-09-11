@@ -1308,6 +1308,68 @@ def test_monitoring_rejects_a_sha_valid_candidate_with_receipt_metadata_drift(
         )
 
 
+@pytest.mark.parametrize(
+    "assignment",
+    ["run_status = 'FAILED'", "rate_package_id = 94", "model_id = 95"],
+)
+def test_fit_contract_preserves_baseline_run_identity(tmp_path, assignment):
+    engine = sqlite_engine_with_offline_schemas(
+        {name: tmp_path / f"{name}.sqlite" for name in ("pricing", "pricing_stg", "mlops")}
+    )
+    apply_offline_ddl(engine)
+    _seed_monitoring_lineage(engine, model_frame_sha256="a" * 64)
+    with engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO pricing.PRICING_MODEL (
+                model_id, model_name, model_label, target_name,
+                model_type, model_status, created_by
+            ) VALUES (95, 'OTHER', 'Other', 'target', 'poisson', 'ACTIVE', 'pytest')
+        """)
+        )
+        connection.execute(
+            text("""
+            INSERT INTO pricing.PRICING_RATE_PACKAGE (
+                rate_package_id, model_id, model_name, model_version,
+                package_version, base_rate, package_status, created_by
+            ) VALUES (94, 91, 'SYNTHETIC_TARGET', 'v2', 2, 1.0, 'PUBLISHED', 'pytest')
+        """)
+        )
+        connection.execute(
+            text("""
+            INSERT INTO pricing.MODEL_FIT_CONTRACT (
+                fit_contract_id, baseline_model_run_id, model_id, rate_package_id,
+                contract_schema_version, contract_sha256, structure_sha256,
+                contract_json, superglm_version, created_by
+            ) VALUES ('contract-1', 'baseline-run-1', 91, 92, 1,
+                      :digest, :digest, '{}', 'test', 'pytest')
+        """),
+            {"digest": "b" * 64},
+        )
+        # Audit annotations may still be corrected without changing the baseline.
+        connection.execute(
+            text("""
+            UPDATE pricing.MODEL_RUN SET created_by = 'corrected'
+            WHERE model_run_id = 'baseline-run-1'
+        """)
+        )
+
+    with (
+        pytest.raises(IntegrityError, match="baseline run.*lineage identity"),
+        engine.begin() as connection,
+    ):
+        connection.execute(
+            text(f"UPDATE pricing.MODEL_RUN SET {assignment} WHERE model_run_id = 'baseline-run-1'")
+        )
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("""
+            SELECT model_id, rate_package_id, run_status, created_by
+            FROM pricing.MODEL_RUN WHERE model_run_id = 'baseline-run-1'
+        """)
+        ).one() == (91, 92, "SUCCESS", "corrected")
+
+
 def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
     tmp_path,
     monitoring_case,
@@ -1777,3 +1839,337 @@ def test_static_variant_has_no_materialized_refit_model(monitoring_case):
     model, _, _ = monitoring_case
     with pytest.raises(MonitoringError, match="STATIC_SCORE"):
         materialize_monitoring_model(model, MonitoringVariant.STATIC_SCORE)
+
+
+@pytest.fixture
+def persisted_monitoring_case(tmp_path, monitoring_case):
+    model, X, y = monitoring_case
+    candidate = _monitoring_candidate(tmp_path, model, X, y)
+    frame = X.assign(target=y)
+    result = run_monitoring_fit(
+        candidate,
+        X,
+        y,
+        variant=MonitoringVariant.STATIC_SCORE,
+        continuous_points=11,
+        model_frame=frame,
+        target_column="target",
+    )
+    engine = sqlite_engine_with_offline_schemas(
+        {name: tmp_path / f"{name}.sqlite" for name in ("pricing", "pricing_stg", "mlops")}
+    )
+    apply_offline_ddl(engine)
+    _seed_monitoring_lineage(
+        engine,
+        model_frame_sha256=model_frame_evidence(frame)[0],
+        candidate=candidate,
+    )
+    kwargs = {
+        "baseline_model_run_id": "baseline-run-1",
+        "baseline_deployment_id": 93,
+        "manifest_id": "manifest-monitor-1",
+        "created_by": "pytest",
+        "component_role": "SEVERITY",
+    }
+    receipt = persist_monitoring_fit(engine, result, **kwargs)
+    yield engine, result, kwargs, receipt
+    engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "table, columns, values",
+    [
+        (
+            "TERM",
+            "term_name, term_kind, sequence_no, term_structure_sha256, term_metadata_json",
+            "'late', 'numeric', 999, :digest, '{}'",
+        ),
+        (
+            "LAMBDA",
+            "component_name, term_name, lambda_value, lambda_mode",
+            "'late', 'late', 1.0, 'BASELINE'",
+        ),
+        (
+            "RELATIVITY",
+            "term_name, term_kind, point_key, point_label, relativity, log_relativity, is_reference",
+            "'late', 'numeric', 'late', 'late', 1.0, 0.0, 0",
+        ),
+        ("METRIC", "metric_name, metric_value", "'late', 1.0"),
+    ],
+)
+def test_sealed_monitoring_rejects_late_child_insert(
+    persisted_monitoring_case, table, columns, values
+):
+    engine, _, _, receipt = persisted_monitoring_case
+    with pytest.raises(IntegrityError, match="sealed"), engine.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT INTO pricing.MODEL_MONITOR_{table} (monitor_run_id, {columns}) "
+                f"VALUES (:run_id, {values})"
+            ),
+            {"run_id": receipt.monitor_run_id, "digest": "a" * 64},
+        )
+
+
+def test_persisted_monitoring_is_sealed(persisted_monitoring_case):
+    engine, result, kwargs, receipt = persisted_monitoring_case
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT evidence_sealed FROM pricing.MODEL_MONITOR_RUN")
+            ).scalar_one()
+            == 1
+        )
+    retry = persist_monitoring_fit(engine, result, **kwargs)
+    assert retry.deduplicated
+    assert retry.monitor_run_id == receipt.monitor_run_id
+    with pytest.raises(IntegrityError, match="immutable"), engine.begin() as connection:
+        connection.execute(text("UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 0"))
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_monitoring_retry_rejects_unsealed_observation(persisted_monitoring_case, recovery):
+    from pricing_pipeline.modeling.monitoring import _recover_concurrent_monitoring_retry
+
+    engine, result, kwargs, _ = persisted_monitoring_case
+    # Simulate an interrupted legacy/manual writer. Ordinary writes cannot reopen a run.
+    with engine.begin() as connection:
+        connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE"))
+        connection.execute(text("UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 0"))
+    apply_offline_ddl(engine)
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM pricing.V_MODEL_MONITORING_RUN")
+            ).scalar_one()
+            == 0
+        )
+    with pytest.raises(MonitoringError, match="unsealed"):
+        if recovery:
+            _recover_concurrent_monitoring_retry(
+                engine,
+                result,
+                baseline_deployment_id=93,
+                manifest_id="manifest-monitor-1",
+                component_role="SEVERITY",
+            )
+        else:
+            persist_monitoring_fit(engine, result, **kwargs)
+
+
+def test_monitoring_child_failure_rolls_back_observation(persisted_monitoring_case):
+    engine, result, kwargs, _ = persisted_monitoring_case
+
+    def fail_metric_insert(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "INSERT INTO pricing.MODEL_MONITOR_METRIC" in statement:
+            raise RuntimeError("injected child insert failure")
+
+    event.listen(engine, "before_cursor_execute", fail_metric_insert)
+    try:
+        with pytest.raises(RuntimeError, match="injected child insert failure"):
+            persist_monitoring_fit(engine, result, **{**kwargs, "component_role": "FREQUENCY"})
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_metric_insert)
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM pricing.MODEL_MONITOR_RUN WHERE component_role = 'FREQUENCY'"
+                )
+            ).scalar_one()
+            == 0
+        )
+        for table in ("TERM", "LAMBDA", "RELATIVITY", "METRIC"):
+            assert (
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM pricing.MODEL_MONITOR_{table} AS child "
+                        "LEFT JOIN pricing.MODEL_MONITOR_RUN AS parent "
+                        "ON parent.monitor_run_id = child.monitor_run_id WHERE parent.monitor_run_id IS NULL"
+                    )
+                ).scalar_one()
+                == 0
+            )
+    receipt = persist_monitoring_fit(engine, result, **{**kwargs, "component_role": "FREQUENCY"})
+    assert not receipt.deduplicated
+
+
+def test_offline_upgrade_seals_existing_monitoring_without_certifying_it(persisted_monitoring_case):
+    engine, _, _, receipt = persisted_monitoring_case
+    with engine.begin() as connection:
+        for view in ("LAMBDA", "RELATIVITY", "RUN"):
+            connection.execute(text(f"DROP VIEW pricing.V_MODEL_MONITORING_{view}"))
+        connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE"))
+        for table in ("TERM", "LAMBDA", "RELATIVITY", "METRIC"):
+            connection.execute(text(f"DROP TRIGGER pricing.TR_MODEL_MONITOR_{table}_INSERT_GUARD"))
+        connection.execute(
+            text("ALTER TABLE pricing.MODEL_MONITOR_RUN DROP COLUMN evidence_sealed")
+        )
+        connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_INVARIANT_UPDATE"))
+        connection.execute(
+            text("""
+            UPDATE pricing.MODEL_MONITOR_RUN SET invariant_status = 'LEGACY_UNVERIFIED',
+                invariant_evidence_sha256 = NULL, invariant_evidence_json = NULL
+        """)
+        )
+        connection.execute(
+            text("""
+            CREATE TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE
+            BEFORE UPDATE ON MODEL_MONITOR_RUN
+            BEGIN SELECT RAISE(ABORT, 'monitoring evidence is immutable'); END
+        """)
+        )
+    apply_offline_ddl(engine)
+    apply_offline_ddl(engine)
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("""
+            SELECT evidence_sealed, invariant_status FROM pricing.MODEL_MONITOR_RUN
+        """)
+        ).one() == (1, "LEGACY_UNVERIFIED")
+        assert (
+            connection.execute(
+                text("""
+            SELECT monitor_run_id FROM pricing.V_MODEL_MONITORING_RUN
+        """)
+            ).scalar_one()
+            == receipt.monitor_run_id
+        )
+    with pytest.raises(IntegrityError, match="sealed"), engine.begin() as connection:
+        connection.execute(
+            text("""
+            INSERT INTO pricing.MODEL_MONITOR_METRIC (monitor_run_id, metric_name, metric_value)
+            VALUES (:run_id, 'late', 1.0)
+        """),
+            {"run_id": receipt.monitor_run_id},
+        )
+    with pytest.raises(IntegrityError, match="immutable"), engine.begin() as connection:
+        connection.execute(text("UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 0"))
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "created_by = 'PYTEST'",
+        "created_by = 'pytest '",
+        "fit_configuration_json = '{}'",
+        "invariant_evidence_json = '{}'",
+        "result_evidence_sha256 = '" + "b" * 64 + "'",
+        "completed_ts = '2999-01-01 00:00:00'",
+    ],
+)
+def test_sealing_cannot_mutate_other_observation_fields(persisted_monitoring_case, assignment):
+    engine, _, _, _ = persisted_monitoring_case
+    with engine.begin() as connection:
+        connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE"))
+        connection.execute(text("UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 0"))
+    apply_offline_ddl(engine)
+    with pytest.raises(IntegrityError, match="immutable"), engine.begin() as connection:
+        connection.execute(
+            text(f"UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1, {assignment}")
+        )
+    with engine.begin() as connection:
+        assert (
+            connection.execute(
+                text("SELECT evidence_sealed FROM pricing.MODEL_MONITOR_RUN")
+            ).scalar_one()
+            == 0
+        )
+        connection.execute(text("UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1"))
+
+
+def test_monitoring_multirow_insert_is_atomic_for_open_and_sealed_parents(
+    persisted_monitoring_case,
+):
+    engine, _, _, receipt = persisted_monitoring_case
+    with engine.begin() as connection:
+        columns = [
+            row[1]
+            for row in connection.exec_driver_sql("PRAGMA pricing.table_info('MODEL_MONITOR_RUN')")
+        ]
+        replacements = {
+            "monitor_run_id": "'open-run'",
+            "component_role": "'FREQUENCY'",
+            "run_signature_sha256": ":digest",
+            "evidence_sealed": "0",
+        }
+        connection.execute(
+            text(
+                f"INSERT INTO pricing.MODEL_MONITOR_RUN ({', '.join(columns)}) "
+                f"SELECT {', '.join(replacements.get(column, column) for column in columns)} "
+                "FROM pricing.MODEL_MONITOR_RUN WHERE monitor_run_id = :run_id"
+            ),
+            {"digest": "d" * 64, "run_id": receipt.monitor_run_id},
+        )
+    with engine.begin() as connection:
+        with pytest.raises(IntegrityError, match="sealed"):
+            connection.execute(
+                text("""
+                INSERT INTO pricing.MODEL_MONITOR_METRIC (monitor_run_id, metric_name, metric_value)
+                VALUES ('open-run', 'batch', 1.0), (:run_id, 'batch', 2.0)
+            """),
+                {"run_id": receipt.monitor_run_id},
+            )
+        assert (
+            connection.execute(
+                text("""
+            SELECT count(*) FROM pricing.MODEL_MONITOR_METRIC WHERE metric_name = 'batch'
+        """)
+            ).scalar_one()
+            == 0
+        )
+        connection.execute(
+            text("""
+            INSERT INTO pricing.MODEL_MONITOR_METRIC (monitor_run_id, metric_name, metric_value)
+            VALUES ('open-run', 'complete', 1.0)
+        """)
+        )
+        connection.execute(
+            text("""
+            UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1 WHERE monitor_run_id = 'open-run'
+        """)
+        )
+
+
+@pytest.mark.parametrize(
+    "table, columns, values",
+    [
+        (
+            "TERM",
+            "term_name, term_kind, sequence_no, term_structure_sha256, term_metadata_json",
+            "'missing', 'numeric', 999, :digest, '{}'",
+        ),
+        (
+            "LAMBDA",
+            "component_name, term_name, lambda_value, lambda_mode",
+            "'missing', 'missing', 1.0, 'BASELINE'",
+        ),
+        (
+            "RELATIVITY",
+            "term_name, term_kind, point_key, point_label, relativity, log_relativity, is_reference",
+            "'missing', 'numeric', 'missing', 'missing', 1.0, 0.0, 0",
+        ),
+        ("METRIC", "metric_name, metric_value", "'missing', 1.0"),
+    ],
+)
+def test_monitoring_insert_guards_reject_missing_parents_without_foreign_keys(
+    persisted_monitoring_case,
+    table,
+    columns,
+    values,
+):
+    engine, _, _, _ = persisted_monitoring_case
+    connection = engine.raw_connection()
+    try:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+        with pytest.raises(sqlite3.IntegrityError, match="parent is missing"):
+            connection.execute(
+                f"INSERT INTO pricing.MODEL_MONITOR_{table} (monitor_run_id, {columns}) "
+                f"VALUES ('missing-run', {values})",
+                {"digest": "a" * 64},
+            )
+        connection.rollback()
+        connection.execute("PRAGMA foreign_keys=ON")
+    finally:
+        connection.close()

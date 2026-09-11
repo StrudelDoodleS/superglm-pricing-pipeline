@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pricing_pipeline.publishing.spline_segments import validate_spline_rows
 from pricing_pipeline.reporting.evidence import (
     FeatureImportanceEvidence,
     MainEffectEvidence,
@@ -61,7 +62,7 @@ class RatingWorkbookAdapter:
         return ModelEvidence(
             source=_SOURCE,
             importance=FeatureImportanceEvidence(
-                table=_workbook_importance(blocks),
+                table=_workbook_importance(blocks, context),
                 method="export_log_relativity_variance",
                 source=_SOURCE,
             ),
@@ -101,10 +102,41 @@ def _workbook_blocks(path: Path) -> dict[str, dict[str, Any]]:
         levels: list[str] = []
         relativities: list[float] = []
         weights: list[float] = []
+        coefficient_headers = []
+        for offset in range(3, min(7, raw.shape[1] - column)):
+            if pd.notna(raw.iat[_TERM_ROW, column + offset]):
+                break
+            coefficient_headers.append(str(raw.iat[_HEADER_ROW, column + offset]).strip().lower())
+        is_spline = any(value in {"a", "b", "c", "d"} for value in coefficient_headers)
+        has_coefficient_headers = any(value not in {"", "nan"} for value in coefficient_headers)
+        if has_coefficient_headers and coefficient_headers != ["a", "b", "c", "d"]:
+            raise UnderwriterReportError(
+                f"rating workbook term {name!r} has partial spline headers"
+            )
+        segments = []
         for row in range(_DATA_START_ROW, raw.shape[0]):
             level = raw.iat[row, column]
             relativity = raw.iat[row, column + 1]
             weight = raw.iat[row, column + 2]
+            coefficient_values = raw.iloc[row, column + 3 : column + 3 + len(coefficient_headers)]
+            has_coefficient_data = coefficient_values.notna().any()
+            if has_coefficient_data and not is_spline:
+                raise UnderwriterReportError(
+                    f"rating workbook term {name!r} has spline coefficients without headers a, b, c, d"
+                )
+            if (
+                is_spline
+                and (pd.isna(level) or pd.isna(relativity))
+                and (
+                    pd.notna(level)
+                    or pd.notna(relativity)
+                    or pd.notna(weight)
+                    or has_coefficient_data
+                )
+            ):
+                raise UnderwriterReportError(
+                    f"rating workbook term {name!r} contains an incomplete spline row"
+                )
             if pd.isna(level) and pd.isna(relativity):
                 if levels:
                     break
@@ -129,6 +161,17 @@ def _workbook_blocks(path: Path) -> dict[str, dict[str, Any]]:
             levels.append(str(level).strip())
             relativities.append(resolved_relativity)
             weights.append(resolved_weight)
+            if is_spline:
+                segments.append(
+                    {
+                        "level_code": levels[-1],
+                        "multiplier": resolved_relativity,
+                        **{
+                            f"spline_{key}": raw.iat[row, column + 3 + index]
+                            for index, key in enumerate(("a", "b", "c", "d"))
+                        },
+                    }
+                )
         if not levels:
             continue
         if not any(weights):
@@ -138,6 +181,11 @@ def _workbook_blocks(path: Path) -> dict[str, dict[str, Any]]:
             "relativity": relativities,
             "weight": weights,
         }
+        if is_spline:
+            try:
+                blocks[name]["segments"] = validate_spline_rows(segments)
+            except ValueError as exc:
+                raise UnderwriterReportError(f"rating workbook term {name!r}: {exc}") from exc
     if not blocks:
         raise UnderwriterReportError(f"no main-effect blocks found on {_RATING_SHEET!r} in {path}")
     return blocks
@@ -153,6 +201,12 @@ def _main_effect(
     context: ReportContext,
 ) -> MainEffectEvidence:
     numeric_values = _numeric_context_values(context.frame[feature])
+    if "segments" in block:
+        if numeric_values is None:
+            raise UnderwriterReportError(
+                f"rating workbook spline {feature!r} requires numeric values"
+            )
+        return _spline_main_effect(feature, block["segments"], numeric_values, context)
     intervals = (
         _continuous_intervals(feature, block["labels"]) if numeric_values is not None else None
     )
@@ -256,11 +310,93 @@ def _weighted_mean(values: np.ndarray, weight: np.ndarray) -> float:
     return float(np.average(values, weights=weight))
 
 
-def _workbook_importance(blocks: dict[str, dict[str, Any]]) -> pd.DataFrame:
+def _spline_log_effect(segments: list[dict[str, Any]], values: np.ndarray) -> np.ndarray:
+    result = np.full(values.shape, np.nan, dtype=float)
+    for segment in segments:
+        lower, upper = segment["spline_lower"], segment["spline_upper"]
+        mask = np.isfinite(values)
+        if lower is not None:
+            mask &= values >= lower
+        if upper is not None:
+            mask &= values <= upper if segment["spline_upper_inclusive"] else values < upper
+        u = 0.0 if lower is None or upper is None else (values[mask] - lower) / (upper - lower)
+        a, b, c, d = (segment[f"spline_{key}"] for key in ("a", "b", "c", "d"))
+        result[mask] = a + u * (b + u * (c + u * d))
+    if np.any(np.isfinite(values) & ~np.isfinite(result)):
+        raise UnderwriterReportError(
+            "rating workbook spline values fall outside the exported domain"
+        )
+    return result
+
+
+def _spline_main_effect(
+    feature: str,
+    segments: list[dict[str, Any]],
+    values: np.ndarray,
+    context: ReportContext,
+) -> MainEffectEvidence:
+    _spline_log_effect(segments, values)
+    intervals = [
+        (segment["spline_lower"], segment["spline_upper"])
+        for segment in segments
+        if segment["spline_lower"] is not None and segment["spline_upper"] is not None
+    ]
+    codes = np.asarray(context.comparison_unit_codes)
+    # Clipped tails share support with their adjacent finite interval. A boundary
+    # maximum alone must not make an otherwise supported curve disappear.
+    masks = [_interval_membership(values, intervals, index) for index in range(len(intervals))]
+    safe = [len(np.unique(codes[mask])) >= context.minimum_cell_size for mask in masks]
+    if not all(safe):
+        return MainEffectEvidence(
+            feature=feature,
+            semantic="native_component",
+            source=_SOURCE,
+            effect=pd.DataFrame({"x": [], "value": []}, dtype=float),
+            suppression=SuppressionMetadata(
+                status="partial" if any(safe) else "all",
+                reason="minimum_support",
+                presentation="curve_omitted",
+            ),
+        )
+    finite_values = values[np.isfinite(values)]
+    grid = np.unique(np.linspace(finite_values.min(), finite_values.max(), 200))
+    with np.errstate(over="ignore", under="ignore"):
+        relativities = np.exp(_spline_log_effect(segments, grid))
+    if not np.all(np.isfinite(relativities) & (relativities > 0.0)):
+        raise UnderwriterReportError(
+            f"rating workbook spline {feature!r} produces invalid relativities"
+        )
+    weight = np.asarray(context.weight, dtype=float)
+    return MainEffectEvidence(
+        feature=feature,
+        semantic="native_component",
+        source=_SOURCE,
+        effect=pd.DataFrame({"x": grid, "value": relativities}),
+        density=pd.DataFrame(
+            {
+                "x": [lower + (upper - lower) / 2.0 for lower, upper in intervals],
+                "density": [float(weight[mask].sum()) for mask in masks],
+            }
+        ),
+    )
+
+
+def _workbook_importance(blocks: dict[str, dict[str, Any]], context: ReportContext) -> pd.DataFrame:
     records: list[dict[str, Any]] = []
     for feature, block in blocks.items():
         log_relativity = np.log(np.asarray(block["relativity"], dtype=float))
         weight = np.asarray(block["weight"], dtype=float)
+        if "segments" in block:
+            # The displayed exp(a) omits variation within each polynomial segment.
+            # Measure exact log effects at the report observations instead.
+            values = _numeric_context_values(context.frame[feature])
+            assert values is not None  # Checked while collecting the main effect.
+            valid = np.isfinite(values)
+            log_relativity = _spline_log_effect(block["segments"], values[valid])
+            weight = np.asarray(context.weight, dtype=float)[valid]
+            if not len(weight) or not np.any(weight):
+                records.append({"feature": feature, "magnitude": 0.0})
+                continue
         mean = _weighted_mean(log_relativity, weight)
         variance = _weighted_mean(np.square(log_relativity - mean), weight)
         records.append({"feature": feature, "magnitude": variance})

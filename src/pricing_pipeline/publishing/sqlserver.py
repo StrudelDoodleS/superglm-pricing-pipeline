@@ -1359,6 +1359,21 @@ def _insert_rating_tables(
           ON fl.level_set_id = ls.level_set_id
          AND fl.level_code = s.level_code
         WHERE s.export_id = :export_id;
+        -- Exact spline coefficients belong to the package, independent of shared levels.
+        INSERT INTO pricing.PRICING_SPLINE_SEGMENT (
+            rate_package_id, term_id, segment_order, feature_name, level_label,
+            lower_bound, upper_bound, upper_inclusive, a, b, c, d, exposure_weight
+        )
+        SELECT
+            :rate_package_id, t.term_id, s.order_index, s.feature_name, s.level_label,
+            c.spline_lower, c.spline_upper, c.spline_upper_inclusive,
+            c.spline_a, c.spline_b, c.spline_c, c.spline_d, c.exposure_weight
+        FROM pricing_stg.STG_RATE_CELL AS c
+        JOIN pricing_stg.STG_CELL_LEVEL AS s
+          ON s.export_id = c.export_id AND s.row_id = c.row_id AND s.position_no = 1
+        JOIN pricing.PRICING_TERM AS t
+          ON t.rate_package_id = :rate_package_id AND t.term_name = c.term_name
+        WHERE c.export_id = :export_id AND c.term_type = 'SPLINE_PPOLY_1D';
         -- Minimal compile step: flat rate cells
         INSERT INTO pricing.PRICING_COMPILED_RATE_CELL (
             rate_package_id,

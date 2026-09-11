@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pricing_pipeline.data.transforms import transforms_from_metadata, transforms_metadata
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.publishing.identity import clean_identifier
@@ -19,6 +20,11 @@ from pricing_pipeline.publishing.metadata import (
     SuperGLMPublicationReceipt,
     canonical_receipt_bytes,
     load_publication_receipt,
+)
+from pricing_pipeline.publishing.spline_segments import (
+    SPLINE_COLUMNS,
+    SPLINE_TERM_TYPE,
+    validate_spline_rows,
 )
 
 INTERVAL_RE = re.compile(
@@ -110,7 +116,9 @@ def parse_interval(level: str) -> tuple[float | None, float | None, float | None
     return lo, hi if math.isfinite(hi) else None, rep
 
 
-def find_blocks(raw: pd.DataFrame, term_row: int, header_row: int) -> list[dict[str, Any]]:
+def find_blocks(
+    raw: pd.DataFrame, term_row: int, header_row: int, *, data_stop: int | None = None
+) -> list[dict[str, Any]]:
     tr = term_row - 1
     hr = header_row - 1
     blocks: list[dict[str, Any]] = []
@@ -125,12 +133,27 @@ def find_blocks(raw: pd.DataFrame, term_row: int, header_row: int) -> list[dict[
         headers = [h0.lower(), h1.lower(), h2.lower()]
         level_header = "level" in headers[0] or clean_identifier(h0) == clean_identifier(term_name)
         if level_header and "relativity" in headers[1] and "weight" in headers[2]:
+            next_title = next(
+                (index for index in range(c + 1, raw.shape[1]) if clean_text(raw.iat[tr, index])),
+                raw.shape[1],
+            )
+            coefficient_headers = [
+                clean_text(value) for value in raw.iloc[hr, c + 3 : min(c + 7, next_title)]
+            ]
+            has_coefficients = any(value is not None for value in coefficient_headers) or (
+                raw.iloc[hr + 1 : data_stop, c + 3 : min(c + 7, next_title)].notna().any().any()
+            )
+            if has_coefficients and coefficient_headers != ["a", "b", "c", "d"]:
+                raise ValueError(
+                    f"spline coefficients for {term_name!r} require headers a, b, c, d"
+                )
             blocks.append(
                 {
                     "term_name": clean_identifier(term_name),
                     "level_col": c,
                     "mult_col": c + 1,
                     "weight_col": c + 2,
+                    "has_coefficients": has_coefficients,
                 }
             )
 
@@ -399,7 +422,7 @@ def build_staging_frames(
         else raw.shape[0]
     )
 
-    blocks = find_blocks(raw, TERM_ROW, HEADER_ROW)
+    blocks = find_blocks(raw, TERM_ROW, HEADER_ROW, data_stop=main_effect_stop)
     if not blocks:
         raise RuntimeError("No rating table blocks found in the standard rating-table layout.")
 
@@ -431,13 +454,24 @@ def build_staging_frames(
         mult_col = block["mult_col"]
         weight_col = block["weight_col"]
 
-        block_df = raw.iloc[start:main_effect_stop, [level_col, mult_col, weight_col]].copy()
-        block_df.columns = ["level_code", "multiplier", "exposure_weight"]
+        polynomial = block["has_coefficients"]
+        columns = [level_col, mult_col, weight_col]
+        names = ["level_code", "multiplier", "exposure_weight"]
+        if polynomial:
+            columns.extend(range(level_col + 3, level_col + 7))
+            names.extend(SPLINE_COLUMNS[:4])
+        block_df = raw.iloc[start:main_effect_stop, columns].copy()
+        block_df.columns = names
+        if polynomial:
+            block_df = block_df.dropna(how="all")
+            block_df = pd.DataFrame(validate_spline_rows(block_df.to_dict("records")))
         block_df = block_df.dropna(subset=["level_code", "multiplier"], how="any")
         if block_df.empty:
             continue
 
-        term_type = infer_term_type(term_name, block_df["level_code"])
+        term_type = (
+            SPLINE_TERM_TYPE if polynomial else infer_term_type(term_name, block_df["level_code"])
+        )
         is_band = term_type in {
             "DISCRETIZED_SPLINE_1D",
             "NUMERIC_BANDED_1D",
@@ -446,6 +480,8 @@ def build_staging_frames(
 
         features = interaction_features.get(term_name)
         if features:
+            if polynomial:
+                raise ValueError("polynomial spline interaction exports are not supported")
             term_type = "CATEGORICAL_INTERACTION"
 
         for order_index, rec in enumerate(block_df.to_dict("records"), start=1):
@@ -469,12 +505,15 @@ def build_staging_frames(
                     "term_type": term_type,
                     "sequence_no": sequence_no,
                     "cell_key_text": cell_key,
-                    "multiplier": multiplier,
-                    "log_coefficient": float(np.log(multiplier)),
+                    # Legacy cells carry identity only for exact splines.
+                    # Their DECIMAL columns cannot hold every finite exp(a).
+                    "multiplier": 1.0 if polynomial else multiplier,
+                    "log_coefficient": 0.0 if polynomial else float(np.log(multiplier)),
                     "exposure_weight": exposure_weight,
                     "record_count": None,
-                    "is_reference": 1 if np.isclose(multiplier, 1.0) else 0,
+                    "is_reference": 0 if polynomial else (1 if np.isclose(multiplier, 1.0) else 0),
                     "is_default": 0,
+                    **({key: rec[key] for key in SPLINE_COLUMNS} if polynomial else {}),
                 }
             )
 
@@ -485,8 +524,11 @@ def build_staging_frames(
 
             for position_no, (feature_name, lv_code) in enumerate(pairs, start=1):
                 lo, hi, rep = parse_interval(lv_code)
+                if polynomial:
+                    lo, hi = rec["spline_lower"], rec["spline_upper"]
+                    rep = lo if lo is not None else hi
                 level_set_type = "NUMERIC_BAND" if lo is not None else "CATEGORICAL"
-                if len(pairs) == 1 and term_type == "DISCRETIZED_SPLINE_1D":
+                if len(pairs) == 1 and term_type in {"DISCRETIZED_SPLINE_1D", SPLINE_TERM_TYPE}:
                     level_set_type = "SPLINE_GRID_1D"
 
                 level_rows.append(
@@ -496,7 +538,7 @@ def build_staging_frames(
                         "position_no": position_no,
                         "feature_name": feature_name,
                         "feature_value_type": "NUMERIC"
-                        if lo is not None or is_band
+                        if lo is not None or is_band or polynomial
                         else "CATEGORICAL",
                         "level_set_name": f"{feature_name}__{args.export_id}",
                         "level_set_type": level_set_type,
@@ -524,8 +566,31 @@ def build_staging_frames(
         sequence_no=sequence_no,
     )
     rate_df = pd.DataFrame(rate_rows)
+    rate_df.attrs["offset_representations"] = _workbook_offset_representations(args.workbook_path)
     level_df = pd.DataFrame(level_rows)
     return export_df, rate_df, level_df
+
+
+def _workbook_offset_representations(path: Path) -> dict[str, str]:
+    """Read explicit offset encodings; a category named per_unit is ambiguous."""
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=False)
+    try:
+        sheet = workbook[RATING_SHEET]
+        representations = {}
+        prefix = "pricing_pipeline:offset_representation="
+        for cell in sheet[HEADER_ROW]:
+            if cell.comment is None or not cell.comment.text.startswith(prefix):
+                continue
+            value = cell.comment.text.removeprefix(prefix).strip()
+            if value not in {"LOOKUP", "PER_UNIT_FACTOR"}:
+                raise ValueError("unsupported offset representation marker")
+            term = clean_identifier(str(sheet.cell(TERM_ROW, cell.column).value))
+            representations[term] = value
+        return representations
+    finally:
+        workbook.close()
 
 
 def _deterministic_json(data: Any) -> str:
@@ -629,7 +694,11 @@ def _canonical_equivalence_frame(name: str, frame: pd.DataFrame) -> dict[str, An
                     raise ValueError(
                         f"{column} must contain valid JSON for model equivalence"
                     ) from exc
-            values.append(_canonical_equivalence_value(value))
+            values.append(
+                _canonical_staging_value(value)
+                if column in SPLINE_COLUMNS
+                else _canonical_equivalence_value(value)
+            )
         rows.append(values)
     rows.sort(
         key=lambda row: json.dumps(
@@ -732,6 +801,12 @@ def _receipt_term_type(
     metadata: Mapping[str, Any],
 ) -> str:
     feature_kind = _metadata_feature_kind(metadata)
+    if existing_term_type == SPLINE_TERM_TYPE:
+        if feature_kind != "spline":
+            raise ValueError(
+                f"polynomial spline term {term_name!r} requires spline receipt metadata"
+            )
+        return SPLINE_TERM_TYPE
     if feature_kind == "offset":
         return "OFFSET_FACTOR"
     if feature_kind == "numeric":
@@ -859,7 +934,28 @@ def _apply_publication_receipt_metadata(
     export_df["offset_label"] = offset_contract.label
     export_df["metadata_origin"] = receipt.metadata_origin
 
-    return _term_metadata_frame(export_id, receipt, staged_terms=staged_terms)
+    metadata_frame = _term_metadata_frame(export_id, receipt, staged_terms=staged_terms)
+    if offset_contract.handling == "EXPORTED_FACTOR":
+        name = offset_contract.published_factor_name
+        representation = rate_df.attrs.get("offset_representations", {}).get(name)
+        levels = (
+            rate_df.loc[rate_df["term_name"].eq(name), "cell_key_text"].str.split("=", n=1).str[-1]
+        )
+        if representation is None and levels.str.lower().eq("per_unit").any():
+            raise ValueError(
+                "offset workbook has an ambiguous per_unit level without a representation marker; "
+                "re-export it through pricing_pipeline.export_rating_tables"
+            )
+        if representation is not None:
+            if representation == "PER_UNIT_FACTOR" and (
+                len(levels) != 1 or levels.iloc[0] != "per_unit"
+            ):
+                raise ValueError("per-unit offset representation requires one per_unit row")
+            matching = metadata_frame["term_name"].eq(name)
+            metadata = json.loads(metadata_frame.loc[matching, "term_metadata_json"].iloc[0])
+            metadata["rating_representation"] = representation
+            metadata_frame.loc[matching, "term_metadata_json"] = _deterministic_json(metadata)
+    return metadata_frame
 
 
 def _verified_rating_frames(
@@ -985,7 +1081,12 @@ def export_rating_tables(
     offset_kind: str | None = None,
     offset_max_exact_levels: int | None = None,
     n_bins: int = 150,
+    continuous_kind: str = "ppform",
+    input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> Path:
+    if continuous_kind not in {"ppform", "binned"}:
+        raise ValueError("continuous_kind must be 'ppform' or 'binned'")
+    transforms = transforms_from_metadata({} if input_transforms is None else input_transforms)
     export_fn = getattr(model, "export_rating_tables", None)
     if not callable(export_fn):
         raise RuntimeError(  # noqa: TRY004
@@ -994,7 +1095,11 @@ def export_rating_tables(
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    export_kwargs = {"sample_weight": export_weight, "n_bins": n_bins}
+    export_kwargs = {
+        "sample_weight": export_weight,
+        "n_bins": n_bins,
+        "continuous_kind": continuous_kind,
+    }
     optional_export_kwargs = {
         "offset": offset,
         "offset_source": offset_source,
@@ -1006,4 +1111,109 @@ def export_rating_tables(
         {key: value for key, value in optional_export_kwargs.items() if value is not None}
     )
     export_fn(output_path, X, y, **export_kwargs)
+    has_offset = (
+        offset is not None
+        or offset_source is not None
+        or bool(getattr(model, "_fit_used_offset", getattr(model, "_fit_offset", None) is not None))
+    )
+    if has_offset:
+        from zipfile import is_zipfile
+
+        # Non-workbook exporters are validated by the publication importer.
+        if is_zipfile(output_path):
+            from openpyxl import load_workbook
+            from openpyxl.comments import Comment
+
+            source = None
+            if offset_source is None:
+                source_name = "Offset Multiplier"
+            elif isinstance(offset_source, str):
+                source = pd.Series(X[offset_source])
+                source_name = offset_name if offset_name is not None else offset_source
+            else:
+                source = pd.Series(offset_source)
+                source_name = offset_name if offset_name is not None else str(source.name)
+            workbook = load_workbook(output_path)
+            try:
+                sheet = workbook[RATING_SHEET]
+                columns = [
+                    column
+                    for column in range(1, sheet.max_column + 1)
+                    if sheet.cell(TERM_ROW, column).value == source_name
+                    and sheet.cell(HEADER_ROW, column + 1).value == "Relativity"
+                    and sheet.cell(HEADER_ROW, column + 2).value == "Weight"
+                ]
+                if len(columns) != 1:
+                    raise ValueError(f"cannot identify exported offset block {source_name!r}")
+                column = columns[0]
+                if source is None:
+                    # Undeclared offsets have numeric exp(offset) lookup keys.
+                    # Only this path makes a literal per_unit row unambiguous.
+                    per_unit = sheet.cell(DATA_START_ROW, column).value == "per_unit"
+                else:
+                    exact_limit = 20 if offset_max_exact_levels is None else offset_max_exact_levels
+                    kind = "auto" if offset_kind is None else offset_kind
+                    per_unit = kind == "per_unit" or (
+                        kind == "auto" and source.nunique(dropna=False) > exact_limit
+                    )
+                representation = "PER_UNIT_FACTOR" if per_unit else "LOOKUP"
+                sheet.cell(HEADER_ROW, column).comment = Comment(
+                    f"pricing_pipeline:offset_representation={representation}",
+                    "pricing_pipeline",
+                )
+                workbook.save(output_path)
+            finally:
+                workbook.close()
+    if transforms:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Font
+
+        workbook = load_workbook(output_path)
+        try:
+            sheet = workbook.create_sheet("Input Preparation")
+            sheet.append(
+                [
+                    (
+                        "Prepare model feature values before SQL scoring. "
+                        "Rating-table units are unchanged."
+                    )
+                ]
+            )
+            sheet.append(
+                [
+                    (
+                        "For an exported offset factor, supply the source values shown in "
+                        "the rating table; do not apply the offset twice."
+                    )
+                ]
+            )
+            sheet.append([])
+            sheet.append(["Model column", "Source column", "Operation", "Parameters", "Expression"])
+            for output, metadata in transforms_metadata(transforms).items():
+                parameters = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key not in {"operation", "source"}
+                }
+                sheet.append(
+                    [
+                        output,
+                        metadata["source"],
+                        metadata["operation"],
+                        json.dumps(parameters, sort_keys=True) if parameters else "",
+                        transforms[output].expression,
+                    ]
+                )
+            for cell in sheet[4]:
+                cell.font = Font(bold=True)
+            for row in sheet:
+                for cell in row:
+                    if isinstance(cell.value, str):
+                        cell.data_type = "s"
+            for column, width in {"A": 30, "B": 30, "C": 18, "D": 36, "E": 48}.items():
+                sheet.column_dimensions[column].width = width
+            sheet.freeze_panes = "A5"
+            workbook.save(output_path)
+        finally:
+            workbook.close()
     return output_path

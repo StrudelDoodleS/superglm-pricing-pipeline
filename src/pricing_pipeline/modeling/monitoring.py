@@ -38,6 +38,7 @@ from superglm.features.spline import Spline, _SplineBase
 from superglm.types import LambdaPolicy
 
 from pricing_pipeline.data.manifest import model_frame_evidence
+from pricing_pipeline.data.transforms import transforms_from_metadata, transforms_metadata
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
@@ -327,6 +328,7 @@ def _verified_candidate_baseline(
             offset_contract=bundle.offset_contract,
             fit_sample_weight_name=bundle.fit_sample_weight_name,
             export_weight_name=bundle.export_weight_name,
+            input_transforms=getattr(bundle, "input_transforms", None),
         )
     except (TypeError, ValueError) as exc:
         raise MonitoringError(
@@ -629,6 +631,7 @@ def build_model_fit_contract(
     offset_contract: OffsetExportContract | None = None,
     fit_sample_weight_name: str | None = None,
     export_weight_name: str | None = None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
     continuous_points: int = 101,
 ) -> ModelFitContract:
     """Capture one fitted model's immutable structural and smoothing contract."""
@@ -639,6 +642,7 @@ def build_model_fit_contract(
         offset_contract=resolved_offset,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=input_transforms,
     )
     telemetry = fitted.training_telemetry()
     lambdas = fitted.reml_diagnostics().get("lambdas", {})
@@ -1214,12 +1218,14 @@ def _publication_receipt_payload(
     offset_contract: OffsetExportContract,
     fit_sample_weight_name: str | None,
     export_weight_name: str | None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return build_superglm_publication_receipt(
         model,
         offset_contract=offset_contract,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=input_transforms,
     ).model_dump(mode="json")
 
 
@@ -1353,18 +1359,21 @@ def _verify_monitoring_invariants(
     offset_contract: OffsetExportContract,
     fit_sample_weight_name: str | None,
     export_weight_name: str | None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> MonitoringInvariantEvidence:
     baseline_receipt = _publication_receipt_payload(
         baseline,
         offset_contract=offset_contract,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=input_transforms,
     )
     fitted_receipt = _publication_receipt_payload(
         fitted,
         offset_contract=offset_contract,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=input_transforms,
     )
 
     baseline_structure_json = _canonical_json(
@@ -1593,6 +1602,7 @@ def run_monitoring_fit(
     offset_contract: OffsetExportContract | None = None,
     fit_sample_weight_name: str | None = None,
     export_weight_name: str | None = None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
     continuous_points: int = 101,
     max_reml_iter: int = 20,
     reml_tol: float | None = None,
@@ -1603,6 +1613,12 @@ def run_monitoring_fit(
 ) -> MonitoringFitResult:
     """Score or refit one preset and return SQL-ready lightweight evidence."""
     baseline, baseline_identity, baseline_bundle = _resolve_monitoring_baseline(baseline_model)
+    preparation = (
+        transforms_metadata(
+            transforms_from_metadata({} if input_transforms is None else input_transforms)
+        )
+        or None
+    )
     resolved_variant = MonitoringVariant(variant)
     if not isinstance(X, pd.DataFrame) or X.empty:
         raise ValueError("X must be a non-empty pandas DataFrame")
@@ -1612,6 +1628,12 @@ def run_monitoring_fit(
         resolved_offset = offset_contract or OffsetExportContract(handling="NONE")
     else:
         resolved_offset = baseline_bundle.offset_contract
+        baseline_preparation = getattr(baseline_bundle, "input_transforms", None)
+        if input_transforms is not None and preparation != baseline_preparation:
+            raise MonitoringError(
+                "input_transforms does not match the verified baseline candidate artifact"
+            )
+        preparation = baseline_preparation
         if offset_contract is not None and offset_contract != resolved_offset:
             raise MonitoringError(
                 "offset_contract does not match the verified baseline candidate artifact"
@@ -1674,6 +1696,7 @@ def run_monitoring_fit(
         offset_contract=resolved_offset,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=preparation,
         continuous_points=continuous_points,
     )
     if resolved_variant is MonitoringVariant.STATIC_SCORE:
@@ -1697,6 +1720,7 @@ def run_monitoring_fit(
         offset_contract=resolved_offset,
         fit_sample_weight_name=fit_sample_weight_name,
         export_weight_name=export_weight_name,
+        input_transforms=preparation,
     )
     payload = contract.payload()
     result = MonitoringFitResult(
@@ -2039,7 +2063,7 @@ def _persist_monitoring_fit_once(
             connection.execute(
                 text(
                     f"""
-                    SELECT monitor_run_id, run_signature_sha256
+                    SELECT monitor_run_id, run_signature_sha256, evidence_sealed
                     FROM {monitor_schema}.MODEL_MONITOR_RUN
                     WHERE baseline_deployment_id = :baseline_deployment_id
                       AND manifest_id = :manifest_id
@@ -2058,6 +2082,10 @@ def _persist_monitoring_fit_once(
             .one_or_none()
         )
         if existing_run is not None:
+            if not existing_run["evidence_sealed"]:
+                raise MonitoringError(
+                    "a monitoring observation already exists with unsealed evidence"
+                )
             if existing_run["run_signature_sha256"] != signature:
                 raise MonitoringError(
                     "a monitoring observation already exists with different fit evidence"
@@ -2080,7 +2108,7 @@ def _persist_monitoring_fit_once(
                     invariant_status, invariant_evidence_sha256,
                     invariant_evidence_json, model_frame_sha256,
                     fit_configuration_json, result_evidence_sha256,
-                    created_by
+                    created_by, evidence_sealed
                 ) VALUES (
                     :monitor_run_id, :fit_contract_id, :baseline_deployment_id,
                     :model_id, :rate_package_id, :manifest_id, :component_role,
@@ -2088,7 +2116,7 @@ def _persist_monitoring_fit_once(
                     :invariant_status, :invariant_evidence_sha256,
                     :invariant_evidence_json, :model_frame_sha256,
                     :fit_configuration_json, :result_evidence_sha256,
-                    :created_by
+                    :created_by, 0
                 )
                 """
             ),
@@ -2211,6 +2239,15 @@ def _persist_monitoring_fit_once(
                 ],
             )
 
+        connection.execute(
+            text(
+                f"UPDATE {monitor_schema}.MODEL_MONITOR_RUN "
+                "SET evidence_sealed = 1 WHERE monitor_run_id = :monitor_run_id "
+                "AND evidence_sealed = 0"
+            ),
+            {"monitor_run_id": monitor_run_id},
+        )
+
     return PersistedMonitoringRun(
         monitor_run_id=monitor_run_id,
         fit_contract_id=fit_contract_id,
@@ -2247,7 +2284,8 @@ def _recover_concurrent_monitoring_retry(
                     SELECT
                         monitor_run_id,
                         fit_contract_id,
-                        run_signature_sha256
+                        run_signature_sha256,
+                        evidence_sealed
                     FROM {monitor_schema}.MODEL_MONITOR_RUN
                     WHERE baseline_deployment_id = :baseline_deployment_id
                       AND manifest_id = :manifest_id
@@ -2267,6 +2305,8 @@ def _recover_concurrent_monitoring_retry(
         )
     if row is None:
         return None
+    if not row["evidence_sealed"]:
+        raise MonitoringError("a concurrent monitoring observation has unsealed evidence")
     if row["run_signature_sha256"] != signature:
         raise MonitoringError(
             "a concurrent monitoring observation committed different fit evidence"

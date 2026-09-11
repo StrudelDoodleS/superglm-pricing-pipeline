@@ -7,7 +7,7 @@ identifiers, audit records, artifact locations, and publication plumbing.
 from __future__ import annotations
 
 import getpass
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import text
 
+from pricing_pipeline.data.dataset import PricingDataset
 from pricing_pipeline.data.frame_artifact import (
     ModelFrameArtifact,
     inspect_model_frame,
@@ -28,6 +29,16 @@ from pricing_pipeline.data.manifest import (
     ModelFrameManifestSpec,
     validation_split_indices,
 )
+from pricing_pipeline.data.transforms import (
+    Clip,
+    Log,
+    Log1p,
+    Transform,
+    apply_transforms,
+    normalize_transforms,
+    transforms_metadata,
+)
+from pricing_pipeline.data.validation import Splitter, splitter_config
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
 from pricing_pipeline.infra.runtime import runtime_from_env_or_module
@@ -64,6 +75,7 @@ from pricing_pipeline.modeling.monitoring import (
 )
 from pricing_pipeline.modeling.standard_superglm import (
     ModelInputs,
+    PrecomputedSplitter,
     canonical_row_identity_index,
     run_standard_superglm_build,
 )
@@ -117,11 +129,13 @@ class PricingModelSpec:
     target: str
     model_type: str
     deployment_slot: str
-    features: tuple[str, ...]
-    dataset_name: str
-    source_system: str
-    pk_columns: tuple[str, ...]
-    validation: ValidationSplitConfig = field(default_factory=ValidationSplitConfig.kfold)
+    features: Sequence[str]
+    dataset_name: str | None = None
+    source_system: str | None = None
+    pk_columns: Sequence[str] | None = None
+    validation: ValidationSplitConfig | Splitter = field(
+        default_factory=ValidationSplitConfig.kfold
+    )
     offset_column: str | None = None
     offset_source_column: str | None = None
     offset_label: str | None = None
@@ -130,8 +144,39 @@ class PricingModelSpec:
     data_as_of_column: str | None = None
     scoring: tuple[str, ...] = ("deviance", "nll", "gini")
     fit_mode: str = "fit_reml"
+    dataset: PricingDataset | None = None
+    transforms: Mapping[str, Transform] = field(default_factory=dict)
+    spline_export: str = "exact"
+    groups_column: str | None = None
 
     def __post_init__(self) -> None:
+        if self.spline_export not in {"exact", "binned"}:
+            raise ValueError("spline_export must be 'exact' or 'binned'")
+        if self.dataset is not None:
+            if not isinstance(self.dataset, PricingDataset):
+                raise TypeError("dataset must be a PricingDataset")
+            for name, expected in (
+                ("dataset_name", self.dataset.name),
+                ("source_system", self.dataset.source),
+                ("pk_columns", self.dataset.key),
+                ("data_as_of_column", self.dataset.as_of),
+            ):
+                supplied = getattr(self, name)
+                if supplied is not None:
+                    if name == "pk_columns":
+                        if isinstance(supplied, str) or not isinstance(supplied, Sequence):
+                            raise TypeError("pk_columns must be an ordered sequence of names")
+                        supplied = tuple(str(value).strip() for value in supplied)
+                    else:
+                        supplied = str(supplied).strip()
+                    if supplied != expected:
+                        raise ValueError(f"{name} conflicts with the dataset")
+                object.__setattr__(self, name, expected)
+        object.__setattr__(self, "transforms", normalize_transforms(self.transforms))
+        for name in ("features", "pk_columns"):
+            values = getattr(self, name)
+            if isinstance(values, str) or not isinstance(values, Sequence):
+                raise TypeError(f"{name} must be an ordered sequence of names")
         for field_name in (
             "name",
             "label",
@@ -173,6 +218,7 @@ class PricingModelSpec:
             "sample_weight_column",
             "export_weight_column",
             "data_as_of_column",
+            "groups_column",
         ):
             value = getattr(self, field_name)
             object.__setattr__(
@@ -180,6 +226,16 @@ class PricingModelSpec:
                 field_name,
                 None if value is None else _required_text(value, field_name),
             )
+        if self.offset_column in self.transforms:
+            transform = self.transforms[self.offset_column]
+            for name, expected in (
+                ("offset_source_column", transform.source),
+                ("offset_label", transform.expression),
+            ):
+                supplied = getattr(self, name)
+                if supplied is not None and supplied != expected:
+                    raise ValueError(f"{name} conflicts with the offset transform")
+                object.__setattr__(self, name, expected)
         offset_fields = (
             self.offset_column,
             self.offset_source_column,
@@ -203,29 +259,29 @@ class PricingModelSpec:
             raise ValueError("scoring must contain at least one metric")
         if len(set(self.scoring)) != len(self.scoring):
             raise ValueError("scoring must not contain duplicates")
-        if self.validation.method not in {
-            "kfold",
-            "train_test_split",
-            "column_kfold",
-            "column_holdout",
-        }:
-            raise ValueError(
-                f"validation method {self.validation.method!r} is not supported by "
-                "the notebook workflow; use a generated or column-based split"
-            )
-        if not self.validation.materialize:
-            object.__setattr__(
-                self,
-                "validation",
-                replace(self.validation, materialize=True),
-            )
+        if isinstance(self.validation, ValidationSplitConfig):
+            if self.groups_column is not None:
+                raise ValueError("groups_column requires a splitter in validation")
+            if self.validation.method not in {
+                "kfold",
+                "train_test_split",
+                "column_kfold",
+                "column_holdout",
+            }:
+                raise ValueError(
+                    f"validation method {self.validation.method!r} is not supported by "
+                    "the notebook workflow; pass a splitter or use a column-based split"
+                )
+            if not self.validation.materialize:
+                object.__setattr__(self, "validation", replace(self.validation, materialize=True))
+        validation_config = self._validation_config()
 
         roles: dict[str, list[str]] = {}
         role_values = {
             "target": (self.target,),
             "primary key": self.pk_columns,
             "feature": self.features,
-            "split": (self.validation.column,),
+            "split": (validation_config.column,),
             "offset": (self.offset_column,),
             "offset source": (self.offset_source_column,),
             "sample weight": (self.sample_weight_column,),
@@ -254,6 +310,11 @@ class PricingModelSpec:
                 for column, assigned_roles in sorted(overlaps.items())
             )
             raise ValueError(f"model column roles overlap: {detail}")
+
+    def _validation_config(self) -> ValidationSplitConfig:
+        if isinstance(self.validation, ValidationSplitConfig):
+            return self.validation
+        return splitter_config(self.validation, groups_column=self.groups_column)
 
 
 @dataclass(frozen=True)
@@ -395,7 +456,7 @@ def register_model(
         target_name=spec.target,
         model_type=spec.model_type,
         deployment_slot=spec.deployment_slot,
-        validation_split=spec.validation,
+        validation_split=spec._validation_config(),
     )
     identity = _created_by(created_by)
     if pricing.mode == "local":
@@ -495,13 +556,13 @@ def load_registered_model(
     )
 
 
-def list_candidate_versions(
+def list_model_versions(
     pricing: NotebookContext,
     *,
     model: RegisteredModel,
     technical: bool = False,
 ) -> pd.DataFrame:
-    """List package versions newest-first for an editor or deployment decision."""
+    """List saved model versions newest-first for review or deployment."""
     return Workbench(
         engine=pricing.engine,
         settings=pricing.settings,
@@ -552,7 +613,7 @@ def _resolve_data_as_of(
     return resolved
 
 
-def build_candidate(
+def fit_model(
     pricing: NotebookContext,
     *,
     model: RegisteredModel,
@@ -562,15 +623,33 @@ def build_candidate(
     data_as_of: date | datetime | str | None = None,
     created_by: str | None = None,
 ) -> BuiltCandidate:
-    """Fit and export one candidate while deriving its audit evidence."""
-    pricing.require_write("build_candidate")
+    """Run CV, fit the full model and export review artifacts and audit evidence."""
+    pricing.require_write("fit_model")
     resolved_model_kind = normalise_model_kind(model_kind)
     spec = model.spec
     if spec is None:
         raise ValueError(
-            "build_candidate requires a model returned by register_model(), "
+            "fit_model requires a model returned by register_model(), "
             "not a review-only SQL model reference"
         )
+    if spec.dataset is not None:
+        spec.dataset.validate_prepared(frame, spec.transforms)
+    elif spec.transforms:
+        # Legacy specs may still supply provenance as individual fields.
+        missing_outputs = set(spec.transforms) - set(frame.columns)
+        if missing_outputs:
+            raise ValueError(
+                "prepared data is missing transform outputs: " + ", ".join(sorted(missing_outputs))
+            )
+        expected = apply_transforms(frame.drop(columns=list(spec.transforms)), spec.transforms)
+        for output in spec.transforms:
+            try:
+                pd.testing.assert_series_equal(frame[output], expected[output], check_exact=True)
+            except AssertionError as exc:
+                raise ValueError(
+                    f"prepared column {output!r} does not match its transform"
+                ) from exc
+    validation_split = spec._validation_config()
     required_columns = {
         *spec.features,
         *spec.pk_columns,
@@ -580,7 +659,8 @@ def build_candidate(
         spec.sample_weight_column,
         spec.export_weight_column,
         spec.data_as_of_column,
-        spec.validation.stratify_column,
+        validation_split.stratify_column,
+        spec.groups_column,
     }
     required_columns.discard(None)
     missing_columns = sorted(required_columns - set(frame.columns))
@@ -624,8 +704,23 @@ def build_candidate(
     if spec.export_weight_column is not None:
         export_weight = aligned_frame[spec.export_weight_column].astype(float)
 
-    validation_split = spec.validation
-    resolved_split_indices = validation_split_indices(frame, validation_split)
+    if isinstance(spec.validation, ValidationSplitConfig):
+        resolved_split_indices = validation_split_indices(frame, validation_split)
+    else:
+        split_options = {}
+        if spec.groups_column is not None:
+            groups = frame[spec.groups_column]
+            if groups.isna().any():
+                raise ValueError(f"groups column {spec.groups_column!r} contains null values")
+            split_options["groups"] = groups.copy()
+        # A splitter sees all prepared columns, including dates and business identifiers.
+        # Save the resulting positions once; fitting and publication replay those folds.
+        resolved_split_indices = list(
+            PrecomputedSplitter(
+                spec.validation.split(frame.copy(), frame[spec.target].copy(), **split_options),
+                row_count=len(frame),
+            ).folds
+        )
     resolved_run_key = _new_notebook_run_key()
     export_id = build_export_id(model.name, resolved_run_key)
     if pricing.mode == "local":
@@ -665,7 +760,11 @@ def build_candidate(
         scoring=spec.scoring,
         output_dir=artifact_root / resolved_run_key,
         model_id=model.model_id,
-        model_config=model.config,
+        model_config=(
+            model.config
+            if model.config.validation_split == validation_split
+            else replace(model.config, validation_split=validation_split)
+        ),
         model_kind=resolved_model_kind,
         model_version=model_version,
         export_id=export_id,
@@ -688,16 +787,18 @@ def build_candidate(
         model_source_root=model.source_root,
         created_by=_created_by(created_by),
         offset_contract=offset_contract,
+        input_transforms=transforms_metadata(spec.transforms) or None,
+        continuous_kind="ppform" if spec.spline_export == "exact" else "binned",
     )
     return BuiltCandidate(model=model, completed_build=completed_build)
 
 
-def publish_candidate(
+def save_model_version(
     pricing: NotebookContext,
     candidate: BuiltCandidate,
 ) -> CompletedModelPublishResult:
-    """Publish a built candidate and its audit lineage to the selected store."""
-    pricing.require_write("publish_candidate")
+    """Save a fitted model version and its audit lineage to the selected database."""
+    pricing.require_write("save_model_version")
     if pricing.mode == "local":
         return publish_sqlite_candidate(
             pricing.engine,
@@ -715,13 +816,13 @@ def publish_candidate(
     )
 
 
-def open_candidate(
+def load_model_version(
     pricing: NotebookContext,
     *,
     model: RegisteredModel,
     package_version: int,
 ):
-    """Open one published package for an optional live editor review."""
+    """Verify and load one saved model version for editing or deployment review."""
     if pricing.mode == "local":
         raise RuntimeError(
             "Remote mode is required for the editor; local SQLite records "
@@ -743,7 +844,7 @@ def open_deployed_candidate(
     model: RegisteredModel,
 ):
     """Open the exact package currently deployed in the model's configured slot."""
-    versions = list_candidate_versions(pricing, model=model, technical=True)
+    versions = list_model_versions(pricing, model=model, technical=True)
     if versions.empty:
         raise LookupError(f"model {model.name!r} has no published candidate packages")
     current_ids = {int(value) for value in versions["current_rate_package_id"].dropna().tolist()}
@@ -757,7 +858,7 @@ def open_deployed_candidate(
         raise LookupError(
             f"the current deployment for model {model.name!r} did not resolve one package"
         )
-    return open_candidate(
+    return load_model_version(
         pricing,
         model=model,
         package_version=int(selected.iloc[0]["package_version"]),
@@ -778,7 +879,7 @@ def export_level_groupings(
     without changing the scratch/training notebook contract.
     """
     if not isinstance(candidate, Candidate):
-        raise TypeError("candidate must come from open_candidate()")
+        raise TypeError("candidate must come from load_model_version()")
     if str(candidate.technical.get("model_kind") or "").upper() != "RAW":
         raise ValueError("routine level groupings must be exported from a RAW candidate")
     reference_model = getattr(editor_session, "reference_model", None)
@@ -921,15 +1022,15 @@ def publish_manual_adjustment(
     )
 
 
-def deploy_package(
+def deploy_model_version(
     pricing: NotebookContext,
     *,
     package: Candidate,
     reason: str,
     deployed_by: str | None = None,
 ):
-    """Deploy a package using the champion snapshot the analyst actually reviewed."""
-    pricing.require_write("deploy_package")
+    """Deploy a saved model version using the deployment snapshot reviewed with it."""
+    pricing.require_write("deploy_model_version")
     if pricing.mode == "local":
         raise RuntimeError(
             "Remote mode is required for deployment; local SQLite is an audit "
@@ -937,7 +1038,7 @@ def deploy_package(
         )
     if not isinstance(package, Candidate):
         raise TypeError(
-            "package must come from open_candidate(); deployment requires the "
+            "package must come from load_model_version(); deployment requires the "
             "champion snapshot that was visible during review"
         )
     if package.workbench.engine is not pricing.engine:
@@ -962,8 +1063,19 @@ def deploy_package(
     )
 
 
+# Compatibility names for notebooks created before the model-version vocabulary.
+build_candidate = fit_model
+publish_candidate = save_model_version
+list_candidate_versions = list_model_versions
+open_candidate = load_model_version
+deploy_package = deploy_model_version
+
+
 __all__ = [
     "BuiltCandidate",
+    "Clip",
+    "Log",
+    "Log1p",
     "ManualAdjustmentPolicy",
     "ManualAdjustmentRule",
     "ManualEditReview",
@@ -974,20 +1086,26 @@ __all__ = [
     "MonitoringVariant",
     "NotebookContext",
     "PersistedMonitoringRun",
+    "PricingDataset",
     "PricingModelSpec",
     "RegisteredModel",
     "apply_level_groupings",
     "apply_manual_adjustment_policy",
+    "apply_transforms",
     "build_candidate",
     "build_model_fit_contract",
     "connect",
+    "deploy_model_version",
     "deploy_package",
     "export_level_groupings",
+    "fit_model",
     "inspect_level_groupings",
     "inspect_model_frame",
     "list_candidate_versions",
+    "list_model_versions",
     "load_level_groupings",
     "load_model_frame",
+    "load_model_version",
     "load_registered_model",
     "manual_adjustment_policy_from_candidate",
     "open_candidate",
@@ -999,4 +1117,5 @@ __all__ = [
     "register_model",
     "run_monitoring_fit",
     "save_model_frame",
+    "save_model_version",
 ]

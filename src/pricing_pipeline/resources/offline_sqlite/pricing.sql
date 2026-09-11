@@ -1,4 +1,9 @@
 CREATE TABLE IF NOT EXISTS pricing.FREMTPL_RAW (
+/*
+Purpose: Hold the public freMTPL motor claim frequency data for demonstrations.
+One row: One source policy record, including claim count and exposure in years.
+Use: This is demo input. Production model lineage uses DATASET_MANIFEST and the model-frame artifact.
+*/
     IDpol INTEGER NOT NULL PRIMARY KEY,
     ClaimNb INTEGER NOT NULL,
     Exposure REAL NOT NULL,
@@ -14,6 +19,11 @@ CREATE TABLE IF NOT EXISTS pricing.FREMTPL_RAW (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.DATASET_MANIFEST (
+/*
+Purpose: Identify the exact dataset snapshot used for a model or monitoring observation.
+One row: One dataset version, with its data-as-at date, row count, column roles, and content hashes.
+Use: Data-as-at describes source completeness. It is separate from the import or fit time. Source records live in the model-frame artifact.
+*/
     manifest_id TEXT NOT NULL PRIMARY KEY,
     manifest_signature_sha256 TEXT,
     dataset_name TEXT NOT NULL,
@@ -36,6 +46,11 @@ CREATE TABLE IF NOT EXISTS pricing.DATASET_MANIFEST (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.DATASET_COLUMN (
+/*
+Purpose: Describe columns in a recorded dataset snapshot.
+One row: One column within a dataset manifest, with its role, type, and summary statistics.
+Use: Use this to check the model inputs without loading policy records.
+*/
     manifest_id TEXT NOT NULL,
     ordinal_no INTEGER NOT NULL,
     column_name TEXT NOT NULL,
@@ -47,6 +62,11 @@ CREATE TABLE IF NOT EXISTS pricing.DATASET_COLUMN (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.CV_SPLIT_SET (
+/*
+Purpose: Identify how a dataset was split for validation.
+One row: One split configuration and ordered-row identity for one manifest.
+Use: Exact row membership comes from replaying the recorded configuration or loading its verified split artifact.
+*/
     split_set_id TEXT NOT NULL PRIMARY KEY,
     manifest_id TEXT NOT NULL,
     split_mode TEXT NOT NULL,
@@ -65,6 +85,11 @@ CREATE TABLE IF NOT EXISTS pricing.CV_SPLIT_SET (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.CV_FOLD (
+/*
+Purpose: Record the size of each validation split.
+One row: One fold number within a split set, with training and test row counts.
+Use: This table contains counts, not individual row membership. A holdout also has a fold record.
+*/
     split_set_id TEXT NOT NULL,
     fold_no INTEGER NOT NULL,
     n_train INTEGER NOT NULL,
@@ -73,6 +98,11 @@ CREATE TABLE IF NOT EXISTS pricing.CV_FOLD (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.CV_FOLD_METRIC (
+/*
+Purpose: Store predictive performance measured on each held-out fold.
+One row: One metric for one model run, split set, and fold.
+Use: Compare runs on the same split set. These results differ from full-sample training metrics and pooled validation metrics.
+*/
     model_run_id TEXT NOT NULL,
     split_set_id TEXT NOT NULL,
     fold_no INTEGER NOT NULL,
@@ -82,6 +112,11 @@ CREATE TABLE IF NOT EXISTS pricing.CV_FOLD_METRIC (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_MODEL (
+/*
+Purpose: Register a named business model, such as motor claim frequency.
+One row: One stable model identity, target, label, and active or retired status.
+Use: Versions belong to MODEL_RUN and PRICING_RATE_PACKAGE. An active model is not necessarily deployed.
+*/
     model_id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_name TEXT NOT NULL,
     model_label TEXT,
@@ -95,6 +130,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_MODEL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_MODEL_VERSION_RESERVATION (
+/*
+Purpose: Allocate model version names safely when builds run concurrently.
+One row: One reserved model version for a model and export identifier.
+Use: Internal allocation record. Do not infer publication or deployment from a reservation.
+*/
     model_id INTEGER NOT NULL,
     export_id TEXT NOT NULL,
     model_version TEXT NOT NULL,
@@ -104,6 +144,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_MODEL_VERSION_RESERVATION (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_RUN (
+/*
+Purpose: Record a model build or an edited revision and its audit evidence.
+One row: One recorded run with its model, training manifest, package, parent, status, and artifact hashes.
+Use: model_kind distinguishes RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT. Publication and deployment are separate steps.
+*/
     model_run_id TEXT PRIMARY KEY,
     parent_model_run_id TEXT,
     model_id INTEGER NOT NULL,
@@ -144,6 +189,11 @@ ON MODEL_RUN(rate_package_id)
 WHERE rate_package_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_PACKAGE (
+/*
+Purpose: Store the header of an immutable version of a rating model.
+One row: One package revision with a base rate, status, validity dates, and optional parent package.
+Use: Local publication records LOCAL_AUDIT packages and workbook evidence. Editor publication and deployment require the SQL Server workflow.
+*/
     rate_package_id INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_rate_package_id INTEGER,
     model_id INTEGER NOT NULL,
@@ -177,6 +227,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_PACKAGE (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_MODEL_DEPLOYMENT (
+/*
+Purpose: Record which rating package serves each model and deployment slot over time.
+One row: One deployment interval for a model, slot, and package.
+Use: The row with effective_to_ts IS NULL is current. Closed rows retain deployment history; a package can be deployed more than once.
+*/
     deployment_id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_id INTEGER NOT NULL,
     rate_package_id INTEGER NOT NULL,
@@ -231,6 +286,11 @@ END;
 -- pricing.sqlite so its persistent monitoring views also work when that file
 -- is opened without the attached-schema coordinator.
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_VARIANT (
+/*
+Purpose: Define the four supported monitoring comparisons against a deployed model.
+One row: One preset describing whether coefficients, smoothing penalties, and data-driven knots may change.
+Use: These presets produce monitoring evidence, not deployable candidate packages.
+*/
     variant_code TEXT NOT NULL PRIMARY KEY,
     variant_label TEXT NOT NULL,
     refit_coefficients INTEGER NOT NULL CHECK (refit_coefficients IN (0, 1)),
@@ -275,6 +335,11 @@ BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_FIT_CONTRACT (
+/*
+Purpose: Record the model structure and fitted settings frozen for a monitoring baseline.
+One row: One contract for an exact published baseline model run.
+Use: Includes levels, groupings, knots, smoothing settings, and comparison grids. A later deployed model starts a new baseline contract.
+*/
     fit_contract_id TEXT NOT NULL PRIMARY KEY,
     baseline_model_run_id TEXT NOT NULL UNIQUE,
     model_id INTEGER NOT NULL,
@@ -302,6 +367,11 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_FIT_CONTRACT (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_RUN (
+/*
+Purpose: Record a controlled scoring or refitting observation against a deployed baseline.
+One row: One deployment, dataset snapshot, component, and monitoring variant.
+Use: Writers insert child evidence before sealing the observation in the same transaction. Sealed evidence is immutable. Historical rows are closed without certifying their contents.
+*/
     monitor_run_id TEXT NOT NULL PRIMARY KEY,
     fit_contract_id TEXT NOT NULL,
     baseline_deployment_id INTEGER NOT NULL,
@@ -338,6 +408,9 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_RUN (
     started_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT NOT NULL,
+    -- Writers open a run, insert its children, and seal it in one transaction.
+    -- Existing observations stay closed without certifying their historical evidence.
+    evidence_sealed INTEGER NOT NULL DEFAULT 1 CHECK (evidence_sealed IN (0, 1)),
     CHECK (completed_ts >= started_ts),
     CHECK (
         (
@@ -366,6 +439,11 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_RUN (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_TERM (
+/*
+Purpose: Record the model effects observed during a monitoring run.
+One row: One term within one monitoring observation, with its kind, order, and structural evidence.
+Use: Use with the baseline contract to interpret which structure was held fixed.
+*/
     monitor_run_id TEXT NOT NULL,
     term_name TEXT NOT NULL,
     term_kind TEXT NOT NULL,
@@ -383,6 +461,11 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_TERM (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_LAMBDA (
+/*
+Purpose: Record smoothing penalties used in a monitoring observation.
+One row: One smoothing component within a monitoring run.
+Use: lambda_mode states whether its value came from the baseline, remained fixed, or was estimated again.
+*/
     monitor_run_id TEXT NOT NULL,
     component_name TEXT NOT NULL,
     term_name TEXT,
@@ -393,6 +476,11 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_LAMBDA (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_RELATIVITY (
+/*
+Purpose: Record monitoring multipliers at comparable feature values.
+One row: One categorical level or numeric grid point for a term within a monitoring run.
+Use: The baseline defines the comparison points. These are diagnostic values, not a tariff available for deployment.
+*/
     monitor_run_id TEXT NOT NULL,
     term_name TEXT NOT NULL,
     term_kind TEXT NOT NULL,
@@ -411,6 +499,11 @@ CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_RELATIVITY (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_METRIC (
+/*
+Purpose: Store fit and score measurements for monitoring observations.
+One row: One named metric within one monitoring run.
+Use: Use the metric name to identify its weighting and interpretation. These measurements are separate from candidate validation results.
+*/
     monitor_run_id TEXT NOT NULL,
     metric_name TEXT NOT NULL,
     metric_value REAL NOT NULL,
@@ -449,6 +542,32 @@ CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_FIT_CONTRACT_IMMUTABLE_DELETE
 BEFORE DELETE ON MODEL_FIT_CONTRACT
 BEGIN
     SELECT RAISE(ABORT, 'model fit contracts are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_MONITORING_LINEAGE_UPDATE
+BEFORE UPDATE ON MODEL_RUN
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_FIT_CONTRACT
+    WHERE baseline_model_run_id = OLD.model_run_id
+)
+AND (
+    NEW.model_run_id IS NOT OLD.model_run_id
+    OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.rate_package_id IS NOT OLD.rate_package_id
+    OR NEW.run_status IS NOT OLD.run_status
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a baseline run referenced by a fit contract retains its lineage identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_MONITORING_LINEAGE_DELETE
+BEFORE DELETE ON MODEL_RUN
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_FIT_CONTRACT
+    WHERE baseline_model_run_id = OLD.model_run_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a baseline run referenced by a fit contract retains its lineage identity');
 END;
 
 CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_RUN_LINEAGE_INSERT
@@ -563,8 +682,29 @@ BEGIN
     );
 END;
 
-CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE
+DROP TRIGGER IF EXISTS pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE;
+CREATE TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE
 BEFORE UPDATE ON MODEL_MONITOR_RUN
+WHEN OLD.evidence_sealed != 0 OR NEW.evidence_sealed != 1
+    OR NEW.monitor_run_id IS NOT OLD.monitor_run_id
+    OR NEW.fit_contract_id IS NOT OLD.fit_contract_id
+    OR NEW.baseline_deployment_id IS NOT OLD.baseline_deployment_id
+    OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.rate_package_id IS NOT OLD.rate_package_id
+    OR NEW.manifest_id IS NOT OLD.manifest_id
+    OR NEW.component_role IS NOT OLD.component_role
+    OR NEW.variant_code IS NOT OLD.variant_code
+    OR NEW.run_signature_sha256 IS NOT OLD.run_signature_sha256
+    OR NEW.run_status IS NOT OLD.run_status
+    OR NEW.invariant_status IS NOT OLD.invariant_status
+    OR NEW.invariant_evidence_sha256 IS NOT OLD.invariant_evidence_sha256
+    OR NEW.invariant_evidence_json IS NOT OLD.invariant_evidence_json
+    OR NEW.model_frame_sha256 IS NOT OLD.model_frame_sha256
+    OR NEW.fit_configuration_json IS NOT OLD.fit_configuration_json
+    OR NEW.result_evidence_sha256 IS NOT OLD.result_evidence_sha256
+    OR NEW.started_ts IS NOT OLD.started_ts
+    OR NEW.completed_ts IS NOT OLD.completed_ts
+    OR NEW.created_by IS NOT OLD.created_by
 BEGIN
     SELECT RAISE(ABORT, 'monitoring evidence is immutable');
 END;
@@ -573,6 +713,46 @@ CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_DELETE
 BEFORE DELETE ON MODEL_MONITOR_RUN
 BEGIN
     SELECT RAISE(ABORT, 'monitoring evidence is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_TERM_INSERT_GUARD
+BEFORE INSERT ON MODEL_MONITOR_TERM
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN
+    WHERE monitor_run_id = NEW.monitor_run_id AND evidence_sealed = 0
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring evidence is sealed or its parent is missing');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_LAMBDA_INSERT_GUARD
+BEFORE INSERT ON MODEL_MONITOR_LAMBDA
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN
+    WHERE monitor_run_id = NEW.monitor_run_id AND evidence_sealed = 0
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring evidence is sealed or its parent is missing');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_RELATIVITY_INSERT_GUARD
+BEFORE INSERT ON MODEL_MONITOR_RELATIVITY
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN
+    WHERE monitor_run_id = NEW.monitor_run_id AND evidence_sealed = 0
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring evidence is sealed or its parent is missing');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_METRIC_INSERT_GUARD
+BEFORE INSERT ON MODEL_MONITOR_METRIC
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN
+    WHERE monitor_run_id = NEW.monitor_run_id AND evidence_sealed = 0
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring evidence is sealed or its parent is missing');
 END;
 
 CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_TERM_IMMUTABLE_UPDATE
@@ -624,6 +804,11 @@ BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE (
+/*
+Purpose: Name an input used by a rating model, such as driver age or region.
+One row: One reusable feature name and value type.
+Use: A feature is an input variable. MODEL terms describe its main effect or its interaction with other inputs.
+*/
     feature_id INTEGER PRIMARY KEY AUTOINCREMENT,
     feature_name TEXT NOT NULL UNIQUE,
     feature_value_type TEXT NOT NULL,
@@ -632,6 +817,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE_LEVEL_SET (
+/*
+Purpose: Version the categories or numeric bands available for one rating feature.
+One row: One named level set for a feature and model.
+Use: Packages refer to a specific set so later changes do not redefine older rating values.
+*/
     level_set_id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_id INTEGER,
     feature_id INTEGER NOT NULL,
@@ -644,6 +834,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE_LEVEL_SET (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE_LEVEL (
+/*
+Purpose: Define a category or numeric band within a feature level set.
+One row: One level code, label, ordering position, and optional numeric bounds.
+Use: For example, a region category or an age band. Missing and other levels are explicit when exported.
+*/
     feature_level_id INTEGER PRIMARY KEY AUTOINCREMENT,
     level_set_id INTEGER NOT NULL,
     level_code TEXT NOT NULL,
@@ -658,6 +853,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_FEATURE_LEVEL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_TERM (
+/*
+Purpose: Describe one effect in a rating model.
+One row: One main effect, interaction, or exported offset term within a package.
+Use: For example, driver age or driver age by region. sequence_no controls display and scoring order.
+*/
     term_id INTEGER PRIMARY KEY AUTOINCREMENT,
     rate_package_id INTEGER NOT NULL,
     term_name TEXT NOT NULL,
@@ -671,6 +871,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_TERM (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_TERM_FEATURE (
+/*
+Purpose: List the input features used by a model effect.
+One row: One feature and level-set reference at one position within a term.
+Use: An interaction has more than one input. Position determines the order used to build its lookup key.
+*/
     term_id INTEGER NOT NULL,
     position_no INTEGER NOT NULL,
     feature_id INTEGER NOT NULL,
@@ -680,6 +885,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_TERM_FEATURE (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_CELL (
+/*
+Purpose: Store one rating multiplier for a category, band, or combination of levels.
+One row: One lookup entry within a package term, with a multiplier, log coefficient, and supporting weight.
+Use: A rate cell is a rating value, not a policy record. A multiplier of 1.12 raises the base rate by 12 percent for that effect. Its levels are in PRICING_RATE_CELL_LEVEL.
+*/
     cell_id INTEGER PRIMARY KEY AUTOINCREMENT,
     term_id INTEGER NOT NULL,
     cell_key_text TEXT NOT NULL,
@@ -695,6 +905,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_CELL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_CELL_LEVEL (
+/*
+Purpose: Identify the feature levels to which a rating multiplier applies.
+One row: One feature level at one position in a rating-cell lookup key.
+Use: A main-effect cell usually has one level. An interaction cell has one level for each participating feature.
+*/
     cell_id INTEGER NOT NULL,
     position_no INTEGER NOT NULL,
     feature_level_id INTEGER NOT NULL,
@@ -702,6 +917,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_RATE_CELL_LEVEL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_COMPILED_RATE_CELL (
+/*
+Purpose: Store package rating values in the lookup form used by SQL scoring.
+One row: One compiled lookup key and multiplier for a package term.
+Use: Derived from normalized rating tables during publication. This avoids rebuilding the joins on every score.
+*/
     rate_package_id INTEGER NOT NULL,
     term_id INTEGER NOT NULL,
     cell_key_digest TEXT NOT NULL,
@@ -719,6 +939,11 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_COMPILED_RATE_CELL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing.PRICING_COMPILED_1D_RATE_BAND (
+/*
+Purpose: Store numeric rating bands in the form used by SQL scoring.
+One row: One ordered band within a one-dimensional package term, including bounds and its multiplier.
+Use: Derived scoring data. Use V_FINAL_MODEL_RELATIVITY to inspect numeric bands together with categorical and interaction values.
+*/
     rate_package_id INTEGER NOT NULL,
     term_id INTEGER NOT NULL,
     feature_level_id INTEGER NOT NULL,
@@ -732,4 +957,34 @@ CREATE TABLE IF NOT EXISTS pricing.PRICING_COMPILED_1D_RATE_BAND (
     multiplier REAL NOT NULL,
     log_coefficient REAL NOT NULL,
     PRIMARY KEY (rate_package_id, term_id, sort_order, feature_level_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS pricing.UX_PRICING_TERM_PACKAGE_TERM
+ON PRICING_TERM(rate_package_id, term_id);
+
+CREATE TABLE IF NOT EXISTS pricing.PRICING_SPLINE_SEGMENT (
+/*
+Purpose: Preserve exact one-dimensional polynomial spline effects on the log scale.
+One row: One ordered segment in one package term, with double precision bounds and coefficients.
+Use: Evaluate u=(x-lower_bound)/(upper_bound-lower_bound), then a+u*(b+u*(c+u*d)).
+NULL bounds describe constant tails. These rows are not constant interval relativities.
+*/
+    rate_package_id INTEGER NOT NULL,
+    term_id INTEGER NOT NULL,
+    segment_order INTEGER NOT NULL,
+    feature_name TEXT NOT NULL,
+    level_label TEXT,
+    lower_bound REAL,
+    upper_bound REAL,
+    upper_inclusive INTEGER NOT NULL CHECK (upper_inclusive IN (0, 1)),
+    a REAL NOT NULL,
+    b REAL NOT NULL,
+    c REAL NOT NULL,
+    d REAL NOT NULL,
+    exposure_weight REAL,
+    PRIMARY KEY (rate_package_id, term_id, segment_order),
+    FOREIGN KEY (rate_package_id, term_id) REFERENCES PRICING_TERM(rate_package_id, term_id),
+    CHECK (lower_bound IS NULL OR upper_bound IS NULL OR lower_bound < upper_bound),
+    CHECK ((lower_bound IS NOT NULL AND upper_bound IS NOT NULL) OR (b = 0 AND c = 0 AND d = 0)),
+    CHECK (lower_bound IS NOT NULL OR upper_bound IS NOT NULL)
 );

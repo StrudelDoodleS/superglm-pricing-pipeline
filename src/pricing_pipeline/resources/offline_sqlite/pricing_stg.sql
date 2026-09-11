@@ -1,4 +1,9 @@
 CREATE TABLE IF NOT EXISTS pricing_stg.STG_RATING_EXPORT (
+/*
+Purpose: Receive the header and receipt for a workbook publication attempt.
+One row: One export identifier with model metadata, hashes, and base rate.
+Use: Successful publication removes the staged child rows but retains this header as a retry receipt. Its presence alone does not mean a package was published.
+*/
     export_id TEXT NOT NULL PRIMARY KEY,
     model_id TEXT,
     model_name TEXT NOT NULL,
@@ -22,6 +27,11 @@ CREATE TABLE IF NOT EXISTS pricing_stg.STG_RATING_EXPORT (
 );
 
 CREATE TABLE IF NOT EXISTS pricing_stg.STG_RATE_CELL (
+/*
+Purpose: Temporarily hold rating multipliers read from an export workbook.
+One row: One workbook rating entry within an export attempt.
+Use: Publication validates and copies these rows into a package, then removes them on success.
+*/
     export_id TEXT NOT NULL,
     row_id INTEGER NOT NULL,
     term_name TEXT NOT NULL,
@@ -34,10 +44,22 @@ CREATE TABLE IF NOT EXISTS pricing_stg.STG_RATE_CELL (
     record_count INTEGER,
     is_reference INTEGER NOT NULL DEFAULT 0,
     is_default INTEGER NOT NULL DEFAULT 0,
+    spline_a REAL,
+    spline_b REAL,
+    spline_c REAL,
+    spline_d REAL,
+    spline_lower REAL,
+    spline_upper REAL,
+    spline_upper_inclusive INTEGER,
     PRIMARY KEY (export_id, row_id)
 );
 
 CREATE TABLE IF NOT EXISTS pricing_stg.STG_CELL_LEVEL (
+/*
+Purpose: Temporarily hold the feature levels that identify each staged rating entry.
+One row: One level at one feature position within a staged workbook entry.
+Use: Publication uses these rows to build category, band, and interaction lookup keys. Successful publication removes them.
+*/
     export_id TEXT NOT NULL,
     row_id INTEGER NOT NULL,
     position_no INTEGER NOT NULL,
@@ -57,6 +79,11 @@ CREATE TABLE IF NOT EXISTS pricing_stg.STG_CELL_LEVEL (
 );
 
 CREATE TABLE IF NOT EXISTS pricing_stg.STG_TERM_METADATA (
+/*
+Purpose: Temporarily hold model-effect metadata from an export workbook.
+One row: One metadata JSON document for a term within an export attempt.
+Use: Publication uses this evidence to preserve effect types and exported model behavior. Successful publication removes it.
+*/
     export_id TEXT NOT NULL,
     term_name TEXT NOT NULL,
     term_metadata_json TEXT NOT NULL,

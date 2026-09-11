@@ -966,6 +966,42 @@ def _insert_local_rating_tables(
             rows,
         )
 
+        if str(term_type) == "SPLINE_PPOLY_1D":
+            levels = tables.cell_levels.loc[tables.cell_levels["position_no"] == 1].set_index(
+                "row_id"
+            )
+            segments = []
+            for cell in cells.to_dict("records"):
+                level = levels.loc[cell["row_id"]]
+                segments.append(
+                    {
+                        "rate_package_id": rate_package_id,
+                        "term_id": term_id,
+                        "segment_order": int(level["order_index"]),
+                        "feature_name": str(level["feature_name"]),
+                        "level_label": _sql_value(level.get("level_label")),
+                        "lower_bound": _sql_value(cell["spline_lower"]),
+                        "upper_bound": _sql_value(cell["spline_upper"]),
+                        "upper_inclusive": int(cell["spline_upper_inclusive"]),
+                        **{name: float(cell[f"spline_{name}"]) for name in ("a", "b", "c", "d")},
+                        "exposure_weight": _sql_value(cell.get("exposure_weight")),
+                    }
+                )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO pricing.PRICING_SPLINE_SEGMENT (
+                        rate_package_id, term_id, segment_order, feature_name, level_label,
+                        lower_bound, upper_bound, upper_inclusive, a, b, c, d, exposure_weight
+                    ) VALUES (
+                        :rate_package_id, :term_id, :segment_order, :feature_name, :level_label,
+                        :lower_bound, :upper_bound, :upper_inclusive, :a, :b, :c, :d, :exposure_weight
+                    )
+                    """
+                ),
+                segments,
+            )
+
 
 def _insert_local_lineage(
     connection: Connection,

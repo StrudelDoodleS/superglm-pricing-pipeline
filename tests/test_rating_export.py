@@ -86,6 +86,7 @@ def test_export_rating_tables_forwards_weights_and_offset(tmp_path: Path):
     np.testing.assert_array_equal(kwargs.pop("offset"), offset)
     pd.testing.assert_series_equal(kwargs.pop("offset_source"), offset_source)
     assert kwargs == {
+        "continuous_kind": "ppform",
         "n_bins": 150,
         "offset_name": "TermMonths",
         "offset_kind": "discrete",
