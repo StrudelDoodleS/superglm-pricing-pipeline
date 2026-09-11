@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pricing_pipeline
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
-from pricing_pipeline.resources import migration_root, offline_sqlite_root
+from pricing_pipeline.resources import migration_root, offline_sqlite_root, scaffold_root
 
 
 def _is_outside_checkout(entry: str, checkout: Path) -> bool:
@@ -26,7 +26,7 @@ assert (
     == importlib.metadata.version("superglm-pricing-pipeline")
     == "0.2.1"
 )
-assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 38
+assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 46
 assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if item.is_file())) == (
     "mlops.sql",
     "pricing.sql",
@@ -56,6 +56,9 @@ init_result = subprocess.run(
 )
 assert init_result.returncode == 0, init_result.stderr
 assert str((consumer / "pricing_scaffold.toml").resolve()) in init_result.stdout
+assert (consumer / ".github/agents/pricing-builder.agent.md").read_bytes() == (
+    scaffold_root().joinpath("pricing-builder.agent.md").read_bytes()
+)
 scaffold_result = subprocess.run(
     [
         sys.executable,

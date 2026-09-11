@@ -275,8 +275,8 @@ def test_connect_rejects_unknown_explicit_mode():
             ),
         ),
         (
-            "build_candidate",
-            lambda api, context, root: api.build_candidate(
+            "fit_model",
+            lambda api, context, root: api.fit_model(
                 context,
                 model=object(),
                 frame=object(),
@@ -284,8 +284,8 @@ def test_connect_rejects_unknown_explicit_mode():
             ),
         ),
         (
-            "publish_candidate",
-            lambda api, context, root: api.publish_candidate(context, object()),
+            "save_model_version",
+            lambda api, context, root: api.save_model_version(context, object()),
         ),
         (
             "publish_edits",
@@ -297,8 +297,8 @@ def test_connect_rejects_unknown_explicit_mode():
             ),
         ),
         (
-            "deploy_package",
-            lambda api, context, root: api.deploy_package(
+            "deploy_model_version",
+            lambda api, context, root: api.deploy_model_version(
                 context,
                 package=object(),
                 reason="blocked",
@@ -616,11 +616,11 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         completed_build=completed_build,
     )
 
-    first = api.publish_candidate(
+    first = api.save_model_version(
         context,
         candidate,
     )
-    second = api.publish_candidate(
+    second = api.save_model_version(
         context,
         candidate,
     )
@@ -643,7 +643,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
 
     workbook.write_bytes(b"mutated local workbook")
     with pytest.raises(CompletedModelBuildError, match="rating workbook SHA-256"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             candidate,
         )
@@ -651,7 +651,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
 
     staging_digest["value"] = "e" * 64
     with pytest.raises(ValueError, match="staging_content_sha256"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             candidate,
         )
@@ -668,7 +668,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         completed_build=changed_run_evidence,
     )
     with pytest.raises(ValueError, match="incompatible model-run evidence"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             changed_run_candidate,
         )
@@ -684,11 +684,11 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         completed_build=conflicting_build,
     )
     with pytest.raises(ValueError, match="incompatible publication evidence"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             conflicting_candidate,
         )
-    recovered = api.publish_candidate(
+    recovered = api.save_model_version(
         context,
         candidate,
     )
@@ -751,7 +751,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         ),
     )
     with pytest.raises(ValueError, match="incompatible prepared evidence"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             mismatch_candidate,
         )
@@ -767,7 +767,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         ),
     )
     with pytest.raises(ValueError, match="has no reserved model version"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             unreserved_candidate,
         )
@@ -775,7 +775,7 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
     with context.engine.begin() as connection:
         connection.execute(text("DELETE FROM mlops.MODEL_RUN_DATASET"))
     with pytest.raises(RuntimeError, match="incomplete local publication lineage"):
-        api.publish_candidate(
+        api.save_model_version(
             context,
             candidate,
         )
@@ -857,7 +857,7 @@ def test_local_publication_verifies_candidate_artifact_before_staging(
         CompletedModelBuildError,
         match="candidate artifact verification failed",
     ):
-        api.publish_candidate(context, candidate)
+        api.save_model_version(context, candidate)
 
 
 def test_local_context_refuses_real_deployment(tmp_path):
@@ -866,7 +866,7 @@ def test_local_context_refuses_real_deployment(tmp_path):
     context = api.connect(mode="local", local_root=tmp_path / ".local")
 
     with pytest.raises(RuntimeError, match="Remote mode is required for deployment"):
-        api.deploy_package(
+        api.deploy_model_version(
             context,
             package=object(),
             reason="blocked locally",
@@ -879,7 +879,7 @@ def test_local_context_explains_that_editor_publication_requires_remote(tmp_path
     context = api.connect(mode="local", local_root=tmp_path / ".local")
 
     with pytest.raises(RuntimeError, match="Remote mode is required for the editor"):
-        api.open_candidate(
+        api.load_model_version(
             context,
             model=object(),
             package_version=1,

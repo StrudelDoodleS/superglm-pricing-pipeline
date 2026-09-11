@@ -4,11 +4,11 @@ from pricing_pipeline.tools.db_diagrams import (
     ForeignKeyInfo,
     SchemaMetadata,
     TableInfo,
+    _display_columns,
     build_mermaid_er,
     build_overview_sections,
     prepare_display_metadata,
     render_html,
-    _display_columns,
 )
 
 
@@ -658,7 +658,7 @@ def test_overview_sections_use_domain_order_not_alphabetical_dump():
     assert isinstance(core, DiagramSection)
     assert core.table_groups[0] == ["PRICING_MODEL"]
     assert core.table_groups[1] == ["PRICING_RATE_PACKAGE"]
-    assert core.table_groups[2] == ["PRICING_MODEL_DEPLOYMENT", "PRICING_PACKAGE_POINTER"]
+    assert core.table_groups[2] == ["PRICING_MODEL_DEPLOYMENT"]
     assert "MODEL_RUN" in lineage.table_names
 
 
@@ -671,7 +671,7 @@ def test_core_lifecycle_suppresses_redundant_model_edges_to_keep_layout_readable
     assert "<title>FK_MODEL_DEPLOYMENT_MODEL</title>" not in core_html
     assert "<title>FK_PACKAGE_POINTER_MODEL</title>" not in core_html
     assert "<title>FK_MODEL_DEPLOYMENT_PACKAGE</title>" in core_html
-    assert "<title>FK_PACKAGE_POINTER_PACKAGE</title>" in core_html
+    assert "<title>FK_PACKAGE_POINTER_PACKAGE</title>" not in core_html
 
 
 def test_rating_structure_section_uses_readable_two_lane_layout():
@@ -728,7 +728,6 @@ def test_full_persisted_data_model_contains_visible_tables_once():
         "CV_FOLD",
         "PRICING_RATE_PACKAGE",
         "PRICING_MODEL_DEPLOYMENT",
-        "PRICING_PACKAGE_POINTER",
         "PRICING_TERM",
         "PRICING_RATE_CELL",
         "PRICING_TERM_FEATURE",

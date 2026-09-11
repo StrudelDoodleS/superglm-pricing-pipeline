@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 
 from pricing_pipeline.cli import UserCommandError
-from pricing_pipeline.resources import scaffold_template
+from pricing_pipeline.resources import scaffold_root, scaffold_template
 from pricing_pipeline.scaffold import config, service
 
 _CONFIG_NAME = "pricing_scaffold.toml"
+_AGENT_NAME = "pricing-builder.agent.md"
 _SCAFFOLD_COMMAND = (
     "pricing-pipeline scaffold --model-name CLAIM_FREQUENCY --target-name claim_count"
 )
@@ -24,6 +25,7 @@ def _init_messages(config_path: Path) -> tuple[str, ...]:
         str(config_path),
         f"Edit {config_path}, then run:",
         _SCAFFOLD_COMMAND,
+        f"Or select Pricing builder in Copilot: {config_path.parent / '.github/agents' / _AGENT_NAME}",
     )
 
 
@@ -47,9 +49,7 @@ def _validate_existing_config(config_path: Path) -> tuple[str, ...]:
     return _init_messages(config_path)
 
 
-def run_init(namespace: argparse.Namespace) -> tuple[str, ...]:
-    root = _root(namespace.root)
-    _require_project_root(root)
+def _init_config(root: Path) -> tuple[str, ...]:
     config_path = root / _CONFIG_NAME
     if config_path.is_symlink() or config_path.exists():
         return _validate_existing_config(config_path)
@@ -75,6 +75,36 @@ def run_init(namespace: argparse.Namespace) -> tuple[str, ...]:
     except OSError as exc:
         raise UserCommandError(f"could not write scaffold config {config_path}: {exc}") from exc
     return _init_messages(config_path)
+
+
+def _validate_agent_path(root: Path) -> Path:
+    for directory in (root / ".github", root / ".github/agents"):
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+            raise UserCommandError(f"agent parent must be a non-symlink directory: {directory}")
+    path = root / ".github/agents" / _AGENT_NAME
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise UserCommandError(f"existing agent must be a regular non-symlink file: {path}")
+    return path
+
+
+def run_init(namespace: argparse.Namespace) -> tuple[str, ...]:
+    root = _root(namespace.root)
+    _require_project_root(root)
+    agent_path = _validate_agent_path(root)
+    messages = _init_config(root)
+    try:
+        agent_path.parent.mkdir(parents=True, exist_ok=True)
+        _validate_agent_path(root)
+        # Exclusive creation preserves an agent the analyst has already edited.
+        template = scaffold_root().joinpath(_AGENT_NAME).read_bytes()
+        try:
+            with agent_path.open("xb") as handle:
+                handle.write(template)
+        except FileExistsError:
+            _validate_agent_path(root)
+    except OSError as exc:
+        raise UserCommandError(f"could not create builder agent {agent_path}: {exc}") from exc
+    return messages
 
 
 def _load_installed_config(namespace: argparse.Namespace, root: Path) -> config.ScaffoldConfig:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import os
@@ -25,25 +24,6 @@ EXPECTED_NOTEBOOKS = (
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
 )
-
-V021_NOTEBOOK_DIGESTS = {
-    "local": {
-        "01_data_ingestion.ipynb": "6bbbe516361acca41e7790c32fbe7cfe0fde26db53612d481063adb3541a6a6a",
-        "02_model_exploration.ipynb": "d7c164dcb2d4bb61546ba8b67ae68541b95b60256b4d40b99b53193ab549579a",
-        "03_model_training.ipynb": "cde71cff84997de77336656ba17f7bcd61174c49aafdfad6604dc8b65527506c",
-        "04_model_editor.ipynb": "0a713df68f6827334b41554340c7ad6282254cada1136da77ed61ec98a5bbff1",
-        "05_manual_adjustment.ipynb": "ed030abf68e61daf70bba0483fd02c936a8fbda9ad3d0131c5ff6e8ec38885a9",
-        "06_model_deployment.ipynb": "bc4490a86f7e18851d782d79a8c6f7f3e74ee2b585a577babd81066ddf41ba50",
-    },
-    "remote": {
-        "01_data_ingestion.ipynb": "9347209858b4894b6414824b5d3fa0c7b36cfc1ebc6d0eabfcf9b4a8f66e963f",
-        "02_model_exploration.ipynb": "99aa5f64d138e52ad363ae48eee246e55a6485dd0beba78c401ce04e4e943c77",
-        "03_model_training.ipynb": "810ac83bcba5bae76138a3a20f26381447a509c59e1b2855372466cb071832ef",
-        "04_model_editor.ipynb": "9b337092cb7a1ae20cdb346bcaf7e8ca7714f21e538b348fc06634332a8c0960",
-        "05_manual_adjustment.ipynb": "943d703ceb5505c66744ac3124ea44f94b8f3a6185acb7d263e5e59f6e40b132",
-        "06_model_deployment.ipynb": "e36725cfe48fdac7f9da8d0277184e6c26eab84e5c024d3cb973ad4e873dcdda",
-    },
-}
 
 
 def _legacy_deployment_notebook(label: str) -> str:
@@ -139,7 +119,7 @@ def test_scaffold_has_one_cli_and_no_legacy_module():
         ),
     ),
 )
-def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
+def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings):
     try:
         from pricing_pipeline.scaffold.render import render_notebooks
     except ModuleNotFoundError:
@@ -154,10 +134,20 @@ def test_scaffold_notebooks_preserve_v021_byte_contract(case, settings):
         **settings,
     )
 
-    assert {
-        name: hashlib.sha256(source.encode("utf-8")).hexdigest()
-        for name, source in rendered.items()
-    } == V021_NOTEBOOK_DIGESTS[case]
+    for name, source in rendered.items():
+        notebook = json.loads(source)
+        choices = next(cell for cell in notebook["cells"] if cell["cell_type"] == "code")
+        namespace = {}
+        exec(  # noqa: S102 - execute the rendered notebook settings
+            compile("".join(choices["source"]), name, "exec"), namespace
+        )
+        assert namespace["DATABASE_MODE"] == settings["database_mode"]
+        assert namespace["RUNTIME_MODULE"] == settings["runtime_module"]
+        assert namespace["EXPECTED_REMOTE_DATABASE"] == settings["expected_remote_database"]
+        assert namespace["ALLOW_REMOTE_WRITES"] is False
+        if name == "05_manual_adjustment.ipynb":
+            assert namespace["SOURCE_SELECTOR"] == settings["manual_edit_source_selector"]
+            assert namespace["CARRY_FORWARD"] is settings["manual_edit_carry_forward"]
 
 
 def test_scaffold_renderer_preserves_token_shaped_user_values():
@@ -180,7 +170,7 @@ def test_scaffold_renderer_preserves_token_shaped_user_values():
     assert "__CUSTOM_LABEL__" in rendered["01_data_ingestion.ipynb"]
 
 
-def test_scaffold_renderer_preserves_v021_non_ascii_escaping():
+def test_scaffold_renderer_preserves_non_ascii_escaping():
     from pricing_pipeline.scaffold.render import render_notebooks
 
     rendered = render_notebooks(
@@ -258,13 +248,17 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     manual = _code(package_dir / "05_manual_adjustment.ipynb")
     deployment = _code(package_dir / "06_model_deployment.ipynb")
 
-    assert "save_model_frame(" in ingestion
+    assert "dataset.save(" in ingestion
     assert 'DATA_AS_OF = ""' in ingestion
     assert '"data_as_of": [DATA_AS_OF]' in ingestion
     assert "if not DATA_AS_OF.strip()" in ingestion
-    assert "build_candidate(" not in ingestion
-    assert "load_model_frame(" in training
-    assert 'data_as_of_column="data_as_of"' in training
+    assert "fit_model(" not in ingestion
+    assert "PricingDataset.load(" in training
+    assert 'as_of="data_as_of"' in ingestion
+    assert "dataset=dataset" in training
+    assert "features=tuple(RAW_FEATURES)" in training
+    assert "df = apply_transforms(df, transforms)" in training
+    assert "transforms=transforms" in training
     assert 'model_kind="RAW"' in training
     assert 'model_kind="ROUTINE_EDIT"' in training
     assert "RAW_FEATURES" in training
@@ -275,13 +269,13 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert "EditorSession" not in training
 
     assert "load_registered_model(" in editor
-    assert "list_candidate_versions(" in editor
+    assert "list_model_versions(" in editor
     assert "PACKAGE_VERSION = None" in editor
     assert "EditorSession.from_model(" in editor
     assert "editor_session.to_model()" in editor
     assert "publish_edits(" in editor
 
-    assert "list_candidate_versions(" in manual
+    assert "list_model_versions(" in manual
     assert "open_deployed_candidate(" in manual
     assert "ManualAdjustmentPolicy.from_rows(" in manual
     assert "apply_manual_adjustment_policy(" in manual
@@ -293,17 +287,17 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert "DEPLOY_AFTER_PUBLISH = False" in manual
     assert "POLICY_SOURCE_PACKAGE_VERSION = None" in manual
 
-    assert "list_candidate_versions(" in deployment
+    assert "list_model_versions(" in deployment
     assert 'eq("PUBLISHED")' in deployment
-    assert "open_candidate(" in deployment
-    assert "deploy_package(" in deployment
+    assert "load_model_version(" in deployment
+    assert "deploy_model_version(" in deployment
 
     assert "save_model_frame(" not in exploration
-    assert "build_candidate(" not in exploration
-    assert "publish_candidate(" not in exploration
-    assert "deploy_package(" not in exploration
-    assert "scratch_raw = pd.DataFrame(" in exploration
-    assert "scratch_frame = scratch_raw.copy()" in exploration
+    assert "fit_model(" not in exploration
+    assert "save_model_version(" not in exploration
+    assert "deploy_model_version(" not in exploration
+    assert "scratch_raw_df = pd.DataFrame(" in exploration
+    assert "scratch_df = scratch_raw_df.copy()" in exploration
     assert "SCRATCH_FEATURES = {" in exploration
     assert 'SCRATCH_FAMILY = "poisson"' in exploration
     assert "scratch_model = SuperGLM(" in exploration
@@ -320,9 +314,9 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert "reference_superglm=unconstrained_model" in exploration
     assert "boosted_blend.metrics" in exploration
     assert "EditorSession.from_model(" in exploration
-    assert "list_candidate_versions(" in exploration
+    assert "list_model_versions(" in exploration
     assert 'versions["Kind"].eq("RAW")' in exploration
-    assert "open_candidate(" in exploration
+    assert "load_model_version(" in exploration
     assert "export_level_groupings(" in exploration
     assert "Copy accepted choices into notebook 03." in exploration_text
     assert "Copy accepted choices into notebook 02." not in exploration_text
@@ -360,8 +354,8 @@ def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
         "display": lambda *_args, **_kwargs: None,
     }
     markers = (
-        "scratch_raw = pd.DataFrame(",
-        "scratch_frame = scratch_raw.copy()",
+        "scratch_raw_df = pd.DataFrame(",
+        "scratch_df = scratch_raw_df.copy()",
         "SCRATCH_TARGET =",
         "scratch_model = SuperGLM(",
         "scratch_predictions = scratch_model.predict(",
@@ -380,6 +374,95 @@ def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
     unconstrained_predictions = np.asarray(namespace["unconstrained_predictions"])
     assert len(unconstrained_predictions) == 500
     assert np.isfinite(unconstrained_predictions).all()
+
+
+@pytest.mark.parametrize("use_transform", [False, True], ids=["source-features", "clip-recipe"])
+def test_scaffold_ingestion_and_training_publish_with_dataset_provenance(
+    tmp_path, monkeypatch, use_transform
+):
+    import numpy as np
+    from sqlalchemy import text
+
+    from pricing_pipeline.workbench.artifacts import load_candidate_bundle
+
+    package_dir = _scaffold(tmp_path)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'generated-test'\n")
+    monkeypatch.chdir(package_dir)
+
+    namespaces = []
+    for name in ("01_data_ingestion.ipynb", "03_model_training.ipynb"):
+        namespace = {"display": lambda *_args, **_kwargs: None}
+        for index, cell in enumerate(_notebook(package_dir / name)["cells"]):
+            if cell["cell_type"] != "code":
+                continue
+            source = "".join(cell["source"])
+            if use_transform and name == "03_model_training.ipynb":
+                source = source.replace(
+                    '# "clipped_feature": Clip("feature_1", lower=0, upper=100),',
+                    '"clipped_feature": Clip("feature_1", lower=0, upper=100),',
+                ).replace('"feature_1": Numeric(),', '"clipped_feature": Numeric(),')
+            exec(  # noqa: S102 - execute generated cells with the analyst's configuration
+                compile(source, f"{name}:cell-{index}", "exec"), namespace
+            )
+            if use_transform and "MODEL = PricingModelSpec(" in source:
+                exec(  # noqa: S102 - analysts rerun this cell when editing model choices
+                    compile(source, f"{name}:cell-{index}:rerun", "exec"), namespace
+                )
+            if "DATA_AS_OF" in namespace and not namespace["DATA_AS_OF"]:
+                namespace["DATA_AS_OF"] = "2026-09-01"
+        namespaces.append(namespace)
+
+    ingested, trained = namespaces
+    assert (package_dir / ".local" / "dataset.joblib").is_file()
+    assert ingested["dataset"].source == "replace_with_source_name"
+    assert trained["dataset"].name == ingested["dataset"].name
+    assert trained["MODEL"].dataset is trained["dataset"]
+    expected_feature = "clipped_feature" if use_transform else "feature_1"
+    assert trained["MODEL"].features == (expected_feature, "segment")
+    assert trained["MODEL"].offset_column is None
+    if use_transform:
+        assert set(trained["MODEL"].transforms) == {"clipped_feature"}
+        np.testing.assert_allclose(
+            trained["df"]["clipped_feature"], ingested["df"]["feature_1"].clip(0, 100)
+        )
+        assert "clipped_feature" not in trained["dataset"].df
+    else:
+        assert trained["MODEL"].transforms == {}
+        assert trained["df"].equals(ingested["df"])
+    assert trained["raw_published"].package_status == "LOCAL_AUDIT"
+    assert trained["raw_published"].manifest_id
+    assert trained["raw_candidate"].metrics is not None
+    assert trained["routine_published"] is None
+    with trained["pricing"].engine.connect() as connection:
+        manifest = (
+            connection.execute(
+                text(
+                    "SELECT dataset_name, source_system, data_as_of_date, row_count, pk_columns_json "
+                    "FROM pricing.DATASET_MANIFEST WHERE manifest_id = :manifest_id"
+                ),
+                {"manifest_id": trained["raw_published"].manifest_id},
+            )
+            .mappings()
+            .one()
+        )
+    assert manifest["dataset_name"] == "my_model_model_frame"
+    assert manifest["source_system"] == "replace_with_source_name"
+    assert manifest["data_as_of_date"] == "2026-09-01"
+    assert manifest["row_count"] == 100
+    assert json.loads(manifest["pk_columns_json"]) == ["row_id"]
+    build = trained["raw_candidate"].completed_build
+    bundle = load_candidate_bundle(
+        build.candidate_artifact_path,
+        expected_sha256=build.candidate_artifact_sha256,
+        expected_size_bytes=build.candidate_artifact_size_bytes,
+        expected_format=build.candidate_artifact_format,
+        expected_python_version=build.candidate_python_version,
+        expected_superglm_version=build.candidate_superglm_version,
+        allowed_root=package_dir / ".local",
+    )
+    assert set(bundle.input_transforms or {}) == ({"clipped_feature"} if use_transform else set())
+    predictions = bundle.fitted_model.predict(trained["df"].loc[:, [expected_feature, "segment"]])
+    assert np.isfinite(predictions).all()
 
 
 def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
@@ -413,7 +496,7 @@ def test_scaffold_keeps_manual_preview_publish_and_deploy_separate(tmp_path):
 
     assert preview_index < publish_index < deploy_index
     assert "publish_manual_adjustment(" not in cells[preview_index]
-    assert "deploy_package(" not in cells[publish_index]
+    assert "deploy_model_version(" not in cells[publish_index]
 
 
 def test_scaffold_renders_user_text_without_breaking_json_or_python(tmp_path):

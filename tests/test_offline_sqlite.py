@@ -1,4 +1,3 @@
-
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -803,9 +802,12 @@ def test_offline_upgrade_extends_existing_model_kind_check_for_manual_edits(tmp_
             "mlops": tmp_path / "mlops.sqlite",
         }
     )
-    legacy_pricing_sql = offline_sqlite_root().joinpath("pricing.sql").read_text(
-        encoding="utf-8"
-    ).replace(", 'MANUAL_EDIT'", "")
+    legacy_pricing_sql = (
+        offline_sqlite_root()
+        .joinpath("pricing.sql")
+        .read_text(encoding="utf-8")
+        .replace(", 'MANUAL_EDIT'", "")
+    )
     raw_connection = engine.raw_connection()
     try:
         raw_connection.executescript(legacy_pricing_sql)
@@ -870,14 +872,14 @@ def test_offline_upgrade_extends_existing_model_kind_check_for_manual_edits(tmp_
                 variant_code, run_signature_sha256, run_status,
                 invariant_status, invariant_evidence_sha256,
                 invariant_evidence_json, model_frame_sha256,
-                fit_configuration_json, result_evidence_sha256, created_by
+                fit_configuration_json, result_evidence_sha256, created_by, evidence_sealed
             ) VALUES (
                 'monitor-1', 'contract-1', 701, 17, 71, 'manifest-1',
                 'FREQUENCY', 'STATIC_SCORE',
                 replace(printf('%064x', 0), '0', 'f'), 'SUCCESS', 'VERIFIED',
                 replace(printf('%064x', 0), '0', '1'), '{"status":"VERIFIED"}',
                 replace(printf('%064x', 0), '0', 'b'), '{}',
-                replace(printf('%064x', 0), '0', '2'), 'pytest'
+                replace(printf('%064x', 0), '0', '2'), 'pytest', 0
             );
 
             INSERT INTO pricing.MODEL_MONITOR_TERM (
@@ -887,6 +889,8 @@ def test_offline_upgrade_extends_existing_model_kind_check_for_manual_edits(tmp_
                 'monitor-1', 'area', 'categorical', 1,
                 replace(printf('%064x', 0), '0', '3'), '{}'
             );
+            UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1
+            WHERE monitor_run_id = 'monitor-1';
             """
         )
         raw_connection.commit()
@@ -959,6 +963,21 @@ def test_offline_upgrade_extends_existing_model_kind_check_for_manual_edits(tmp_
 
     assert "MANUAL_EDIT" in stored_sql
 
+    for assignment in ("run_status = 'FAILED'", "rate_package_id = 72"):
+        with (
+            pytest.raises(IntegrityError, match="baseline run.*lineage identity"),
+            engine.begin() as connection,
+        ):
+            connection.execute(
+                text(f"UPDATE pricing.MODEL_RUN SET {assignment} WHERE model_run_id = 'legacy-run'")
+            )
+
+    with (
+        pytest.raises(IntegrityError, match="baseline run.*lineage identity"),
+        engine.begin() as connection,
+    ):
+        connection.execute(text("DELETE FROM pricing.MODEL_RUN WHERE model_run_id = 'legacy-run'"))
+
 
 def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_path):
     engine = sqlite_engine_with_offline_schemas(
@@ -968,9 +987,12 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
             "mlops": tmp_path / "mlops.sqlite",
         }
     )
-    legacy_pricing_sql = offline_sqlite_root().joinpath("pricing.sql").read_text(
-        encoding="utf-8"
-    ).replace(", 'MANUAL_EDIT'", "")
+    legacy_pricing_sql = (
+        offline_sqlite_root()
+        .joinpath("pricing.sql")
+        .read_text(encoding="utf-8")
+        .replace(", 'MANUAL_EDIT'", "")
+    )
     raw_connection = engine.raw_connection()
     try:
         raw_connection.executescript(legacy_pricing_sql)
@@ -1033,14 +1055,14 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
                 variant_code, run_signature_sha256, run_status,
                 invariant_status, invariant_evidence_sha256,
                 invariant_evidence_json, model_frame_sha256,
-                fit_configuration_json, result_evidence_sha256, created_by
+                fit_configuration_json, result_evidence_sha256, created_by, evidence_sealed
             ) VALUES (
                 'monitor-1', 'contract-1', 701, 17, 71, 'manifest-1',
                 'FREQUENCY', 'STATIC_SCORE',
                 replace(printf('%064x', 0), '0', 'f'), 'SUCCESS', 'VERIFIED',
                 replace(printf('%064x', 0), '0', '1'), '{"status":"VERIFIED"}',
                 replace(printf('%064x', 0), '0', 'b'), '{}',
-                replace(printf('%064x', 0), '0', '2'), 'pytest'
+                replace(printf('%064x', 0), '0', '2'), 'pytest', 0
             );
 
             INSERT INTO pricing.MODEL_MONITOR_TERM (
@@ -1050,6 +1072,8 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
                 'monitor-1', 'area', 'categorical', 1,
                 replace(printf('%064x', 0), '0', '3'), '{}'
             );
+            UPDATE pricing.MODEL_MONITOR_RUN SET evidence_sealed = 1
+            WHERE monitor_run_id = 'monitor-1';
             """
         )
         legacy_model_run_sql = raw_connection.execute(
@@ -1061,6 +1085,8 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
         ).fetchone()[0]
         raw_connection.commit()
         raw_connection.execute("PRAGMA foreign_keys=OFF")
+        # This corruption predates the reverse lineage guard.
+        raw_connection.execute("DROP TRIGGER pricing.TR_MODEL_RUN_MONITORING_LINEAGE_DELETE")
         raw_connection.execute("DELETE FROM pricing.MODEL_RUN WHERE model_run_id = 'legacy-run'")
         raw_connection.commit()
         raw_connection.execute("PRAGMA foreign_keys=ON")
@@ -1079,7 +1105,7 @@ def test_offline_upgrade_rolls_back_legacy_orphan_before_model_run_rebuild(tmp_p
             """
         ).scalar_one()
         assert stored_sql == legacy_model_run_sql
-        assert "MANUAL_EDIT" not in stored_sql
+        assert "CHECK (model_kind IN ('RAW', 'ROUTINE_EDIT', 'EDITOR_EDIT'))" in stored_sql
         assert (
             connection.execute(
                 text("SELECT COUNT(*) FROM pricing.MODEL_RUN WHERE model_run_id = 'legacy-run'")

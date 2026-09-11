@@ -21,6 +21,19 @@ SCHEMA_DB_FILES = {
     "mlops": "mlops.sqlite",
 }
 _OFFLINE_COLUMN_UPGRADES = (
+    ("pricing_stg", "STG_RATE_CELL", "spline_a", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_b", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_c", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_d", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_lower", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_upper", "REAL"),
+    ("pricing_stg", "STG_RATE_CELL", "spline_upper_inclusive", "INTEGER"),
+    (
+        "pricing",
+        "MODEL_MONITOR_RUN",
+        "evidence_sealed",
+        "INTEGER NOT NULL DEFAULT 1 CHECK (evidence_sealed IN (0, 1))",
+    ),
     ("pricing", "DATASET_MANIFEST", "manifest_signature_sha256", "TEXT"),
     ("pricing", "DATASET_MANIFEST", "model_frame_sha256", "TEXT"),
     ("pricing", "DATASET_MANIFEST", "frame_hash_metadata_json", "TEXT"),
@@ -290,20 +303,40 @@ def _extend_offline_model_kind_check(connection) -> bool:
     if create_row is None or not create_row[0]:
         raise RuntimeError("cannot rebuild missing offline table pricing.MODEL_RUN")
     create_sql = str(create_row[0])
-    if "MANUAL_EDIT" in create_sql:
-        return False
-    extended_sql, replacements = re.subn(
-        r"'RAW'\s*,\s*'ROUTINE_EDIT'\s*,\s*'EDITOR_EDIT'",
-        "'RAW', 'ROUTINE_EDIT', 'EDITOR_EDIT', 'MANUAL_EDIT'",
+    # Keep offsets into the original SQL while ignoring comments. Quoted text
+    # is matched first so comment markers inside SQL values remain literal.
+    code_sql = re.sub(
+        r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|\[(?:[^\]]|\]\])*\]|--[^\n]*|/\*.*?\*/",
+        lambda match: " " * len(match[0]) if match[0].startswith(("--", "/*")) else match[0],
         create_sql,
-        count=1,
+        flags=re.DOTALL,
+    )
+    kind_check = re.search(
+        r"CHECK\s*\(\s*model_kind\s+IN\s*\(([^)]*)\)\s*\)",
+        code_sql,
         flags=re.IGNORECASE,
     )
-    if replacements != 1:
+    if kind_check is None:
         raise RuntimeError(
             "cannot extend offline MODEL_RUN.model_kind check: "
             "stored CREATE TABLE statement is not recognized"
         )
+    if re.search(r"'MANUAL_EDIT'", kind_check[1], flags=re.IGNORECASE):
+        return False
+    if not re.fullmatch(
+        r"\s*'RAW'\s*,\s*'ROUTINE_EDIT'\s*,\s*'EDITOR_EDIT'\s*",
+        kind_check[1],
+        flags=re.IGNORECASE,
+    ):
+        raise RuntimeError(
+            "cannot extend offline MODEL_RUN.model_kind check: "
+            "stored CREATE TABLE statement is not recognized"
+        )
+    extended_sql = (
+        create_sql[: kind_check.start(1)]
+        + "'RAW', 'ROUTINE_EDIT', 'EDITOR_EDIT', 'MANUAL_EDIT'"
+        + create_sql[kind_check.end(1) :]
+    )
     qualified_sql, replacements = re.subn(
         r"^CREATE\s+TABLE\s+MODEL_RUN\s*",
         "CREATE TABLE pricing.MODEL_RUN ",
@@ -369,20 +402,20 @@ def apply_offline_ddl(engine: Engine) -> None:
     ddl_root = offline_sqlite_root()
     connection = engine.raw_connection()
     try:
-        for schema in SCHEMA_DB_FILES:
-            connection.executescript(
-                ddl_root.joinpath(f"{schema}.sql").read_text(encoding="utf-8")
-            )
-        _assert_canonical_monitoring_variant_policy(connection)
+        # Existing tables need new columns before replacement guards reference them.
         for schema, table, column, column_type in _OFFLINE_COLUMN_UPGRADES:
             existing_columns = {
                 str(row[1])
                 for row in connection.execute(f"PRAGMA {schema}.table_info('{table}')").fetchall()
             }
-            if column not in existing_columns:
+            if existing_columns and column not in existing_columns:
                 connection.execute(
                     f"ALTER TABLE {schema}.{table} ADD COLUMN {column} {column_type}"
                 )
+        connection.commit()
+        for schema in SCHEMA_DB_FILES:
+            connection.executescript(ddl_root.joinpath(f"{schema}.sql").read_text(encoding="utf-8"))
+        _assert_canonical_monitoring_variant_policy(connection)
         connection.execute(
             """
             UPDATE pricing.MODEL_RUN AS child_run
@@ -427,6 +460,14 @@ def apply_offline_ddl(engine: Engine) -> None:
             raise RuntimeError("cannot disable foreign-key checks for offline table rebuild")
         try:
             connection.execute("BEGIN IMMEDIATE")
+            # Rebuilding a table drops its attached triggers. Save the original
+            # definitions before any temporary rename rewrites their target.
+            original_triggers = {
+                schema: connection.execute(
+                    f"SELECT name, sql FROM {schema}.sqlite_master WHERE type = 'trigger'"
+                ).fetchall()
+                for schema in SCHEMA_DB_FILES
+            }
             rebuilt_table = _extend_offline_model_kind_check(connection)
             for schema, table, column in _OFFLINE_NULLABILITY_UPGRADES:
                 rebuilt_table = (
@@ -439,6 +480,24 @@ def apply_offline_ddl(engine: Engine) -> None:
                     or rebuilt_table
                 )
             if rebuilt_table:
+                for schema, triggers in original_triggers.items():
+                    remaining_triggers = {
+                        row[0]
+                        for row in connection.execute(
+                            f"SELECT name FROM {schema}.sqlite_master WHERE type = 'trigger'"
+                        ).fetchall()
+                    }
+                    for name, trigger_sql in triggers:
+                        if name not in remaining_triggers:
+                            # sqlite_master omits the attached schema qualifier.
+                            qualified_trigger_sql = re.sub(
+                                r"^CREATE\s+TRIGGER\s+",
+                                f"CREATE TRIGGER {schema}.",
+                                trigger_sql,
+                                count=1,
+                                flags=re.IGNORECASE,
+                            )
+                            connection.execute(qualified_trigger_sql)
                 connection.execute(
                     """
                     CREATE UNIQUE INDEX IF NOT EXISTS pricing.UX_MODEL_RUN_RATE_PACKAGE
@@ -604,9 +663,7 @@ def apply_offline_ddl(engine: Engine) -> None:
             END;
             """
         )
-        connection.executescript(
-            ddl_root.joinpath("pricing_views.sql").read_text(encoding="utf-8")
-        )
+        connection.executescript(ddl_root.joinpath("pricing_views.sql").read_text(encoding="utf-8"))
         connection.commit()
     finally:
         connection.close()

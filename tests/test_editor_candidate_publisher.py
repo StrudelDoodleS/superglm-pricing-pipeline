@@ -2115,11 +2115,13 @@ def test_v2_submission_rejects_unusable_final_model(
         editor._load_edited_model(parent, submission, allowed_root=tmp_path)
 
 
-def test_collapsed_editor_model_publishes(tmp_path):
+@pytest.mark.parametrize("continuous_kind", ["binned", "ppform"])
+@pytest.mark.parametrize("retain_fit_state", [True, False])
+def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_state):
     import joblib
     import numpy as np
     import pandas as pd
-    from superglm import Categorical, Numeric, SuperGLM
+    from superglm import Categorical, Spline, SuperGLM
     from superglm.editor import EditorSession
 
     from pricing_pipeline.publishing import editor, rating_tables
@@ -2132,8 +2134,9 @@ def test_collapsed_editor_model_publishes(tmp_path):
     y = np.random.default_rng(20260722).poisson(mean * np.exp(0.2 * x))
     frame = pd.DataFrame({"region": region, "x": x})
     parent_model = SuperGLM(
-        features={"region": Categorical(base="first"), "x": Numeric()},
+        features={"region": Categorical(base="first"), "x": Spline(k=5)},
         selection_penalty=0.0,
+        retain_fit_state=retain_fit_state,
     ).fit(frame, y)
     bundle = CandidateBundle(
         fitted_model=parent_model,
@@ -2153,6 +2156,7 @@ def test_collapsed_editor_model_publishes(tmp_path):
         model_source_sha256="b" * 64,
         model_frame_sha256="d" * 64,
         offset_contract={"handling": "NONE"},
+        continuous_kind=continuous_kind,
     )
     candidate = SimpleNamespace(
         workbench=SimpleNamespace(
@@ -2209,6 +2213,11 @@ def test_collapsed_editor_model_publishes(tmp_path):
     )
     loaded = exported.edited_model
 
+    raw = pd.read_excel(write_dir / "rating_tables.xlsx", sheet_name="Rating Tables", header=None)
+    x_column = next(column for column in range(raw.shape[1]) if raw.iat[4, column] == "x")
+    coefficient_headers = raw.iloc[6, x_column + 3 : x_column + 7].tolist()
+    assert (coefficient_headers == ["a", "b", "c", "d"]) == (continuous_kind == "ppform")
+
     assert len(loaded.result.beta) < len(parent_model.result.beta)
     assert set(loaded.features) == set(parent_model.features)
 
@@ -2236,6 +2245,14 @@ def test_collapsed_editor_model_publishes(tmp_path):
     assert relativities["B"] == pytest.approx(relativities["C"])
 
     child_bundle = joblib.load(write_dir / "candidate_bundle.joblib")["bundle"]
+    for fitted in (loaded, child_bundle.fitted_model):
+        assert fitted._retain_fit_state is retain_fit_state
+        assert fitted._config.retain_fit_state is retain_fit_state
+        assert (fitted._dm is None) is (not retain_fit_state)
+        assert (fitted._fit_X_ref is None) is (not retain_fit_state)
+        clone = fitted.clone_unfitted()
+        assert clone._config.retain_fit_state is retain_fit_state
+        assert clone._specs["region"]._grouping == fitted._specs["region"]._grouping
     assert len(child_bundle.fitted_model.result.beta) < len(parent_model.result.beta)
     np.testing.assert_allclose(
         child_bundle.fitted_model.predict(frame),

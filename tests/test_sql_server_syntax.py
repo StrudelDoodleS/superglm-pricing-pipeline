@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from sqlfluff.api.simple import parse
 
-from pricing_pipeline.infra.migrations import migration_files
+from pricing_pipeline.infra.migrations import migration_files, split_sql_server_batches
 from scripts.render_schema_sql import render_schema_sql
 
 
@@ -32,4 +32,7 @@ def test_rendered_custom_schema_sql_parses_as_tsql():
 
     assert "THROW" in sql
     assert "RAISERROR" not in sql
-    _parse_tsql(sql, "rendered custom schema SQL")
+    # Match the migration runner's execution boundaries. The accumulated chain
+    # now exceeds SQLFluff's parse-node limit when parsed as one document.
+    for index, batch in enumerate(split_sql_server_batches(sql), start=1):
+        _parse_tsql(batch, f"rendered custom schema SQL batch {index}")

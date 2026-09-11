@@ -45,7 +45,7 @@ def _assert_notebook_is_clean_and_compiles(path: Path) -> None:
         assert cell["outputs"] == []
 
 
-def test_init_creates_only_the_packaged_toml_from_an_unrelated_cwd(
+def test_init_seeds_config_and_builder_agent_from_an_unrelated_cwd(
     tmp_path: Path, monkeypatch, capsys
 ):
     root = tmp_path / "model-repo"
@@ -58,7 +58,16 @@ def test_init_creates_only_the_packaged_toml_from_an_unrelated_cwd(
 
     config = root / "pricing_scaffold.toml"
     assert config.read_text(encoding="utf-8") == TEMPLATE
-    assert {path.name for path in root.iterdir()} == {"pyproject.toml", "pricing_scaffold.toml"}
+    assert {path.name for path in root.iterdir()} == {
+        "pyproject.toml",
+        "pricing_scaffold.toml",
+        ".github",
+    }
+    from pricing_pipeline.resources import scaffold_root
+
+    agent = root / ".github/agents/pricing-builder.agent.md"
+    assert agent.read_bytes() == scaffold_root().joinpath("pricing-builder.agent.md").read_bytes()
+    assert not (unrelated / ".github").exists()
     assert not (root / "uv.lock").exists()
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == str(config.resolve())
@@ -100,6 +109,7 @@ def test_init_rejects_missing_or_symlinked_pyproject_without_creating_config(
 
     assert not (root / "pricing_scaffold.toml").exists()
     assert "regular non-symlink pyproject.toml" in capsys.readouterr().err
+    assert not (root / ".github").exists()
 
 
 @pytest.mark.parametrize("config_kind", ("malformed", "directory", "symlink"))
@@ -134,6 +144,7 @@ def test_init_rejects_unsafe_existing_config_without_overwriting(
         assert config.read_bytes() == malformed_before
         assert config.stat().st_mtime_ns == malformed_mtime_ns
     assert "error:" in capsys.readouterr().err
+    assert not (root / ".github").exists()
 
 
 def test_installed_scaffold_requires_the_initialized_default_config(tmp_path: Path, capsys):
@@ -251,6 +262,7 @@ def test_installed_scaffold_reports_a_managed_parent_file_as_a_user_precondition
     assert "failed unexpectedly" not in error
     assert managed_parent.read_bytes() == sentinel
     assert {path.name for path in root.iterdir()} == {
+        ".github",
         "pricing_models",
         "pricing_scaffold.toml",
         "pyproject.toml",
@@ -299,6 +311,7 @@ def test_installed_scaffold_force_reports_an_output_leaf_directory_without_mutat
     assert sentinel.stat().st_mtime_ns == fixed_mtime_ns
     assert {path.name for path in package.iterdir()} == {"__init__.py"}
     assert {path.name for path in root.iterdir()} == {
+        ".github",
         "pricing_models",
         "pricing_scaffold.toml",
         "pyproject.toml",
@@ -385,3 +398,57 @@ def test_init_does_not_import_optional_runtime_stacks(tmp_path: Path, monkeypatc
     monkeypatch.setattr("builtins.__import__", guarded_import)
 
     assert cli.main(["init", "--root", str(root)]) == 0
+
+
+def test_init_adds_missing_agent_to_existing_project_and_preserves_customizations(tmp_path: Path):
+    root = tmp_path / "model-repo"
+    _project(root)
+    config = root / "pricing_scaffold.toml"
+    config.write_text(TEMPLATE, encoding="utf-8")
+    workflows = root / ".github/workflows"
+    workflows.mkdir(parents=True)
+    workflow = workflows / "ci.yml"
+    workflow.write_text("existing CI", encoding="utf-8")
+    fixed_mtime_ns = 1_700_000_000_000_000_000
+    os.utime(config, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+    assert cli.main(["init", "--root", str(root)]) == 0
+    agent = root / ".github/agents/pricing-builder.agent.md"
+    assert agent.is_file()
+    agent.write_text("My team's customized builder", encoding="utf-8")
+    os.utime(agent, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+    assert cli.main(["init", "--root", str(root)]) == 0
+    assert agent.read_text() == "My team's customized builder"
+    assert agent.stat().st_mtime_ns == fixed_mtime_ns
+    assert config.read_text() == TEMPLATE
+    assert config.stat().st_mtime_ns == fixed_mtime_ns
+    assert workflow.read_text() == "existing CI"
+
+
+@pytest.mark.parametrize(
+    "relative_path", (".github", ".github/agents", ".github/agents/pricing-builder.agent.md")
+)
+@pytest.mark.parametrize("kind", ("symlink", "wrong_type"))
+def test_init_rejects_unsafe_agent_paths_before_creating_config(
+    tmp_path: Path, relative_path: str, kind: str, capsys
+):
+    root = tmp_path / "model-repo"
+    _project(root)
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    if kind == "symlink":
+        path.symlink_to(external, target_is_directory=True)
+    elif path.suffix == ".md":
+        path.mkdir()
+    else:
+        path.write_text("keep this file", encoding="utf-8")
+
+    assert cli.main(["init", "--root", str(root)]) == 2
+    assert not (root / "pricing_scaffold.toml").exists()
+    assert list(external.iterdir()) == []
+    assert "error:" in capsys.readouterr().err
+    if kind == "wrong_type" and path.suffix != ".md":
+        assert path.read_text() == "keep this file"

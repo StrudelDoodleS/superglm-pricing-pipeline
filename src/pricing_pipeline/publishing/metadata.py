@@ -30,6 +30,7 @@ from superglm.features.spline import (
 )
 from superglm.types import LambdaPolicy
 
+from pricing_pipeline.data.transforms import transforms_from_metadata, transforms_metadata
 from pricing_pipeline.publishing.identity import clean_identifier
 
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -709,7 +710,11 @@ def build_superglm_publication_receipt(
     offset_contract: OffsetExportContract,
     fit_sample_weight_name: str | None = None,
     export_weight_name: str | None = None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> SuperGLMPublicationReceipt:
+    preparation = transforms_metadata(
+        transforms_from_metadata({} if input_transforms is None else input_transforms)
+    )
     if not isinstance(model, SuperGLM):
         raise TypeError("publication metadata requires a SuperGLM model")
     if model._result is None:
@@ -788,7 +793,7 @@ def build_superglm_publication_receipt(
     if not family_name or not link_name:
         raise ValueError("SuperGLM model has malformed fitted family metadata")
 
-    package_metadata = {
+    package_metadata: dict[str, Any] = {
         "model": {
             "family": family_name,
             "family_params": family_params,
@@ -800,6 +805,12 @@ def build_superglm_publication_receipt(
             "export_weight_name": export_weight_name,
         }
     }
+    if preparation:
+        package_metadata["input_preparation"] = {
+            "schema_version": 1,
+            "scoring_input": "prepared",
+            "transforms": preparation,
+        }
 
     return SuperGLMPublicationReceipt(
         schema_name="superglm_publication_receipt",

@@ -4,10 +4,10 @@ import html
 import json
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
@@ -111,7 +111,6 @@ FULL_TABLE_LINEAGES: tuple[tuple[str, str], ...] = (
     ("PRICING_MODEL", "model"),
     ("MODEL_RUN", "model"),
     ("PRICING_MODEL_DEPLOYMENT", "model"),
-    ("PRICING_PACKAGE_POINTER", "model"),
     ("PRICING_RATE_PACKAGE", "rating"),
     ("PRICING_TERM", "rating"),
     ("PRICING_RATE_CELL", "rating"),
@@ -142,7 +141,6 @@ FULL_FLOW_FK_LINEAGES: tuple[tuple[str, str], ...] = (
     ("FK_LEVEL_SET_FEATURE", "feature"),
     ("FK_FEATURE_LEVEL_SET", "feature"),
     ("FK_MODEL_DEPLOYMENT_PACKAGE", "model"),
-    ("FK_PACKAGE_POINTER_PACKAGE", "model"),
     ("FK_COMPILED_RATE_CELL_PACKAGE", "compiled"),
     ("FK_COMPILED_1D_RATE_BAND_PACKAGE", "compiled"),
 )
@@ -165,7 +163,6 @@ FULL_FLOW_FK_LABELS: tuple[tuple[str, str], ...] = (
     ("FK_LEVEL_SET_FEATURE", "level sets"),
     ("FK_FEATURE_LEVEL_SET", "levels"),
     ("FK_MODEL_DEPLOYMENT_PACKAGE", "deployed package"),
-    ("FK_PACKAGE_POINTER_PACKAGE", "active pointer"),
     ("FK_COMPILED_RATE_CELL_PACKAGE", "compiled cells"),
     ("FK_COMPILED_1D_RATE_BAND_PACKAGE", "compiled bands"),
 )
@@ -221,19 +218,18 @@ FULL_WORKFLOW_LANES: tuple[DiagramLane, ...] = (
     ),
     DiagramLane(
         title="Model logging and publication",
-        description="Airflow training logs a model run, then publishes a rate package and deployment pointer.",
+        description="Training records a model run and publishes a rating package. Deployment history records the selected package.",
         table_groups=[
             ["DATASET_MANIFEST", "PRICING_MODEL"],
             ["MODEL_RUN"],
             ["PRICING_RATE_PACKAGE"],
-            ["PRICING_MODEL_DEPLOYMENT", "PRICING_PACKAGE_POINTER"],
+            ["PRICING_MODEL_DEPLOYMENT"],
         ],
         lineage="model",
         drawn_fk_names=(
             "FK_MODEL_RUN_MANIFEST",
             "FK_MODEL_RUN_MODEL",
             "FK_MODEL_DEPLOYMENT_PACKAGE",
-            "FK_PACKAGE_POINTER_PACKAGE",
         ),
         logical_edges=(
             DiagramLogicalEdge(
@@ -413,7 +409,6 @@ def build_overview_sections(metadata: SchemaMetadata) -> list[DiagramSection]:
                 [
                     "PRICING_RATE_PACKAGE",
                     "PRICING_MODEL_DEPLOYMENT",
-                    "PRICING_PACKAGE_POINTER",
                 ],
                 [
                     "PRICING_TERM",
@@ -441,15 +436,14 @@ def build_overview_sections(metadata: SchemaMetadata) -> list[DiagramSection]:
         ),
         DiagramSection(
             title="Core model lifecycle",
-            description="Model families, training runs, published packages, and deployment pointers.",
+            description="Model identities, published packages, and deployment history.",
             table_groups=[
                 ["PRICING_MODEL"],
                 ["PRICING_RATE_PACKAGE"],
-                ["PRICING_MODEL_DEPLOYMENT", "PRICING_PACKAGE_POINTER"],
+                ["PRICING_MODEL_DEPLOYMENT"],
             ],
             hidden_fk_names=(
                 "FK_MODEL_DEPLOYMENT_MODEL",
-                "FK_PACKAGE_POINTER_MODEL",
             ),
             lineage="model",
         ),
@@ -1078,9 +1072,7 @@ def _include_table(
     table_name = table.table_name.upper()
     if not include_staging and table_name.startswith("STG_"):
         return False
-    if not include_row_keys and table_name in {"DATASET_ROW_KEY", "STG_DATASET_ROW_KEY"}:
-        return False
-    return True
+    return include_row_keys or table_name not in {"DATASET_ROW_KEY", "STG_DATASET_ROW_KEY"}
 
 
 def _render_lineage_legend() -> str:
@@ -1548,7 +1540,7 @@ def _table_search_text(table: TableInfo) -> str:
 
 
 def _diagram_identifier(schema_name: str, table_name: str) -> str:
-    raw = table_name if schema_name else table_name
+    raw = table_name
     identifier = re.sub(r"[^A-Za-z0-9_]", "_", raw)
     if identifier and identifier[0].isdigit():
         identifier = f"_{identifier}"

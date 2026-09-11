@@ -49,6 +49,42 @@ def _api():
         pytest.fail(f"standard SuperGLM API is not implemented: {exc}")
 
 
+def test_full_fit_metrics_keep_zero_and_omit_unavailable_statistics():
+    metrics = _api()._full_fit_metrics(
+        {
+            "fit": {"converged": True, "n_iter": 0, "phi": 1.0},
+            "fit_statistics": {
+                "explained_deviance": 0.0,
+                "log_likelihood": None,
+                "null_deviance": float("nan"),
+                "pearson_chi2": float("inf"),
+            },
+            "reml": {"enabled": False},
+        }
+    )
+    assert metrics == {
+        "fit_converged": 1.0,
+        "fit_n_iter": 0.0,
+        "fit_phi": 1.0,
+        "fit_explained_deviance": 0.0,
+        "fit_reml_enabled": 0.0,
+    }
+    assert _api()._full_fit_metrics({}) == {}
+
+
+@pytest.mark.parametrize("nested", [True, False])
+def test_full_fit_rejects_non_convergence_in_training_telemetry(nested):
+    class NonConvergedModel(_FakeModel):
+        def training_telemetry(self):
+            result = {"converged": False}
+            return {"fit": result} if nested else result
+
+    api = _api()
+    inputs = api.ModelInputs(X=pd.DataFrame({"x": [1.0, 2.0]}), y=np.array([1.0, 2.0]))
+    with pytest.raises(api.StandardSuperGLMError, match="full training fit did not converge"):
+        api.fit_full_model(NonConvergedModel(), inputs, fit_mode="fit_reml")
+
+
 def _folds():
     return [
         (np.array([0, 1]), np.array([2])),

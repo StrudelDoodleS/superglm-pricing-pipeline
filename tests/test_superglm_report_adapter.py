@@ -1066,3 +1066,176 @@ def test_rating_workbook_rejects_duplicate_term_titles(tmp_path: Path):
             source=workbook,
             context=_editor_context(),
         )
+
+
+def _ppform_report_workbook(tmp_path, *, tails=True):
+    log_two = math.log(2.0)
+    rows = [["[0, 1]" if not tails else "[0, 1)", 1.0, 4.0, 0.0, log_two, 0.0, 0.0]]
+    if tails:
+        rows = [
+            ["[-inf, 0)", 1.0, 2.0, 0.0, 0.0, 0.0, 0.0],
+            *rows,
+            ["[1, inf)", 2.0, 2.0, log_two, 0.0, 0.0, 0.0],
+        ]
+    raw = pd.DataFrame([[None] * 7 for _ in range(7)] + rows, dtype=object)
+    raw.iat[4, 0] = "age"
+    raw.iloc[6, :] = ["Level", "Relativity", "Weight", "a", "b", "c", "d"]
+    workbook = tmp_path / "ppform.xlsx"
+    raw.to_excel(workbook, sheet_name="Rating Tables", header=False, index=False)
+    return workbook
+
+
+def _ppform_report_context(values):
+    frame = pd.DataFrame(
+        {"age": values, "actual": np.ones(len(values)), "weight": np.ones(len(values))}
+    )
+    return _context(
+        frame,
+        model_name="Published",
+        prediction=np.ones(len(values)),
+        features=("age",),
+        problem_type="frequency",
+        deviance_power=1.0,
+    )
+
+
+@pytest.mark.parametrize("tails", [True, False])
+def test_rating_workbook_ppform_evaluates_curve_and_importance(tmp_path, tails):
+    values = [-1.0, -0.5, 0.0, 0.25, 0.5, 0.75, 1.0, 1.5] if tails else [0.0, 0.25, 0.5, 0.75, 1.0]
+    context = _ppform_report_context(values)
+    evidence = normalize_model_evidence(
+        "Published",
+        RatingWorkbookAdapter().collect(
+            model_name="Published",
+            source=_ppform_report_workbook(tmp_path, tails=tails),
+            context=context,
+        ),
+        context,
+    )
+    effect = evidence.main_effects["age"]
+    assert "x" in effect.effect
+    assert len(effect.effect) > 10
+    x = effect.effect["x"].to_numpy()
+    assert x.min() == min(values)
+    assert x.max() == max(values)
+    assert effect.effect["value"].to_numpy() == pytest.approx(2.0 ** np.clip(x, 0.0, 1.0))
+    assert evidence.importance.table.iloc[0]["magnitude"] == pytest.approx(
+        np.var(np.clip(values, 0.0, 1.0) * math.log(2.0))
+    )
+    assert effect.density["density"].sum() == len(values)
+
+
+@pytest.mark.parametrize("cell,value", [("B9", 1.5), ("E9", None), ("E7", None)])
+def test_rating_workbook_ppform_rejects_inconsistent_or_partial_coefficients(tmp_path, cell, value):
+    workbook = _ppform_report_workbook(tmp_path)
+    from openpyxl import load_workbook
+
+    raw = load_workbook(workbook)
+    raw["Rating Tables"][cell] = value
+    raw.save(workbook)
+    raw.close()
+    with pytest.raises(UnderwriterReportError, match="(?i)spline|coefficient|ppform"):
+        RatingWorkbookAdapter().collect(
+            model_name="Published",
+            source=workbook,
+            context=_ppform_report_context([0.0, 0.5, 1.0]),
+        )
+
+
+def test_rating_workbook_ppform_suppresses_curve_without_minimum_support(tmp_path):
+    evidence = RatingWorkbookAdapter().collect(
+        model_name="Published",
+        source=_ppform_report_workbook(tmp_path),
+        context=_ppform_report_context([0.5]),
+    )
+    effect = evidence.main_effects["age"]
+    assert effect.effect.empty
+    assert effect.density is None
+    assert effect.suppression.status == "all"
+
+
+@pytest.mark.parametrize("header", [None, "renamed"])
+def test_rating_workbook_rejects_polynomial_data_when_all_coefficient_headers_are_lost(
+    tmp_path, header
+):
+    from openpyxl import load_workbook
+
+    workbook = _ppform_report_workbook(tmp_path, tails=False)
+    raw = load_workbook(workbook)
+    for column in range(4, 8):
+        raw["Rating Tables"].cell(7, column).value = header
+    raw.save(workbook)
+    raw.close()
+    with pytest.raises(UnderwriterReportError, match="(?i)coefficient|spline"):
+        RatingWorkbookAdapter().collect(
+            model_name="Published",
+            source=workbook,
+            context=_ppform_report_context([0.0, 0.5, 1.0]),
+        )
+
+
+@pytest.mark.parametrize("cells", [("A9",), ("B9",), ("A9", "B9")])
+def test_rating_workbook_rejects_incomplete_spline_rows(tmp_path, cells):
+    from openpyxl import load_workbook
+
+    workbook = _ppform_report_workbook(tmp_path, tails=False)
+    raw = load_workbook(workbook)
+    raw["Rating Tables"].append(["[1, 2]", 2.0, 1.0, math.log(2.0), 0.0, 0.0, 0.0])
+    for cell in cells:
+        raw["Rating Tables"][cell] = None
+    raw.save(workbook)
+    raw.close()
+    with pytest.raises(UnderwriterReportError, match="(?i)incomplete.*spline|spline.*incomplete"):
+        RatingWorkbookAdapter().collect(
+            model_name="Published",
+            source=workbook,
+            context=_ppform_report_context([0.0, 0.5, 1.0]),
+        )
+
+
+def test_rating_workbook_does_not_treat_a_matrix_below_main_effect_as_coefficients(tmp_path):
+    raw = pd.DataFrame([[None] * 7 for _ in range(15)], dtype=object)
+    raw.iat[4, 0] = "age"
+    raw.iloc[6, :3] = ["Level", "Relativity", "Weight"]
+    raw.iloc[7, :3] = ["1", 1.0, 2.0]
+    raw.iloc[8, :3] = ["2", 2.0, 2.0]
+    raw.iloc[12, :] = ["Interaction", 1, 2, 3, 4, 5, 6]
+    workbook = tmp_path / "matrix_below.xlsx"
+    raw.to_excel(workbook, sheet_name="Rating Tables", header=False, index=False)
+    evidence = RatingWorkbookAdapter().collect(
+        model_name="Published",
+        source=workbook,
+        context=_ppform_report_context([1, 1, 2, 2]),
+    )
+    assert evidence.main_effects["age"].effect["value"].tolist() == [1.0, 2.0]
+
+
+def test_rating_workbook_ppform_rejects_out_of_domain_error_values(tmp_path):
+    with pytest.raises(UnderwriterReportError, match="(?i)outside|domain"):
+        RatingWorkbookAdapter().collect(
+            model_name="Published",
+            source=_ppform_report_workbook(tmp_path, tails=False),
+            context=_ppform_report_context([-1.0, 0.5, 1.0]),
+        )
+
+
+def test_rating_workbook_ppform_matches_real_superglm_export(tmp_path):
+    model, context = _poisson_model_and_context()
+    workbook = tmp_path / "real_ppform.xlsx"
+    model.export_rating_tables(
+        workbook,
+        context.frame,
+        context.actual,
+        sample_weight=context.weight,
+        continuous_kind="ppform",
+    )
+    evidence = RatingWorkbookAdapter().collect(
+        model_name="Fitted GAM", source=workbook, context=context
+    )
+    effect = evidence.main_effects["age"].effect
+    assert "x" in effect
+    assert not effect.empty
+    grid = pd.DataFrame({"age": effect["x"], "segment": "A"})
+    predictions = model.predict(grid)
+    actual = effect["value"].to_numpy()
+    assert actual / actual[0] == pytest.approx(predictions / predictions[0], rel=1e-10)

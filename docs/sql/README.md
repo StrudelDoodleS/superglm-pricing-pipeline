@@ -7,6 +7,51 @@ latest version; do not run a single late migration against an unknown baseline.
 Configured schema names may differ at work. This guide uses the defaults:
 `pricing`, `pricing_stg`, and `mlops`.
 
+## Read the schema without knowing the internal names
+
+Every current table and view has an `MS_Description` extended property after
+V039. It explains the object's purpose, what one row represents, and when to
+use it. View definitions also contain the explanation directly after `AS`,
+so it appears when you script or inspect the view. SQL Server does not retain
+the original `CREATE TABLE` text; table descriptions live in object properties.
+The local SQLite DDL has the same comments inside its table and view definitions.
+
+In SSMS, open an object's Properties and select Extended Properties, or run:
+
+```sql
+SELECT
+    SCHEMA_NAME(o.schema_id) AS schema_name,
+    o.name AS object_name,
+    o.type_desc,
+    CAST(p.value AS NVARCHAR(3500)) AS description
+FROM sys.objects AS o
+JOIN sys.extended_properties AS p
+  ON p.class = 1 AND p.major_id = o.object_id AND p.minor_id = 0
+WHERE o.type IN ('U', 'V')
+  AND p.name = N'MS_Description'
+ORDER BY schema_name, object_name;
+```
+
+Some existing names describe implementation details:
+
+| Name | Meaning |
+|---|---|
+| Feature | An input, such as driver age or region. |
+| Level | A category or numeric band for an input. |
+| Term | A model effect, such as driver age or driver age by region. |
+| Rate cell | One rating multiplier for a level or combination of levels. A multiplier of 1.12 increases the base rate by 12% for that effect. |
+| Compiled | A derived lookup representation used by SQL scoring. |
+| Spline segment | An exact polynomial log effect on a numeric interval or a constant tail. |
+| Final model relativity | Every exported effect, including spline coefficients, with model and dataset context. "Final" does not mean latest, approved, published, or deployed. |
+
+Start with `V_FINAL_MODEL_RELATIVITY` to compare all package versions,
+`V_MODEL_CANDIDATE_RELATIVITY` for published packages, and
+`V_CURRENT_DEPLOYED_RELATIVITY` for current deployments. Include the deployment
+slot when using the last view because a package can be deployed in several slots.
+These views include exact spline effects. Read `representation` to distinguish
+fixed lookup values from coefficients that need an input. `V_MODEL_SPLINE_SEGMENT`
+remains available for consumers that specifically want only spline segments.
+
 ## Schema ownership
 
 | Schema | Purpose |
@@ -48,7 +93,7 @@ Core meaning:
 | `pricing.MODEL_RUN` | One build: manifest, kind, equivalence hash, source/runtime/artifact evidence, status, parent lineage, package link |
 | `mlops.MODEL_RUN_DATASET` | Normalized run-to-training-manifest assertion |
 | `mlops.MODEL_RUN_SPLIT_SET` | Normalized run-to-validation-split assertion |
-| `mlops.MODEL_RUN_METRIC` | Run metrics and scope |
+| `mlops.MODEL_RUN_METRIC` | CV scores with scope `cv`; full-training diagnostics with scope `full_fit` |
 
 `MODEL_RUN.manifest_id` is the direct operational link. The normalized `mlops`
 links are intentionally retained because publication, equivalence lookup, and
@@ -56,6 +101,38 @@ lineage integrity checks use them. Validation split lineage is read from
 `MODEL_RUN_SPLIT_SET`; SQL Server `MODEL_RUN` has no direct `split_set_id`. The
 direct manifest foreign key is stated here instead of drawn so it does not cross
 the two normalized link paths in the diagram.
+
+New standard builds save full-training diagnostics alongside CV scores. Migration
+V046 exposes them as `fit_*` columns in `pricing.V_MODEL_VALIDATION_SUMMARY`.
+No new table is required.
+
+| Columns | Meaning |
+|---|---|
+| `fit_converged`, `fit_n_iter` | Coefficient solver convergence and reported iteration count |
+| `fit_effective_df`, `fit_phi` | Total effective degrees of freedom and fitted dispersion |
+| `fit_deviance`, `fit_null_deviance`, `fit_explained_deviance` | Training fit and its intercept-only comparison |
+| `fit_log_likelihood`, `fit_null_log_likelihood`, `fit_pearson_chi2` | Full-training fit statistics reported by SuperGLM |
+| `fit_n_obs`, `fit_likelihood_size` | Observation count and likelihood size reported by SuperGLM |
+| `fit_reml_enabled`, `fit_reml_converged`, `fit_reml_n_iter` | Whether REML ran, its separate convergence result and outer iteration count |
+
+Flags use 1 for true and 0 for false. Missing or non-finite diagnostics are
+omitted from the metric table and appear as NULL in the view. Older runs are
+not backfilled. These diagnostics belong to the actual full-data fit; editor
+and manual revisions do not inherit their parent's solver diagnostics.
+`fit_deviance` is the training total reported by SuperGLM, whereas CV deviance
+scores may be normalized. Do not compare their raw magnitudes as a train/test gap.
+
+The summary retains its existing scope: runs without fold evidence are absent.
+In local SQLite mode, persistent views cannot join the separately attached
+`mlops` database. Pooled CV and full-fit columns therefore remain NULL in the
+local summary. The actual saved values are available directly:
+
+```sql
+SELECT model_run_id, metric_name, metric_value
+FROM mlops.MODEL_RUN_METRIC
+WHERE metric_scope = 'full_fit'
+ORDER BY model_run_id, metric_name;
+```
 
 ## Controlled monitoring lineage
 
@@ -130,6 +207,7 @@ erDiagram
     PRICING_TERM ||--o{ PRICING_TERM_FEATURE : uses
     PRICING_FEATURE ||--o{ PRICING_TERM_FEATURE : identifies
     PRICING_TERM ||--o{ PRICING_RATE_CELL : contains
+    PRICING_TERM ||--o{ PRICING_SPLINE_SEGMENT : contains
     PRICING_RATE_CELL ||--o{ PRICING_RATE_CELL_LEVEL : keyed_by
     PRICING_FEATURE_LEVEL ||--o{ PRICING_RATE_CELL_LEVEL : selects
     PRICING_FEATURE ||--o{ PRICING_FEATURE_LEVEL_SET : versions
@@ -147,6 +225,7 @@ erDiagram
 | `pricing.PRICING_RATE_CELL` / `PRICING_RATE_CELL_LEVEL` | Normalized factor cells, levels, coefficients, relativities, weights |
 | `pricing.PRICING_FEATURE*` | Reusable feature and level-set dictionaries required by publication/scoring |
 | `pricing.PRICING_COMPILED_*` | Package-specific scoring projections |
+| `pricing.PRICING_SPLINE_SEGMENT` | Exact polynomial segments keyed by package, term, and `segment_order`; FLOAT bounds and coefficients, feature name, level label, and weight |
 | `pricing.PRICING_MODEL_DEPLOYMENT` | Full deployment history; one open row per model and slot is the current package |
 | `pricing.PRICING_MODEL_VERSION_RESERVATION` | Concurrent model-version allocation |
 
@@ -162,9 +241,10 @@ relativities. A carry-forward policy is replayed in Python against a later
 clean candidate; SQL records the policy and outcome but does not perform the
 adjustment.
 
-`pricing.PRICING_PACKAGE_POINTER` is a compatibility table still dual-written
-by deployment code. Current repo reads use `PRICING_MODEL_DEPLOYMENT`; do not
-build new consumers on the pointer table.
+V039 removes `pricing.PRICING_PACKAGE_POINTER`. Deployment history already
+records the selected package for each model and slot. The deployment writer
+now updates only `PRICING_MODEL_DEPLOYMENT` and uses one timestamp for closing
+the old interval and starting the new one.
 
 `pricing.FREMTPL_RAW` is demo input data, not a registry or production lineage
 table.
@@ -200,17 +280,20 @@ concurrency backstop:
 | `TR_PRICING_FEATURE_LEVEL_IMMUTABLE_WRITE` | Protects referenced levels. |
 | `TR_PRICING_COMPILED_RATE_CELL_IMMUTABLE_WRITE` | Protects compiled cells. |
 | `TR_PRICING_COMPILED_1D_RATE_BAND_IMMUTABLE_WRITE` | Protects compiled 1D bands. |
+| `TR_PRICING_SPLINE_SEGMENT_IMMUTABLE_WRITE` | Protects exact spline segments after publication or deployment. |
 | `TR_PRICING_MODEL_DEPLOYMENT_PACKAGE_GUARD` | Deployment package must be `PUBLISHED` and belong to the same model. |
 | `TR_PRICING_MODEL_DEPLOYMENT_MONITORING_LINEAGE_GUARD` | A deployment referenced by monitoring may be closed normally, but its model, package, slot, start time, and identity cannot be changed or deleted. |
 | `TR_DATASET_MANIFEST_MONITORING_LINEAGE_GUARD` | A dataset manifest referenced by monitoring evidence cannot be changed or deleted. |
+| `TR_MODEL_RUN_MONITORING_LINEAGE_GUARD` | A run referenced by a monitoring fit contract retains its model, package, and successful status. |
 | `mlops.TR_MODEL_FIT_CONTRACT_IMMUTABLE` | A baseline fit contract cannot be changed or deleted. |
 | `mlops.TR_MODEL_FIT_CONTRACT_LINEAGE_GUARD` | A contract must identify one successful run and its published package. |
 | `mlops.TR_MODEL_MONITOR_RUN_LINEAGE_GUARD` | Contract, deployed package, model run, and monitoring row must identify one baseline. |
-| `mlops.TR_MODEL_MONITOR_RUN_IMMUTABLE` | A completed monitoring run is append-only. |
-| `mlops.TR_MODEL_MONITOR_TERM_IMMUTABLE` | Per-term monitoring evidence is append-only. |
-| `mlops.TR_MODEL_MONITOR_LAMBDA_IMMUTABLE` | Monitoring lambda evidence is append-only. |
-| `mlops.TR_MODEL_MONITOR_RELATIVITY_IMMUTABLE` | Monitoring relativity evidence is append-only. |
-| `mlops.TR_MODEL_MONITOR_METRIC_IMMUTABLE` | Monitoring metric evidence is append-only. |
+| `mlops.TR_MODEL_MONITOR_RUN_IMMUTABLE` | Permits the initial evidence seal only. A sealed observation cannot change or reopen. |
+| Monitoring child INSERT guards | Allow evidence assembly only while the parent observation is unsealed. |
+| `mlops.TR_MODEL_MONITOR_TERM_IMMUTABLE` | Blocks changes to existing per-term evidence. |
+| `mlops.TR_MODEL_MONITOR_LAMBDA_IMMUTABLE` | Blocks changes to existing smoothing evidence. |
+| `mlops.TR_MODEL_MONITOR_RELATIVITY_IMMUTABLE` | Blocks changes to existing relativity evidence. |
+| `mlops.TR_MODEL_MONITOR_METRIC_IMMUTABLE` | Blocks changes to existing metric evidence. |
 
 ```mermaid
 ---
@@ -256,6 +339,7 @@ cover state-dependent rules that ordinary constraints cannot express.
 
 | Object | Intended use |
 |---|---|
+| `pricing.V_MODEL_SPLINE_SEGMENT` | Exact spline segments with package/run/dataset/split lineage, term metadata, and input transforms |
 | `pricing.V_MODEL_RELATIVITY` | Internal normalized relativity base used by the enriched final view |
 | `pricing.V_FINAL_MODEL_RELATIVITY` | All package relativities with model kind/equivalence, full manifest/data-as-at evidence, and unambiguous validation split lineage |
 | `pricing.V_MODEL_CANDIDATE_RELATIVITY` | All published candidate relativities for review/BI |
@@ -268,6 +352,86 @@ cover state-dependent rules that ordinary constraints cannot express.
 | `pricing.V_MODEL_MONITORING_LAMBDA` | Smoothing lambdas and fixed/estimated mode for week/variant comparisons |
 | `pricing.PREDICT_RATE_PACKAGE` | Score an explicitly selected package |
 | `pricing.PREDICT_CURRENT_RATE` | Resolve the current deployment, then score through the package procedure |
+
+V043 adds exact spline main effects with term type `SPLINE_PPOLY_1D`.
+`PREDICT_RATE_PACKAGE` reads `PRICING_SPLINE_SEGMENT` for these terms.
+For finite segments it computes `u=(x-lower_bound)/(upper_bound-lower_bound)`
+and the log contribution `a+u*(b+u*(c+u*d))`. It combines log contributions
+before exponentiating. The optional breakdown reports `match_type='SPLINE'`
+and the evaluated log effect. Its multiplier is NULL when that individual
+exponential lies outside the SQL FLOAT range.
+
+Intervals include their lower bound and exclude their upper bound unless
+`upper_inclusive=1`. A NULL bound is an unbounded constant tail with
+`b=c=d=0`. Clip exports include constant tails. Error-boundary exports stop at
+the outer knots and include the final finite endpoint. Missing, nonnumeric,
+and uncovered inputs fail the required-term check. Neither the cell nor the
+default lookup may score a spline term. `PREDICT_CURRENT_RATE` delegates to
+this same package procedure after selecting the current deployment.
+
+V044 combines every effect in `V_FINAL_MODEL_RELATIVITY`. The candidate and
+deployed views expose the same columns with their existing status filters.
+No join to a second spline view is needed in Power BI.
+
+Both layouts are available for analysts:
+
+| Layout | Views to load | Use |
+|---|---|---|
+| Separate | `V_MODEL_RELATIVITY` and `V_MODEL_SPLINE_SEGMENT` | Keep lookup/numeric effects and exact spline polynomials in separate datasets. |
+| Combined | `V_FINAL_MODEL_RELATIVITY` | Load every effect together and use `representation` to choose how to evaluate each row. |
+
+Both layouts read the same published data. `PRICING_SPLINE_SEGMENT` remains the
+separate storage table for polynomial coefficients. The combined view adds no
+copy of those coefficients. Each spline row describes the actual fitted
+polynomial on its interval, on the log-effect scale. It is not a sampled curve
+or a constant band. The table and view descriptions identify this explicitly.
+
+The freMTPL presentation workbook at
+`state/fremtpl_frequency/demo-ppform-10000-seed-42/relativity_view_options.xlsx`
+shows both layouts for the same package.
+
+| `representation` | Evaluation at the supplied input |
+|---|---|
+| `LOOKUP` | Select the category or band and use `relativity`. |
+| `NUMERIC` | Use `exp(x * log_coefficient)`. |
+| `PER_UNIT_FACTOR` | Use `x * relativity`, requiring positive `x`. |
+| `SPLINE` | Match bounds, then evaluate `exp(a+u*(b+u*(c+u*d)))`. NULL bounds use `exp(a)` directly. |
+
+For splines, `relativity` and `log_coefficient` are NULL to prevent treating a
+segment as a constant multiplier. `level_sort_order` orders its segments;
+`upper_inclusive` handles a closed final boundary. Metadata and dates share
+the same columns across every representation.
+
+SQL still expects prepared feature values. The combined final view exposes
+`transforms_json` from `package_metadata_json.input_preparation.transforms`
+and retains `term_metadata_json`. `model_completed_ts` and `data_as_of_date`
+separate model completion time from the dataset date. Power BI can sample the polynomial on the
+prepared feature scale and use its package/run/manifest/split IDs for filters.
+`exp(a)` is the effect at a segment's origin; it does not describe its full
+interval. SQLite stores the same exact segments and exposes the same view;
+SQL Server split lineage comes from the normalized training/validation link.
+
+The seven nullable staging columns are `spline_a`, `spline_b`, `spline_c`,
+`spline_d`, `spline_lower`, `spline_upper`, and `spline_upper_inclusive`.
+Prepared publication fingerprints include those values for ppform exports.
+Legacy frames without spline columns keep their existing fingerprints and
+lookup representation. Existing SQLite databases add these columns on their
+next `apply_offline_ddl` call without replacing staged legacy rows.
+
+V045 also evaluates exported per-unit factors as `x * relativity`, requiring a
+positive input. Their log contribution is `LOG(x) + log_coefficient`. This
+differs from a numeric regression coefficient, whose log contribution is
+`x * log_coefficient`. Invalid per-unit inputs cannot fall through to a
+category or default lookup.
+The export wrapper marks the offset representation in a workbook header comment,
+and publication stores it in term metadata. A category named `per_unit` is still
+a lookup. Re-export older workbooks with an ambiguous `per_unit` offset before
+publishing them; existing packages retain their stored behavior.
+
+Apply migrations through V045 before publishing and scoring ppform models on
+SQL Server. Local persistence and SQL-expression tests cover knot boundaries,
+tails, and package isolation; executing those expressions in SQLite and parsing
+T-SQL do not replace a live SQL Server publication/scoring integration check.
 
 Compatibility/read convenience surfaces remain for existing consumers:
 
@@ -286,7 +450,7 @@ view remains useful because link inconsistency can still exist.
 | Surface | Assessment |
 |---|---|
 | `MODEL_RUN.manifest_id` plus `mlops.MODEL_RUN_DATASET` | Intentional for now: direct lookup plus normalized role-based integrity. Both are checked for agreement. |
-| `PRICING_PACKAGE_POINTER` | Compatibility-only; a retirement candidate after every external consumer has moved to deployment history. |
+| `PRICING_PACKAGE_POINTER` | Removed by V039 after checking that every pointer agrees with current deployment history and no recorded SQL dependency remains. |
 | `V_PUBLISHED_MODEL_RELATIVITY` | Compatibility alias; new consumers should use `V_MODEL_CANDIDATE_RELATIVITY`. |
 | `V_ACTIVE_MODEL`, `V_CURRENT_RATE_*`, `V_CURRENT_DATASET_CV_FOLD` | Low use in current Python code, but cheap read contracts retained for SQL consumers. Remove only with a consumer inventory and migration. |
 | Normalized cells plus `PRICING_COMPILED_*` | Not duplicate authority: normalized rows are audit structure; compiled rows are package-specific scoring projections. |
@@ -295,6 +459,43 @@ view remains useful because link inconsistency can still exist.
 The useful default for analysis is `V_FINAL_MODEL_RELATIVITY`; use the candidate
 or current-deployed views when package state matters. Avoid joining the raw
 tables unless a view omits evidence you actually need.
+
+`V_CURRENT_DATASET_CV_FOLD` means most recently registered, ordered by
+`created_ts`. It does not select the latest data-as-at date or deployed dataset.
+Its `train_folds_json` contains other fold labels, not exact training-row
+membership. Use the verified split artifact when replaying a holdout or custom
+split.
+
+## Upgrade through V039 to V042
+
+Pause deployment and monitoring writers, apply the migrations, deploy the
+matching application version, then resume writers. Older writers still access the removed pointer
+table. V039 refuses to drop it if any pointer disagrees with current deployment
+history or a recorded SQL dependency still refers to it. Reconcile those cases
+before retrying; the migration does not guess which conflicting selection wins.
+Check external SQL and BI consumers too, since ad hoc queries and consumers in
+other databases are not fully represented by local dependency metadata.
+
+V039 adds descriptions and preserves the existing public view names and result
+definitions. V040 closes monitoring baseline-lineage gaps, including SQL NULL
+comparisons and later changes to a referenced baseline run. It does not certify
+previously stored evidence or repair pre-existing corruption.
+
+V041 adds a completion boundary for monitoring evidence. The writer creates
+the observation with `evidence_sealed = 0`, adds its children, then seals it
+before committing. Later child inserts and attempts to reopen the observation
+fail. Monitoring views show only sealed observations. Existing rows default
+to sealed during upgrade; this does not retrospectively verify their contents.
+Older monitoring writers must be upgraded because they do not assemble evidence
+through this boundary.
+
+V042 keeps numeric scoring contributions on the log scale until they are
+combined. In an optional scoring breakdown, an individual numeric multiplier
+outside the documented SQL FLOAT range is `NULL`; its `log_coefficient` remains
+available. The final score can still be finite when individual effects cancel.
+
+The [schema review](schema_review_2026-09-11.md) records fixes, remaining edge
+cases, and the limits of local verification.
 
 ## Apply migrations at work
 

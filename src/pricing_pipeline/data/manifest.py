@@ -805,6 +805,10 @@ def validation_split_signature(
     """Hash validation semantics separately from the dataset-manifest identity."""
     validation_payload = asdict(validation_split)
     validation_payload.pop("materialize", None)
+    # Keep existing split identities stable when no splitter metadata was supplied.
+    for name in ("splitter_class", "splitter_params", "groups_column"):
+        if validation_payload[name] is None:
+            validation_payload.pop(name)
     validation_payload["train_values"] = [
         _json_clean_value(value) for value in validation_split.train_values
     ]
@@ -937,8 +941,12 @@ def build_validation_split_set(
             raise ValueError("custom validation split requires model-supplied split_indices")
         if artifact_uri is None:
             raise ValueError("custom validation split requires materialize=true")
-        splitter_class = "custom"
-        params = {"method": "custom"}
+        splitter_class = validation_split.splitter_class or "custom"
+        params = (
+            validation_split.splitter_params
+            if validation_split.splitter_params is not None
+            else {"method": "custom"}
+        )
         fold_count = len(indices)
     else:
         raise ValueError(f"Unsupported validation split method: {validation_split.method}")
@@ -959,7 +967,7 @@ def build_validation_split_set(
                 "row_order_sha256": row_order_sha256,
                 "row_count": len(frame),
                 "fold_count": fold_count,
-                "groups_column": None,
+                "groups_column": validation_split.groups_column,
                 "stratify_column": (
                     validation_split.stratify_column
                     if validation_split.method == "train_test_split"

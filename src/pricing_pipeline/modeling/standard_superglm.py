@@ -88,6 +88,8 @@ def run_standard_superglm_build(
     model_source_root: str | Path,
     created_by: str,
     offset_contract: OffsetExportContract | None = None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
+    continuous_kind: str = "ppform",
     cross_validate_fn: Callable[..., Any] = cross_validate,
 ) -> ApprovedModelBuild:
     resolved_model_kind = normalise_model_kind(model_kind)
@@ -175,6 +177,8 @@ def run_standard_superglm_build(
             inputs.y,
             inputs.export_weight,
             output_path=workbook_path,
+            input_transforms=input_transforms,
+            continuous_kind=continuous_kind,
             **export_options,
         )
         workbook_sha256 = hash_file_sha256(workbook_path)
@@ -183,6 +187,7 @@ def run_standard_superglm_build(
             offset_contract=resolved_offset_contract,
             fit_sample_weight_name=fit_weight_name,
             export_weight_name=export_weight_name,
+            input_transforms=input_transforms,
         )
         receipt_path = run_dir / "receipt.json"
         receipt_sha256 = write_publication_receipt(receipt, receipt_path)
@@ -195,6 +200,7 @@ def run_standard_superglm_build(
         cv_report["superglm_version"] = receipt.superglm_version
         bundle = CandidateBundle(
             fitted_model=fitted,
+            input_transforms=input_transforms,
             X=inputs.X.copy(),
             y=np.asarray(inputs.y).copy(),
             sample_weight=(
@@ -224,6 +230,7 @@ def run_standard_superglm_build(
             fit_sample_weight_name=fit_weight_name,
             offset_source_name=offset_source_name,
             export_weight_name=export_weight_name,
+            continuous_kind=continuous_kind,
         )
         artifact = save_candidate_bundle(bundle, run_dir / "model.joblib")
         fold_metric_records = tuple(
@@ -234,6 +241,7 @@ def run_standard_superglm_build(
             }
             for metric in evidence.fold_metrics
         )
+        fit_metrics = _full_fit_metrics(telemetry)
         completed_build = ApprovedModelBuild(
             model_id=model_id,
             model_name=model_config.model_name,
@@ -259,8 +267,11 @@ def run_standard_superglm_build(
             model_frame_sha256=manifest.model_frame_sha256,
             publication_receipt_path=str(receipt_path),
             publication_receipt_sha256=receipt_sha256,
-            metrics=evidence.metrics,
-            metric_scopes={name: "cv" for name in evidence.metrics},
+            metrics={**evidence.metrics, **fit_metrics},
+            metric_scopes={
+                **dict.fromkeys(evidence.metrics, "cv"),
+                **dict.fromkeys(fit_metrics, "full_fit"),
+            },
             fold_metrics=fold_metric_records,
         )
         return completed_build
@@ -672,6 +683,40 @@ def _json_primitive(value: Any) -> Any:
     return value
 
 
+def _full_fit_metrics(telemetry: dict[str, Any]) -> dict[str, float]:
+    """Select full-training diagnostics for SQL, separate from held-out scores."""
+    sections = (
+        (
+            telemetry.get("fit", telemetry),
+            "fit_",
+            ("converged", "n_iter", "deviance", "effective_df", "phi"),
+        ),
+        (
+            telemetry.get("fit_statistics", {}),
+            "fit_",
+            (
+                "log_likelihood",
+                "null_log_likelihood",
+                "null_deviance",
+                "explained_deviance",
+                "pearson_chi2",
+                "n_obs",
+                "likelihood_size",
+            ),
+        ),
+        (telemetry.get("reml", {}), "fit_reml_", ("enabled", "converged", "n_reml_iter")),
+    )
+    metrics = {}
+    for values, prefix, names in sections:
+        for name in names:
+            value = values.get(name)
+            # Some families cannot supply every statistic. SQL leaves those absent.
+            if value is not None and math.isfinite(float(value)):
+                key = "n_iter" if name == "n_reml_iter" else name
+                metrics[f"{prefix}{key}"] = float(value)
+    return metrics
+
+
 def fit_full_model(model, inputs: ModelInputs, *, fit_mode: str):
     if fit_mode not in {"fit", "fit_reml"}:
         raise StandardSuperGLMError(f"unsupported fit_mode {fit_mode!r}")
@@ -686,9 +731,10 @@ def fit_full_model(model, inputs: ModelInputs, *, fit_mode: str):
     )
     telemetry_fn = getattr(fitted, "training_telemetry", None)
     telemetry = telemetry_fn() if callable(telemetry_fn) else {}
-    if telemetry.get("converged") is False:
+    telemetry = _json_primitive(telemetry)
+    if telemetry.get("fit", telemetry).get("converged") is False:
         raise StandardSuperGLMError("full training fit did not converge")
-    return fitted, _json_primitive(telemetry)
+    return fitted, telemetry
 
 
 def _resolved_offset_contract(

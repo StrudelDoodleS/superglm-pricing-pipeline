@@ -8,15 +8,17 @@ writes, artifacts, publication, and deployment guards.
 
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
-| `01_data_ingestion.ipynb` | Source data | Verified model-frame artifact | Fit or publish a model |
+| `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
 | `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
-| `03_model_training.ipynb` | Exact model frame; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
+| `03_model_training.ipynb` | Source dataset; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
 | `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
 | `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
 | `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
 
-Accepted exploration data work moves to notebook 01. Accepted model choices move to
-notebook 03. Exploration cells are excluded from model-source identity.
+Accepted source queries and cleaning move to notebook 01. Accepted model transforms
+and model choices move to notebook 03. Exploration cells are excluded from
+model-source identity. The generated example uses generic synthetic data until
+you replace it with your source query.
 
 ## Optional scratch benchmarks
 
@@ -267,6 +269,11 @@ supported because most do not have a stable business interpretation.
 
 ## Scaffold configuration
 
+`pricing-pipeline init` seeds `.github/agents/pricing-builder.agent.md` alongside
+the config. Select **Pricing builder** in Copilot for help choosing connections,
+features, transforms, offsets and validation, and applying those choices to the
+notebooks. Existing config and agent files are preserved when you rerun `init`.
+
 At the scaffold root, run `pricing-pipeline init` (or
 `python -m pricing_pipeline init` after installation), then edit the generated
 `pricing_scaffold.toml`:
@@ -335,39 +342,145 @@ def get_schema_names():
     }
 ```
 
-## Model specification
+## Dataset and model specification
 
-`PricingModelSpec` is the one visible declaration shared by ingestion and
-training:
+Notebook 01 records provenance beside the source data and saves the handoff:
 
 ```python
+from pricing_pipeline.notebook import PricingDataset
+
+dataset = PricingDataset(
+    df=df,
+    name="my_dataset",
+    source="pricing_sql",
+    key="row_id",
+    as_of="data_as_of",
+)
+dataset.save(DATASET_PATH, replace=REPLACE_DATASET)
+```
+
+`DATASET_PATH` points to `.local/dataset.joblib` under the model directory.
+Set `DATA_AS_OF` to the date through which the source is complete. The saved
+artifact carries the dataset name, source, key columns, and date binding, so
+training does not repeat them.
+
+Notebook 03 loads the dataset and declares transforms once. The generated
+mapping starts empty; examples are opt-in:
+
+```python
+from superglm import Categorical, Numeric
+from pricing_pipeline.models.config import ValidationSplitConfig
+from pricing_pipeline.notebook import (
+    Clip, Log, Log1p, PricingDataset, PricingModelSpec, apply_transforms,
+)
+
+dataset = PricingDataset.load(DATASET_PATH)
+df = dataset.df
+
+transforms = {
+    # "log_feature": Log("positive_feature"),
+    # "log1p_feature": Log1p("nonnegative_feature"),
+    # "clipped_feature": Clip("feature_1", lower=0, upper=100),
+    # "log_exposure": Log("exposure"),
+}
+df = apply_transforms(df, transforms)
+
+RAW_FEATURES = {
+    "feature_1": Numeric(),
+    "segment": Categorical(),
+}
+
 MODEL = PricingModelSpec(
-    name="CLAIM_FREQUENCY",
-    label="Claim frequency",
-    target="claim_count",
+    # Model.
+    name="MY_MODEL",
+    label="My model",
     model_type="superglm_poisson",
-    deployment_slot="CLAIM_FREQUENCY_UAT",
-    features=("driver_age", "vehicle_age", "region"),
-    dataset_name="claim_frequency_model_frame",
-    source_system="pricing_sql",
-    pk_columns=("policy_id",),
-    offset_column="term_offset",
-    offset_source_column="term",
-    offset_label="log(term / 12)",
-    sample_weight_column="model_weight",
-    export_weight_column="rating_table_weight",
-    data_as_of_column="data_as_of",
-    validation=ValidationSplitConfig.kfold(
-        n_splits=5,
-        random_state=42,
-        shuffle=True,
-    ),
+    deployment_slot="MY_MODEL_UAT",
+
+    # Data.
+    dataset=dataset,
+
+    # Fit and validate.
+    target="target",
+    features=tuple(RAW_FEATURES),
+    validation=ValidationSplitConfig.kfold(n_splits=5, random_state=42, shuffle=True),
+
+    # Save the transforms with the rating tables.
+    transforms=transforms,
+
+    # Optional offset, with its coefficient fixed at 1.
+    # offset_column="log_exposure",
+    # Weights for fitting.
+    # sample_weight_column="model_weight",
+    # Weights for averaging exported rating tables.
+    # export_weight_column="rating_table_weight",
 )
 ```
 
-The frame must contain every declared column. Structural roles cannot overlap.
-The offset is passed to SuperGLM as stored; the pipeline does not log it.
-Sample weight and rating-table export weight are independent.
+Pass `RAW_FEATURES` to ordinary `SuperGLM(features=RAW_FEATURES, ...)`. When you
+add a transformed feature, use its output name in `RAW_FEATURES`. Each recipe
+reads an original source column and creates a new column; chained recipes and
+overwriting source columns are unsupported. `Log` computes log(x) and requires
+positive values. `Log1p` computes log(1 + x).
+`apply_transforms` returns a copy, preserving the saved source dataset.
+The model configuration cell starts with `df = dataset.df`, so rerunning it
+rebuilds the derived columns from the source snapshot.
+
+Optional offsets use a recipe such as `"log_exposure": Log("exposure")` and
+`offset_column="log_exposure"`. The pipeline derives the export details from the
+recipe. Sample weight and rating-table export weight remain independent.
+The generated model enables none of these optional roles by default.
+
+Notebook 03 sets `retain_fit_state=False` on both `SuperGLM` constructors.
+The freMTPL demo uses the same setting. Prediction, summaries and term standard
+errors remain available; the fitted model releases its training caches.
+The candidate bundle still carries the data supplied explicitly to the editor.
+Scratch models in notebook 02 retain SuperGLM's default `True`. Set `True` in
+the training constructor if you need `design_summary()` or post-fit shape repair.
+When calling reporting or diagnostic functions directly, pass the fitted
+weights and offset explicitly rather than relying on retained arrays.
+
+`fit_model` runs cross-validation, refits on all rows, exports the rating
+tables and fitted model, and writes the dataset manifest and split evidence.
+Its `.metrics` includes held-out `cv_*` scores and full-training `fit_*`
+diagnostics, including separate coefficient-solver and REML convergence results.
+Inspect its metrics before calling `save_model_version`. Publication saves a
+version in the chosen SQL Server database or a `LOCAL_AUDIT` version in local
+SQLite. Activation is a separate operation in notebook 06 and requires remote
+mode.
+
+New builds preserve supported one-dimensional spline curves by default.
+`PricingModelSpec(spline_export="binned", ...)` opts into the previous band
+export. Exact export stores a polynomial per knot interval; its displayed
+workbook relativity is the value at the interval origin, not a multiplier for
+the whole interval. Unsupported exact exports fail instead of becoming bands.
+Ordered categoricals remain level lookups. Smooth interactions and LSS models
+are outside this publication change.
+
+`pricing.PREDICT_RATE_PACKAGE` evaluates spline segments at the supplied
+feature values. Apply the current migrations before publishing to SQL Server.
+`pricing.V_FINAL_MODEL_RELATIVITY` offers one Power BI view for all effects,
+including spline coefficients, input transforms and model/data dates.
+Its `representation` column distinguishes lookup values, numeric coefficients,
+per-unit factors and splines. Spline rows have NULL `relativity` and
+`log_coefficient`; their effects come from `a`, `b`, `c`, and `d`.
+For separate datasets, load `pricing.V_MODEL_RELATIVITY` and
+`pricing.V_MODEL_SPLINE_SEGMENT` instead. Both layouts use the same stored
+effects; exact polynomial coefficients remain in `pricing.PRICING_SPLINE_SEGMENT`.
+Power BI can evaluate a common grid across model versions; SQL
+scoring uses each policy's actual input. For finite intervals, evaluate
+`u=(x-lower_bound)/(upper_bound-lower_bound)` and
+`exp(a+u*(b+u*(c+u*d)))`. Unbounded tail segments use `exp(a)` directly.
+Respect `upper_inclusive` when matching a finite final endpoint.
+
+Editing a candidate preserves its export choice. Old candidate artifacts use
+the binned choice. A clipped spline uses its boundary effect outside the knot
+range; a spline configured to reject out-of-range inputs has no tail segments.
+
+Transform recipes are recorded in export metadata and the rating workbook.
+The current SQL scorer expects prepared input columns. It does not generate or
+run these transforms against raw SQL source data. Prepare the same columns
+before scoring and use the recorded recipes to reproduce that preparation.
 
 ## Public notebook functions
 
@@ -376,25 +489,36 @@ Import these from `pricing_pipeline.notebook`.
 | Function | Use | Main result or guard |
 |---|---|---|
 | `connect(...)` | Open local SQLite or guarded remote SQL | `NotebookContext` |
-| `save_model_frame(frame, path, replace=False)` | Atomically hand off notebook 01 output | Joblib artifact plus JSON receipt |
+| `PricingDataset(df=..., name=..., source=..., key=..., as_of=...)` | Bind source data to provenance | Dataset object |
+| `dataset.save(path, replace=False)` | Save notebook 01 output and provenance | Verified Joblib artifact and receipt |
+| `PricingDataset.load(path)` | Verify and load the saved dataset | Dataset with `.df` |
+| `apply_transforms(df, transforms)` | Apply declared model recipes | Copy with derived columns |
+| `save_model_frame(frame, path, replace=False)` | Save a legacy DataFrame handoff | Joblib artifact plus JSON receipt |
 | `inspect_model_frame(path)` | Read frame evidence without loading the frame | `ModelFrameArtifact` |
 | `load_model_frame(path)` | Verify byte and frame hashes, then load | `pandas.DataFrame` |
 | `register_model(pricing, spec, source_root=...)` | Create or validate stable model identity | `RegisteredModel` |
-| `build_candidate(pricing, model=..., frame=..., superglm_model=..., model_kind=...)` | Fit and derive all evidence | `BuiltCandidate`; inspect `.metrics` |
-| `publish_candidate(pricing, candidate)` | Publish the completed candidate | IDs, paths, status, `deduplicated` |
+| `fit_model(pricing, model=..., frame=..., superglm_model=..., model_kind=...)` | Run CV, fit the full model and export review artifacts | `BuiltCandidate`; inspect `.metrics` |
+| `save_model_version(pricing, candidate)` | Save the fitted version to the selected database | IDs, paths, status, `deduplicated` |
 | `load_registered_model(...)` | Resolve one active SQL model by name/label | Review-only `RegisteredModel` |
-| `list_candidate_versions(...)` | List published packages newest first | Friendly or technical DataFrame |
-| `open_candidate(...)` | Verify and load one exact published package | `Candidate` with bundle and champion snapshot |
+| `list_model_versions(...)` | List saved model versions newest first | Friendly or technical DataFrame |
+| `load_model_version(...)` | Verify and load one saved model version | `Candidate` with bundle and champion snapshot |
 | `open_deployed_candidate(...)` | Resolve and open the exact package deployed in the configured slot | `Candidate` carrying baseline run/deployment evidence |
 | `publish_edits(...)` | Save and publish an editor session | `EDITOR_EDIT` child publication |
 | `ManualAdjustmentPolicy.from_rows(...)` | Define relative level/range multipliers | Canonical replayable policy and SHA-256 |
 | `apply_manual_adjustment_policy(...)` | Apply the policy to one clean candidate | `ManualEditReview` with rules, edited model, and portfolio impact |
 | `manual_adjustment_policy_from_candidate(...)` | Recover and verify a policy from a published manual child | `ManualAdjustmentPolicy` |
 | `publish_manual_adjustment(...)` | Reapply the canonical policy and publish it | `MANUAL_EDIT` child publication |
-| `deploy_package(...)` | Deploy exactly the reviewed candidate | Deployment record; stale champion fails |
+| `deploy_model_version(...)` | Deploy exactly the reviewed model version | Deployment record; stale champion fails |
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
 | `run_monitoring_fit(...)` | Score or refit one controlled monitoring preset from a verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
+
+The previous names remain aliases for existing notebooks:
+`build_candidate` is `fit_model`, `publish_candidate` is `save_model_version`,
+`list_candidate_versions` is `list_model_versions`, `open_candidate` is
+`load_model_version`, and `deploy_package` is `deploy_model_version`.
+Arguments and return types are unchanged. New notebook templates use the new
+names. Saving a version does not deploy it; local saves remain `LOCAL_AUDIT`.
 
 A monitoring notebook can open the champion once, prepare the new manifest's
 feature frame in the same column order, and run the presets explicitly:
@@ -452,8 +576,8 @@ uv run python scripts/simulate_model_monitoring.py
 
 Outputs go to ignored local state under `state/monitoring_simulation/`.
 
-`register_model`, `build_candidate`, `publish_candidate`, `publish_edits`,
-`publish_manual_adjustment`, and `deploy_package` call the context write guard.
+`register_model`, `fit_model`, `save_model_version`, `publish_edits`,
+`publish_manual_adjustment`, and `deploy_model_version` call the context write guard.
 Editor/manual publication and deployment require remote mode.
 
 ## Manual business adjustments
@@ -481,11 +605,70 @@ refused when that policy recorded `carry_forward = false`; the trusted publisher
 also reloads the parent and replays the canonical policy before accepting the
 submitted model.
 
+## Validation splitters
+
+`PricingModelSpec.validation` accepts a splitter with `.split(df, y, groups=None)`
+as well as `ValidationSplitConfig`. Set this before calling `register_model`.
+
+For grouped validation:
+
+```python
+from dataclasses import replace
+from sklearn.model_selection import GroupKFold
+
+MODEL = replace(
+    MODEL,
+    validation=GroupKFold(n_splits=5),
+    groups_column="customer_id",
+)
+```
+
+`fit_model` passes the named column as `groups`. It must exist and contain no
+null values. The group column does not have to be a model feature.
+
+For walk-forward validation:
+
+```python
+from sklearn.model_selection import TimeSeriesSplit
+
+MODEL = replace(
+    MODEL,
+    validation=TimeSeriesSplit(n_splits=4, test_size=1_000, gap=100),
+    groups_column=None,
+)
+```
+
+Prepare and save the dataset in chronological order first. `fit_model` does not
+sort it. `TimeSeriesSplit` measures `gap`, `test_size` and `max_train_size` in
+rows. Use a custom splitter for calendar windows or to keep all records from
+one date together.
+
+Custom splitters receive a copy of the full prepared dataframe, the target
+series, and the group series when `groups_column` is set. This includes date
+and business columns outside the model features. Yield pairs of integer row
+positions, not dataframe index labels. Each fold needs nonempty, disjoint
+training and test sets. A row may be tested only once across all folds;
+overlapping test windows and repeated CV are rejected. Training rows may recur
+across folds. Partial test coverage is allowed and reported as `cv_oof_coverage`.
+
+The splitter runs once per build. Fitting replays those exact folds and
+publication saves them in the split artifact. SQL records the splitter class,
+settings and group-column name. Settings come from `get_params()` when present,
+otherwise from attributes matching constructor arguments. Settings must be
+JSON-compatible; NumPy scalars and arrays are supported. Use integer random
+seeds rather than `RandomState` or generator objects.
+
+Use `ValidationSplitConfig.column_kfold(column="cv_fold")` when the dataset
+already contains fold assignments, or `column_holdout(...)` for explicit
+training/test labels. These remain available alongside splitter objects.
+
 ## Data-as-at and manifest identity
 
 `data_as_of` is the date through which source data is complete. Keep a constant,
-non-null date column in the governed frame and set `data_as_of_column`. An
-explicit `data_as_of=` may be used instead; if both exist, they must match.
+non-null date column in the saved dataset and declare it with
+`PricingDataset(..., as_of="data_as_of")`. Legacy specs may still set
+`data_as_of_column`. An explicit `data_as_of=` may be used instead; if both
+exist, they must match.
 
 The manifest records the date and column name, dataset/source names, primary
 keys, column roles, row count, ordered-frame SHA-256, dtypes, statistics, and
@@ -519,8 +702,10 @@ evidence; it does not execute grouping rules.
 ## Publication and duplicate handling
 
 Immediately before SQL staging, Python fingerprints final rating semantics:
-base rate, terms, levels, group mappings, metadata, and relativities. Numbers
-are canonicalized to 10 decimal places and row order is ignored.
+base rate, terms, levels, group mappings, metadata, and relativities. Legacy
+numbers are canonicalized to 10 decimal places and row order is ignored.
+Spline coefficients and their bounds retain full stored precision in the
+fingerprint, so a coefficient-only change creates a different model identity.
 
 The lookup key is:
 

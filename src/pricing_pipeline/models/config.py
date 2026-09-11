@@ -16,6 +16,9 @@ class ValidationSplitConfig:
     column: str | None = None
     train_values: tuple[Any, ...] = ()
     test_values: tuple[Any, ...] = ()
+    splitter_class: str | None = None
+    splitter_params: dict[str, Any] | None = None
+    groups_column: str | None = None
 
     @classmethod
     def kfold(

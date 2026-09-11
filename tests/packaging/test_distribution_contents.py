@@ -74,6 +74,14 @@ MIGRATION_FILES = (
     "V036__model_kind_manifest_relativity.sql",
     "V037__controlled_model_monitoring.sql",
     "V038__manual_edit_model_kind.sql",
+    "V039__schema_descriptions_and_pointer_retirement.sql",
+    "V040__monitoring_baseline_lineage_guards.sql",
+    "V041__seal_monitoring_evidence.sql",
+    "V042__score_numeric_effects_on_log_scale.sql",
+    "V043__exact_spline_segments.sql",
+    "V044__unified_final_model_relativity.sql",
+    "V045__score_per_unit_factors.sql",
+    "V046__full_fit_diagnostics.sql",
 )
 BASE_REQUIREMENTS = (
     "joblib",
@@ -225,6 +233,7 @@ def _expected_resource_names() -> set[str]:
         f"{RESOURCE_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
+        f"{SCAFFOLD_PREFIX}pricing-builder.agent.md",
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
@@ -232,7 +241,7 @@ def _expected_resource_names() -> set[str]:
 
 
 def _assert_resource_inventory(names: set[str]) -> None:
-    assert len(MIGRATION_FILES) == 38
+    assert len(MIGRATION_FILES) == 46
     assert {
         name for name in names if name.startswith(RESOURCE_PREFIX)
     } == _expected_resource_names()

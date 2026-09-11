@@ -1219,6 +1219,7 @@ def _require_manual_policy_replay(
             "offset_contract": parent.bundle.offset_contract,
             "fit_sample_weight_name": parent.bundle.fit_sample_weight_name,
             "export_weight_name": parent.bundle.export_weight_name,
+            "input_transforms": getattr(parent.bundle, "input_transforms", None),
         }
         trusted_receipt = build_superglm_publication_receipt(
             trusted_model,
@@ -1440,6 +1441,8 @@ def export_edited_model(
         parent.bundle.y,
         parent.bundle.export_weight,
         output_path=workbook_write_path,
+        input_transforms=getattr(parent.bundle, "input_transforms", None),
+        continuous_kind=parent.bundle.continuous_kind,
         **export_options,
     )
     workbook_sha256 = sha256_file(workbook_write_path)
@@ -1448,6 +1451,7 @@ def export_edited_model(
         offset_contract=contract,
         fit_sample_weight_name=parent.bundle.fit_sample_weight_name,
         export_weight_name=parent.bundle.export_weight_name,
+        input_transforms=getattr(parent.bundle, "input_transforms", None),
     )
     receipt_write_path = output_dir / "publication_receipt.json"
     receipt_path = final_dir / "publication_receipt.json"
