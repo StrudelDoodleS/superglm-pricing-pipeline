@@ -60,11 +60,12 @@ An explicit `--config` wins, and explicit command-line options win over the
 file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
 notebooks set it to `False`.
 
-The supported workflow is `pricing-pipeline init` (or
-`python -m pricing_pipeline init`), edit `pricing_scaffold.toml`, then
-`pricing-pipeline scaffold`. The source checkout wrapper, `uv run python
-scripts/scaffold_pricing_model.py`, is only an equivalent way to invoke the
-final scaffold command and has the same project and configuration preconditions.
+`init` also seeds `.github/agents/pricing-builder.agent.md`. Select **Pricing
+builder** in Copilot for help configuring data, connections and models.
+Rerunning `init` preserves existing config and agent files, including your edits.
+
+The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes `scaffold`
+with the same project and configuration requirements.
 
 ## Important rules
 

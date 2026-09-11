@@ -269,6 +269,11 @@ supported because most do not have a stable business interpretation.
 
 ## Scaffold configuration
 
+`pricing-pipeline init` seeds `.github/agents/pricing-builder.agent.md` alongside
+the config. Select **Pricing builder** in Copilot for help choosing connections,
+features, transforms, offsets and validation, and applying those choices to the
+notebooks. Existing config and agent files are preserved when you rerun `init`.
+
 At the scaffold root, run `pricing-pipeline init` (or
 `python -m pricing_pipeline init` after installation), then edit the generated
 `pricing_scaffold.toml`:
