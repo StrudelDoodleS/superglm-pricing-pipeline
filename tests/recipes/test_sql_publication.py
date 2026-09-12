@@ -227,3 +227,82 @@ def test_unsupported_recipe_cannot_deduplicate_another_export(fitted_case):
         }
     )
     assert find_equivalent_publication(pricing.engine, build=build) is None
+
+
+@pytest.mark.parametrize("route", ["retry", "equivalent", "preflight"])
+def test_corrupt_canonical_content_rejected_on_existing_publication(fitted_case, route):
+    from pricing_pipeline.modeling.recipes import RecipeError
+    from pricing_pipeline.publishing.identity import find_equivalent_publication
+
+    pricing, model, candidate, glm = fitted_case
+    saved = api.save_model_version(pricing, candidate)
+    other = (
+        api.fit_model(
+            pricing,
+            model=model,
+            frame=api.apply_transforms(model.spec.dataset.df, model.spec.transforms),
+            superglm_model=glm,
+        )
+        if route == "equivalent"
+        else candidate
+    )
+    with pricing.engine.begin() as c:
+        c.execute(text("DROP TRIGGER pricing.TR_MODEL_RECIPE_UPDATE"))
+        c.execute(text("UPDATE pricing.MODEL_RECIPE SET recipe_json='{}'"))
+    with pytest.raises(RecipeError, match="integrity"):
+        if route == "preflight":
+            find_equivalent_publication(
+                pricing.engine,
+                build=candidate.completed_build.model_copy(
+                    update={"model_equivalence_sha256": saved.model_equivalence_sha256}
+                ),
+            )
+        else:
+            api.save_model_version(pricing, other)
+
+
+@pytest.mark.parametrize("deduplicated", [False, True])
+@pytest.mark.parametrize("corruption", [{"recipe_json": "{}"}, {"recipe_format_version": 99}])
+def test_sqlserver_existing_returns_validate_full_recipe(fitted_case, deduplicated, corruption):
+    from types import SimpleNamespace
+
+    from pricing_pipeline.modeling.recipes import RecipeError
+    from pricing_pipeline.publishing import sqlserver
+
+    _, _, candidate, _ = fitted_case
+    build = candidate.completed_build
+    row = {
+        "package_status": "PUBLISHED",
+        "model_id": build.model_id,
+        "model_name": build.model_name,
+        "manifest_id": build.manifest_id,
+        "model_kind": build.model_kind,
+        "recipe_status": build.recipe_status,
+        "recipe_sha256": build.recipe_sha256,
+        "split_set_id": build.split_set_id,
+        "model_equivalence_sha256": build.model_equivalence_sha256,
+        "run_status": "SUCCESS",
+        "recipe_json": build.recipe_capture.canonical,
+        "recipe_format_version": build.recipe_capture.document.format_version,
+    } | corruption
+
+    class Connection:
+        def execute(self, statement, params):
+            assert "recipe.recipe_json" in str(statement)
+            assert "recipe.recipe_format_version" in str(statement)
+            return self
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [row]
+
+    with pytest.raises(RecipeError, match="integrity"):
+        sqlserver._completed_package(
+            Connection(),
+            prepared=SimpleNamespace(build=build),
+            rate_package_id=1,
+            was_existing=True,
+            deduplicated=deduplicated,
+        )

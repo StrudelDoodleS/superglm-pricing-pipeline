@@ -9,15 +9,7 @@ label = "Recipe demo"
 model_type = "frequency"
 deployment_slot = "PRODUCTION"
 target = "claim_count"
-feature_order = [
-    "region",
-    "bonus_malus",
-    "x",
-]
 interactions = []
-transform_order = [
-    "log_exposure",
-]
 scoring = [
     "deviance",
     "nll",
@@ -26,8 +18,6 @@ scoring = [
 fit_mode = "fit_reml"
 spline_export = "exact"
 offset_column = "log_exposure"
-offset_source_column = "exposure"
-offset_label = "log(exposure)"
 export_weight_column = "exposure"
 
 [features.region]

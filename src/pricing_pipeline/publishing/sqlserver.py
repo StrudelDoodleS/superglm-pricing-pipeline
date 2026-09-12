@@ -35,6 +35,7 @@ from pricing_pipeline.publishing.recipes import (
     identity_predicate,
     lock_model,
     recipe_result,
+    validate_recipe_capture,
 )
 from pricing_pipeline.workbench.artifacts import CandidateBundle
 from pricing_pipeline.workbench.submission import EditorSubmissionError, sha256_file
@@ -537,7 +538,7 @@ def _completed_package(
                     mr.manifest_id,
                     split_link.split_set_id,
                     mr.model_kind,
-                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256,
+                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                     mr.model_equivalence_sha256,
                     mr.rating_workbook_path,
                     mr.rating_workbook_sha256,
@@ -597,6 +598,7 @@ def _completed_package(
         raise RuntimeError(
             "published package has incompatible durable lineage: " + ", ".join(mismatches)
         )
+    validate_recipe_capture(row, build.recipe_capture)
     if not deduplicated:
         evidence_params = {"model_run_id": int(row["model_run_id"])}
         dataset_rows = [

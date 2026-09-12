@@ -74,3 +74,96 @@ def test_recipe_constraints_and_same_model_link(fitted_case):
                     "reason": reason,
                 },
             )
+
+
+def test_sqlserver_recipe_foreign_keys_use_matching_declared_types():
+    import re
+
+    from pricing_pipeline.resources import migration_root
+
+    migrations = migration_root()
+    declarations = {}
+    for table, filename in (
+        ("MODEL_RECIPE", "V047__model_recipes.sql"),
+        ("PRICING_MODEL", "V006__model_registry_deployments.sql"),
+        ("MODEL_RUN", "V005__fremtpl_raw_model_run.sql"),
+    ):
+        sql = migrations.joinpath(filename).read_text()
+        body = sql.split(f"CREATE TABLE pricing.{table} (", 1)[1]
+        declarations[table] = re.search(r"\bmodel_id\s+(\w+)", body).group(1).upper()
+    assert set(declarations.values()) == {"BIGINT"}, declarations
+
+
+def test_sqlserver_recipe_guard_is_status_independent_and_null_safe():
+    from pricing_pipeline.resources import migration_root
+
+    sql = migration_root().joinpath("V047__model_recipes.sql").read_text()
+    trigger = sql.split("CREATE OR ALTER TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE", 1)[
+        1
+    ].split("GO", 1)[0]
+    assert "historical.run_status" not in trigger
+    assert "EXCEPT" in trigger  # SQL Server's set comparison treats NULLs as equal.
+    assert trigger.count("COLLATE Latin1_General_100_BIN2") == 4
+    for column in ("model_id", "recipe_id", "recipe_status", "recipe_unavailable_reason"):
+        assert f"historical.{column}" in trigger and f"current_run.{column}" in trigger
+    captured_check = sql.split("recipe_status = 'CAPTURED'", 1)[1].split("OR", 1)[0]
+    assert "model_id IS NOT NULL" in captured_check
+    legacy_check = sql.split("recipe_status = 'LEGACY'", 1)[1].split("OR", 1)[0]
+    assert "model_id" not in legacy_check
+
+
+@pytest.mark.parametrize(
+    "clear_marker",
+    ["run_status='FAILED'", "rate_package_id=NULL", "run_status='FAILED', rate_package_id=NULL"],
+)
+def test_published_recipe_cannot_be_rewritten_after_clearing_markers(fitted_case, clear_marker):
+    from pricing_pipeline import notebook as api
+
+    pricing, _, candidate, _ = fitted_case
+    api.save_model_version(pricing, candidate)
+    try:
+        with pricing.engine.begin() as c:
+            c.execute(text(f"UPDATE pricing.MODEL_RUN SET {clear_marker}"))
+    except IntegrityError:
+        pass  # A schema constraint may already prevent clearing the marker.
+    for assignment in (
+        "recipe_id=NULL,recipe_status='LEGACY'",
+        "model_id=NULL",
+        "recipe_unavailable_reason='changed'",
+    ):
+        with pytest.raises(IntegrityError), pricing.engine.begin() as c:
+            c.execute(text(f"UPDATE pricing.MODEL_RUN SET {assignment}"))
+    with pricing.engine.begin() as c:
+        c.execute(text("UPDATE pricing.MODEL_RUN SET run_status='SUCCESS'"))
+        # Equal nullable fields and unrelated audit updates remain valid.
+        c.execute(
+            text(
+                "UPDATE pricing.MODEL_RUN SET recipe_unavailable_reason=NULL, recipe_id=recipe_id, model_id=model_id"
+            )
+        )
+        assert (
+            c.execute(text("SELECT recipe_status FROM pricing.MODEL_RUN")).scalar_one()
+            == "CAPTURED"
+        )
+
+
+def test_reopening_sqlite_refreshes_the_old_status_dependent_guard(fitted_case, tmp_path):
+    from pricing_pipeline import notebook as api
+
+    pricing, _, candidate, _ = fitted_case
+    api.save_model_version(pricing, candidate)
+    with pricing.engine.begin() as c:
+        c.execute(text("DROP TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE"))
+        c.execute(
+            text("""CREATE TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE
+            BEFORE UPDATE OF recipe_id ON MODEL_RUN WHEN OLD.run_status='SUCCESS'
+            BEGIN SELECT RAISE(ABORT, 'old guard'); END""")
+        )
+    upgraded, _ = open_offline_sqlite(tmp_path / "local")
+    try:
+        with upgraded.begin() as c:
+            c.execute(text("UPDATE pricing.MODEL_RUN SET run_status='FAILED'"))
+        with pytest.raises(IntegrityError), upgraded.begin() as c:
+            c.execute(text("UPDATE pricing.MODEL_RUN SET recipe_id=NULL,recipe_status='LEGACY'"))
+    finally:
+        upgraded.dispose()

@@ -1364,8 +1364,12 @@ def test_fit_contract_preserves_baseline_run_identity(tmp_path, assignment):
         """)
         )
 
+    # Ownership also belongs to the immutable recipe link, whose guard may run first.
+    expected_error = "baseline run.*lineage identity"
+    if assignment == "model_id = 95":
+        expected_error += "|published run recipe links are immutable"
     with (
-        pytest.raises(IntegrityError, match="baseline run.*lineage identity"),
+        pytest.raises(IntegrityError, match=expected_error),
         engine.begin() as connection,
     ):
         connection.execute(

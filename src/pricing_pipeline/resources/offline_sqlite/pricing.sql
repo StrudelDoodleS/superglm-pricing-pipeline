@@ -1020,10 +1020,10 @@ CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RECIPE_DELETE
 BEFORE DELETE ON MODEL_RECIPE BEGIN
     SELECT RAISE(ABORT, 'model recipes are immutable');
 END;
-CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE
-BEFORE UPDATE OF recipe_id, recipe_status, recipe_unavailable_reason ON MODEL_RUN
-WHEN OLD.run_status IN ('SUCCESS', 'SUCCEEDED')
- AND (OLD.recipe_id IS NOT NEW.recipe_id OR OLD.recipe_status IS NOT NEW.recipe_status
+DROP TRIGGER IF EXISTS pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE;
+CREATE TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE
+BEFORE UPDATE OF model_id, recipe_id, recipe_status, recipe_unavailable_reason ON MODEL_RUN
+WHEN (OLD.model_id IS NOT NEW.model_id OR OLD.recipe_id IS NOT NEW.recipe_id OR OLD.recipe_status IS NOT NEW.recipe_status
       OR OLD.recipe_unavailable_reason IS NOT NEW.recipe_unavailable_reason)
 BEGIN
     SELECT RAISE(ABORT, 'published run recipe links are immutable');

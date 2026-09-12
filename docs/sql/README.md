@@ -615,7 +615,11 @@ model/hash pairs; matching hashes also require equal canonical content. Revertin
 to an earlier recipe reuses its revision. Same-model foreign keys and immutable
 row/link guards prevent changing published recipe lineage.
 `TR_MODEL_RECIPE_IMMUTABLE` rejects recipe updates/deletes.
-`TR_MODEL_RUN_RECIPE_IMMUTABLE` protects published run recipe links.
+`TR_MODEL_RUN_RECIPE_IMMUTABLE` fixes recipe evidence and model ownership at run
+insertion. Changing status or package linkage cannot unlock those fields. Captured
+rows require a non-null model owner; historical legacy rows may retain null owners.
+Every accepted captured recipe match compares stored canonical JSON and format
+with the verified build snapshot, including retries and equivalence returns.
 
 V047 replaces the old unique rating-equivalence index with a lookup index.
 Complete publication equality now includes recipe status/hash and validation

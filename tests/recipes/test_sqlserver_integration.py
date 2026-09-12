@@ -117,13 +117,40 @@ def test_live_concurrent_save_and_views(live_candidate):
                 {"run": results[0].model_run_id},
             ).all()
             assert rows and set(rows) == {(1, candidate.recipe.sha256, "CAPTURED")}
-    with pytest.raises(DBAPIError), context.engine.begin() as c:
+    params = {"run": results[0].model_run_id}
+    with context.engine.begin() as c:
         c.execute(
             text(
-                f"UPDATE {schema}.MODEL_RUN SET recipe_id=NULL,recipe_status='LEGACY' WHERE model_run_id=:run"
+                f"UPDATE {schema}.MODEL_RUN SET run_status='FAILED',rate_package_id=NULL WHERE model_run_id=:run"
             ),
-            {"run": results[0].model_run_id},
+            params,
         )
+    try:
+        for assignment in (
+            "recipe_id=NULL,recipe_status='LEGACY'",
+            "model_id=NULL",
+            "recipe_unavailable_reason='changed'",
+        ):
+            with pytest.raises(DBAPIError), context.engine.begin() as c:
+                c.execute(
+                    text(f"UPDATE {schema}.MODEL_RUN SET {assignment} WHERE model_run_id=:run"),
+                    params,
+                )
+        with context.engine.begin() as c:
+            c.execute(
+                text(
+                    f"UPDATE {schema}.MODEL_RUN SET recipe_unavailable_reason=NULL, model_id=model_id WHERE model_run_id=:run"
+                ),
+                params,
+            )
+    finally:
+        with context.engine.begin() as c:
+            c.execute(
+                text(
+                    f"UPDATE {schema}.MODEL_RUN SET run_status='SUCCESS',rate_package_id=:package WHERE model_run_id=:run"
+                ),
+                params | {"package": results[0].rate_package_id},
+            )
 
 
 def test_live_concurrent_different_recipes_and_rollback(live_candidate):

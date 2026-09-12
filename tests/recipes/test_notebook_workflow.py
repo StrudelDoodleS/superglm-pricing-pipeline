@@ -90,15 +90,8 @@ def test_generated_configuration_authors_exports_and_loads(grouped_model_case, t
     assert refreshed.model_run_id != original.model_run_id
     assert refreshed.manifest_id != original.manifest_id
 
-    challenger = api.ModelRecipe(
-        recipe.document.model_copy(
-            update={
-                "features": recipe.document.to_dict()["features"] | {"z": {"type": "Numeric"}},
-                "feature_order": (*recipe.document.feature_order, "z"),
-            }
-        )
-    )
-    challenger_path = challenger.save(model_dir / "challenger.toml")
+    challenger_path = model_dir / "challenger.toml"
+    challenger_path.write_text(path.read_text() + '\n[features.z]\ntype = "Numeric"\n')
     namespace["RECIPE_PATH"] = challenger_path
     exec(compile(config, "generated-challenger-config", "exec"), namespace)
     saved_challenger = fit_and_save()

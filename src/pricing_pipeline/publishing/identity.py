@@ -12,7 +12,11 @@ from sqlalchemy import text
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.spec import ApprovedModelBuild
-from pricing_pipeline.publishing.recipes import identity_params, identity_predicate
+from pricing_pipeline.publishing.recipes import (
+    identity_params,
+    identity_predicate,
+    validate_recipe_capture,
+)
 
 
 class ModelEquivalenceError(RuntimeError):
@@ -139,7 +143,7 @@ def find_equivalent_publication(
                         split_link.manifest_id AS split_manifest_id,
                         split_link.split_set_id,
                         mr.model_kind,
-                        mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256,
+                        mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                         mr.model_equivalence_sha256,
                         mr.rating_workbook_path,
                         mr.mlflow_run_id,
@@ -189,6 +193,7 @@ def find_equivalent_publication(
         if not rows:
             return None
         row = rows[0]
+        validate_recipe_capture(row, build.recipe_capture)
         split_count = connection.execute(
             text(
                 f"SELECT COUNT(*) FROM {schemas.mlops}.MODEL_RUN_SPLIT_SET WHERE model_run_id=:run AND dataset_role='training' AND split_role='validation'"

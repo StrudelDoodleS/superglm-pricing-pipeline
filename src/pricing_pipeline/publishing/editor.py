@@ -46,6 +46,7 @@ from pricing_pipeline.publishing.publish import (
     publish_candidate,
 )
 from pricing_pipeline.publishing.rating_tables import export_rating_tables
+from pricing_pipeline.publishing.recipes import validate_recipe_capture
 from pricing_pipeline.workbench.artifacts import (
     CandidateArtifactError,
     CandidateArtifactMetadata,
@@ -707,6 +708,7 @@ def _resolve_existing_editor_publication(
             mr.rating_workbook_sha256,
             split_link.split_set_id,
             mr.model_source_sha256,
+            mr.recipe_status, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
             mr.candidate_artifact_path,
             mr.candidate_artifact_sha256,
             mr.candidate_artifact_format,
@@ -718,6 +720,7 @@ def _resolve_existing_editor_publication(
           ON pm.model_id = rp.model_id
         LEFT JOIN {schemas.pricing}.MODEL_RUN AS mr
           ON mr.rate_package_id = rp.rate_package_id
+        LEFT JOIN {schemas.pricing}.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
         LEFT JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
           ON manifest.manifest_id = mr.manifest_id
         LEFT JOIN {schemas.mlops}.MODEL_RUN_SPLIT_SET AS split_link
@@ -819,6 +822,7 @@ def _resolve_existing_editor_publication(
         raise EditorSubmissionError(
             f"existing editor publication candidate artifact failed verification: {exc}"
         ) from exc
+    validate_recipe_capture(row, bundle.recipe_capture)
     expected_bundle = {
         **expected_lineage,
         "model_version": row.get("model_version"),

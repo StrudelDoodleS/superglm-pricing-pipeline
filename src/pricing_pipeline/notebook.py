@@ -336,6 +336,9 @@ class RegisteredModel:
 class BuiltCandidate:
     model: RegisteredModel
     completed_build: ApprovedModelBuild
+    _retained_recipe_capture: tuple[str, str, RecipeCapture] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def metrics(self) -> dict[str, float]:
@@ -351,18 +354,33 @@ class BuiltCandidate:
             raise UnsupportedRecipeError(
                 "recipe unavailable: build has no verified candidate artifact"
             )
-        bundle = load_candidate_bundle(
-            build.candidate_artifact_path,
-            expected_sha256=build.candidate_artifact_sha256,
-            expected_size_bytes=build.candidate_artifact_size_bytes,
-            expected_format=build.candidate_artifact_format,
-            expected_python_version=build.candidate_python_version,
-            expected_superglm_version=build.candidate_superglm_version,
-            allowed_root=Path(build.candidate_artifact_path).parent,
-        )
-        if bundle.recipe_capture != build.recipe_capture:
-            raise ValueError("candidate artifact recipe does not match completed build")
-        capture = bundle.recipe_capture
+        artifact = Path(build.candidate_artifact_path)
+        retained = self._retained_recipe_capture
+        if (
+            retained is not None
+            and not artifact.exists()
+            and not any(path.is_symlink() for path in (artifact, *artifact.parents))
+        ):
+            path, digest, capture = retained
+            if (
+                path != build.candidate_artifact_path
+                or digest != build.candidate_artifact_sha256
+                or capture != build.recipe_capture
+            ):
+                raise ValueError("retained recipe evidence does not match completed build")
+        else:
+            bundle = load_candidate_bundle(
+                build.candidate_artifact_path,
+                expected_sha256=build.candidate_artifact_sha256,
+                expected_size_bytes=build.candidate_artifact_size_bytes,
+                expected_format=build.candidate_artifact_format,
+                expected_python_version=build.candidate_python_version,
+                expected_superglm_version=build.candidate_superglm_version,
+                allowed_root=Path(build.candidate_artifact_path).parent,
+            )
+            if bundle.recipe_capture != build.recipe_capture:
+                raise ValueError("candidate artifact recipe does not match completed build")
+            capture = bundle.recipe_capture
         if capture.status != "CAPTURED":
             raise UnsupportedRecipeError(
                 capture.unavailable_reason
@@ -857,12 +875,32 @@ def save_model_version(
             completed_build=candidate.completed_build,
             created_by=candidate.completed_build.created_by,
         )
-    return publish_completed_model_build(
+    # The remote publisher may remove a redundant incoming artifact directory.
+    # Retain only evidence checked against those bytes before the cleanup occurs.
+    verified_recipe = (
+        candidate.recipe if candidate.completed_build.recipe_status == "CAPTURED" else None
+    )
+    result = publish_completed_model_build(
         pricing.engine,
         settings=pricing.settings,
         model_config=candidate.model.config,
         completed_build=candidate.completed_build,
     )
+    build = candidate.completed_build
+    if (
+        verified_recipe is not None
+        and result.was_existing
+        and result.deduplicated
+        and not Path(build.candidate_artifact_path).exists()
+    ):
+        if result.recipe_status != "CAPTURED" or result.recipe_sha256 != verified_recipe.sha256:
+            raise ValueError("published recipe evidence does not match verified candidate")
+        object.__setattr__(
+            candidate,
+            "_retained_recipe_capture",
+            (build.candidate_artifact_path, build.candidate_artifact_sha256, build.recipe_capture),
+        )
+    return result
 
 
 def load_model_version(

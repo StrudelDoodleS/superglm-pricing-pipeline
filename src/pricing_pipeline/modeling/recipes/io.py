@@ -110,7 +110,16 @@ def save(document, path, *, replace=False):
     if target.exists() and not replace:
         raise FileExistsError(target)
     target.parent.mkdir(parents=True, exist_ok=True)
-    content = COMMENTS + tomli_w.dumps(_nulls(document.to_dict(), encode=True))
+    payload = document.to_dict()
+    # Table order is the editable source of truth; canonical evidence still keeps
+    # explicit sequences. Existing files may continue to supply explicit orders.
+    for name in ("feature", "transform"):
+        order = payload.pop(f"{name}_order")
+        payload[f"{name}s"] = {key: payload[f"{name}s"][key] for key in order}
+    if payload["offset_column"] in payload["transforms"]:
+        payload.pop("offset_source_column")
+        payload.pop("offset_label")
+    content = COMMENTS + tomli_w.dumps(_nulls(payload, encode=True))
     descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     temporary = Path(name)
     try:

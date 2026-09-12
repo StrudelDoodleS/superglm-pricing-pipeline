@@ -146,8 +146,13 @@ Reload with `MODEL, glm = ModelRecipe.load(path).build(dataset=dataset)`, prepar
 `df = apply_transforms(dataset.df, MODEL.transforms)`, and use the existing
 register, fit and save calls. Preserve groups, singleton levels, ordered positions,
 special levels and basis settings. Constructor defaults are explicit; TOML uses
-`{ none = true }` for unset options. Keep feature_order in sync when adding a
-feature. Inspect the installed API before editing constructor options.
+`{ none = true }` for unset options. Add one feature table to add a feature; table
+order determines feature/transform order in new exports. Transform-derived offset
+source/label fields are omitted, so edit the transform source in one place. Keep
+explicit offset contracts that have no transform. Older files may contain explicit
+order arrays; remove them to adopt table order. Preserve special_domain when it
+distinguishes reporting labels from raw special matching declarations. Inspect
+the installed API before editing constructor options.
 
 The pipeline recaptures final Python overrides at fit entry. Do not automatically
 apply an old routine_groupings.joblib in recipe mode. Custom Python objects may

@@ -43,6 +43,7 @@ from pricing_pipeline.publishing.recipes import (
     identity_params,
     identity_predicate,
     run_recipe_params,
+    validate_recipe_capture,
 )
 from pricing_pipeline.workbench.submission import sha256_file
 
@@ -441,7 +442,7 @@ def _existing_local_publication(
                     mr.run_status,
                     mr.dag_id,
                     mr.model_kind,
-                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256,
+                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                     mr.model_equivalence_sha256,
                     mr.rating_workbook_sha256,
                     mr.airflow_run_id,
@@ -1151,6 +1152,7 @@ def _publication_result(
     was_existing: bool,
     deduplicated: bool = False,
 ) -> CompletedModelPublishResult:
+    validate_recipe_capture(package_row, prepared.build.recipe_capture)
     model_run_id = package_row["model_run_id"]
     if model_run_id is None:
         raise RuntimeError(

@@ -758,10 +758,16 @@ saved = save_model_version(pricing, candidate)
 `load` and `build` reconstruct an unfitted model without SQL access. `save` writes
 only TOML and requires `replace=True` to replace a file. Constructor defaults are
 explicit; `{ none = true }` records an unset option because TOML has no null.
-Feature and transform order are explicit. A challenger added in TOML must also
-appear in `feature_order`. Group entries retain every member, including singleton
+Feature and transform table order determines construction order. Add a challenger
+with one new `[features.name]` table. Transform-derived offset source/label fields
+are omitted: changing the transform source updates that offset contract on load.
+Explicit offset contracts without a transform remain in the file. Older documents
+with explicit order arrays still load; remove those arrays to use table order.
+Group entries retain every member, including singleton
 groups; typed domains and ordered numeric positions remain separate from grouping
-labels. Specials remain free levels outside the ordered smooth.
+labels. Specials remain free levels outside the ordered smooth. When a special
+uses a different typed domain label, `special_domain` preserves that reporting
+label alongside its raw matching declaration.
 
 The actual configuration is captured at the validated fit boundary, before CV or
 full fitting. Python overrides affect that snapshot; later changes to Python

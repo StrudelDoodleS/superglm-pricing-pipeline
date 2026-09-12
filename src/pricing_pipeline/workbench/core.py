@@ -11,6 +11,7 @@ from sqlalchemy import text
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.publishing.recipes import validate_recipe_capture
 from pricing_pipeline.workbench.artifacts import CandidateBundle, load_candidate_bundle
 
 _FRIENDLY_COLUMNS = [
@@ -203,6 +204,7 @@ class Workbench:
             "recipe_status", "LEGACY"
         ) or bundle.recipe_capture.sha256 != row.get("recipe_sha256"):
             raise CandidateLineageError("candidate bundle recipe does not match SQL lineage")
+        validate_recipe_capture(row, bundle.recipe_capture)
         if bundle.manifest_id != row.get("manifest_id"):
             raise CandidateLineageError("candidate bundle manifest_id does not match SQL lineage")
         if bundle.split_set_id != row.get("split_set_id"):
@@ -260,7 +262,7 @@ class Workbench:
                 pm.model_name,
                 mr.model_version,
                 mr.model_kind,
-                mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256,
+                mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                 mr.model_equivalence_sha256,
                 mr.export_id,
                 rp.package_version,

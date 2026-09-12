@@ -37,6 +37,28 @@ def lock_model(connection, model_id):
         raise RecipeError(f"model_id: registered model {model_id} does not exist")
 
 
+def validate_recipe_content(row, *, recipe: ModelRecipe):
+    """A matching digest is insufficient: require the exact canonical document."""
+    if (
+        row.get("recipe_sha256") != recipe.sha256
+        or row.get("recipe_json") != recipe.canonical_json
+        or row.get("recipe_format_version") != recipe.document.format_version
+    ):
+        raise RecipeError(
+            "stored recipe checksum matches different canonical content or format; recipe integrity failure"
+        )
+
+
+def validate_recipe_capture(row, capture):
+    """Validate a SQL recipe match against independently verified build evidence."""
+    if row.get("recipe_status", "LEGACY") != capture.status:
+        raise RecipeError(
+            "stored recipe status disagrees with captured evidence; recipe integrity failure"
+        )
+    if capture.status == "CAPTURED":
+        validate_recipe_content(row, recipe=ModelRecipe(capture.document))
+
+
 def resolve_recipe(
     connection, *, model_id: int, recipe: ModelRecipe, created_by: str
 ) -> StoredRecipe:
@@ -54,13 +76,7 @@ def resolve_recipe(
         .one_or_none()
     )
     if row is not None:
-        if (
-            row["recipe_json"] != recipe.canonical_json
-            or row["recipe_format_version"] != recipe.document.format_version
-        ):
-            raise RecipeError(
-                "stored recipe checksum matches different canonical content; recipe integrity failure"
-            )
+        validate_recipe_content(row, recipe=recipe)
         return StoredRecipe(
             int(row["recipe_id"]), int(row["recipe_revision"]), row["recipe_sha256"]
         )

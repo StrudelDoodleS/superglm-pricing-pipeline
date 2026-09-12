@@ -771,6 +771,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
     field_name,
     different_value,
 ):
+    from pricing_pipeline.modeling.recipes import RecipeCapture
     from pricing_pipeline.publishing import editor
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
@@ -786,7 +787,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
         "export_id": "editor__submission_1",
     }
     sql_lineage = {**expected, **identity}
-    bundle_lineage = {**expected, **identity}
+    bundle_lineage = {**expected, **identity, "recipe_capture": RecipeCapture()}
     if lineage_owner == "sql":
         sql_lineage[field_name] = different_value
     else:

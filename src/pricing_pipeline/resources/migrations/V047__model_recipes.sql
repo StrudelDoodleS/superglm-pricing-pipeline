@@ -1,6 +1,6 @@
 CREATE TABLE pricing.MODEL_RECIPE (
     recipe_id BIGINT IDENTITY(1, 1) NOT NULL,
-    model_id INT NOT NULL,
+    model_id BIGINT NOT NULL,
     recipe_revision INT NOT NULL,
     recipe_sha256 CHAR(64) COLLATE Latin1_General_100_BIN2 NOT NULL,
     recipe_format_version INT NOT NULL,
@@ -29,7 +29,7 @@ ALTER TABLE pricing.MODEL_RUN ADD
 GO
 ALTER TABLE pricing.MODEL_RUN ADD
     CONSTRAINT CK_MODEL_RUN_RECIPE_STATUS CHECK (
-        (recipe_status = 'CAPTURED' AND recipe_id IS NOT NULL AND recipe_unavailable_reason IS NULL)
+        (recipe_status = 'CAPTURED' AND model_id IS NOT NULL AND recipe_id IS NOT NULL AND recipe_unavailable_reason IS NULL)
         OR (recipe_status = 'LEGACY' AND recipe_id IS NULL AND recipe_unavailable_reason IS NULL)
         OR (recipe_status = 'UNSUPPORTED' AND recipe_id IS NULL
             AND recipe_unavailable_reason IS NOT NULL AND LEN(LTRIM(RTRIM(recipe_unavailable_reason))) > 0)
@@ -58,11 +58,13 @@ ON pricing.MODEL_RUN AFTER UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
+    -- Recipe evidence and its owner are fixed at insertion. Status/package changes
+    -- cannot remove this protection; EXCEPT also compares nullable fields safely.
     IF EXISTS (
-        SELECT historical.model_run_id, historical.recipe_id, historical.recipe_status, historical.recipe_unavailable_reason
-        FROM deleted AS historical WHERE historical.run_status = 'SUCCESS'
+        SELECT historical.model_run_id, historical.model_id, historical.recipe_id, historical.recipe_status COLLATE Latin1_General_100_BIN2, historical.recipe_unavailable_reason COLLATE Latin1_General_100_BIN2
+        FROM deleted AS historical
         EXCEPT
-        SELECT current_run.model_run_id, current_run.recipe_id, current_run.recipe_status, current_run.recipe_unavailable_reason
+        SELECT current_run.model_run_id, current_run.model_id, current_run.recipe_id, current_run.recipe_status COLLATE Latin1_General_100_BIN2, current_run.recipe_unavailable_reason COLLATE Latin1_General_100_BIN2
         FROM inserted AS current_run
     )
         THROW 51048, 'Published run recipe links are immutable.', 1;

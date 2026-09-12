@@ -206,3 +206,43 @@ def test_explicit_knots_boundary_policy_and_constraint_survive_fitting(
     )
     assert ModelRecipe.from_model(glm, spec=spec).sha256 == recipe.sha256
     assert ModelRecipe.from_model(rebuilt, spec=rebuilt_spec).sha256 == recipe.sha256
+
+
+def test_typed_special_domain_labels_survive_public_roundtrip(grouped_model_case, tmp_path):
+    import pandas as pd
+    from superglm import OrderedCategorical
+
+    dataset, spec, _ = grouped_model_case
+    df = dataset.df.copy()
+    df["x"] = pd.Series(["A", "B", "C", "D", 9.0] * 84, dtype=object)
+    dataset = api.PricingDataset(
+        df, name=dataset.name, source=dataset.source, key="id", as_of="as_of"
+    )
+    spec = replace(spec, dataset=dataset, features=("x",))
+    glm = SuperGLM(
+        features={
+            "x": OrderedCategorical(
+                order=["A", "B", "C", "D", 9.0], specials=[9], base="A", basis=Spline("cr", k=3)
+            )
+        },
+        selection_penalty=0.0,
+        retain_fit_state=False,
+    )
+    recipe = ModelRecipe.from_model(glm, spec=spec)
+    path = recipe.save(tmp_path / "typed-special.toml")
+    rebuilt_spec, rebuilt = ModelRecipe.load(path).build(dataset=dataset)
+    df = api.apply_transforms(dataset.df, spec.transforms)
+    for model in (glm, rebuilt):
+        model.fit_reml(df[["x"]], df.claim_count, offset=df.log_exposure)
+    before = [(type(level), repr(level)) for level in glm.relativities()["x"].level]
+    after = [(type(level), repr(level)) for level in rebuilt.relativities()["x"].level]
+    assert before == after
+    assert before[-1] == (float, "9.0")
+    np.testing.assert_allclose(
+        glm.predict(df[["x"]], offset=df.log_exposure),
+        rebuilt.predict(df[["x"]], offset=df.log_exposure),
+    )
+    assert ModelRecipe.from_model(glm, spec=spec).sha256 == recipe.sha256
+    assert ModelRecipe.from_model(rebuilt, spec=rebuilt_spec).sha256 == recipe.sha256
+    fitted_path = ModelRecipe.from_model(glm, spec=spec).save(tmp_path / "fitted-special.toml")
+    assert ModelRecipe.load(fitted_path).sha256 == recipe.sha256

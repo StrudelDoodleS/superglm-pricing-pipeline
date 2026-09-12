@@ -353,6 +353,12 @@ def encode_feature(feature, path):
                 specials=_labels(feature._special_raw, path + ".specials"),
                 basis=encode_feature(feature._spline_obj, path + ".basis"),
             )
+            display = _labels(feature._special_display, path + ".special_domain")
+            if any(
+                type(raw) is not type(label) or raw != label
+                for raw, label in zip(feature._special_raw, display, strict=True)
+            ):
+                result["special_domain"] = display
         return result
     if kind in SPLINE_KINDS:
         result = {"type": "Spline", "kind": SPLINE_KINDS[kind]}
@@ -386,6 +392,12 @@ def encode_feature(feature, path):
     raise UnsupportedRecipeError(f"{path}: unsupported {kind.__module__}.{kind.__qualname__}")
 
 
+def _matches_special(label, raw):
+    return str(label) == str(raw) or (
+        not isinstance(label, str) and not isinstance(raw, str) and label == raw
+    )
+
+
 def decode_feature(data, path):
     if not isinstance(data, dict):
         raise RecipeError(f"{path}: expected a feature table")
@@ -402,7 +414,7 @@ def decode_feature(data, path):
         allowed = (
             (*common, "levels", "unseen")
             if name == "Categorical"
-            else (*common, "values", "order", "basis", "specials")
+            else (*common, "values", "order", "basis", "specials", "special_domain")
         )
         kwargs = _checked(data, allowed, path)
         kwargs.pop("type")
@@ -426,6 +438,35 @@ def decode_feature(data, path):
             kwargs["values"] = {v["level"]: v["value"] for v in entries}
         if kwargs.get("specials") is not None:
             kwargs["specials"] = _labels(kwargs["specials"], path + ".specials")
+        if "special_domain" in kwargs:
+            domain = _labels(kwargs.pop("special_domain"), path + ".special_domain")
+            specials = kwargs.get("specials") or []
+            if len(domain) != len(specials) or any(
+                not _matches_special(label, raw)
+                for raw, label in zip(specials, domain, strict=False)
+            ):
+                raise RecipeError(
+                    f"{path}.special_domain: must match each declared special in order"
+                )
+            # Public construction derives display labels from the full domain and
+            # removes special positions before building the smooth. Their numeric
+            # placeholders therefore have no fitting meaning.
+            if "values" in kwargs:
+                smooth = {
+                    level: value
+                    for level, value in kwargs["values"].items()
+                    if not any(_matches_special(level, raw) for raw in specials)
+                }
+                kwargs["values"] = smooth | {label: 0.0 for label in domain}
+            elif "order" in kwargs:
+                smooth = [
+                    level
+                    for level in kwargs["order"]
+                    if not any(_matches_special(level, raw) for raw in specials)
+                ]
+                kwargs["order"] = smooth + domain
+            else:
+                raise RecipeError(f"{path}.special_domain: requires values or order")
         if "basis" in kwargs:
             kwargs["basis"] = decode_feature(kwargs["basis"], path + ".basis")
         return _construct(OrderedCategorical, kwargs, path)

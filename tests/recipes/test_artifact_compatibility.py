@@ -56,3 +56,72 @@ def test_legacy_candidate_without_artifact_has_clear_recipe_error(fitted_case):
     )
     with pytest.raises(UnsupportedRecipeError, match="recipe unavailable.*artifact"):
         _ = legacy.recipe
+
+
+def test_recipe_remains_verified_after_remote_equivalence_cleanup(
+    fitted_case, tmp_path, monkeypatch
+):
+    from pricing_pipeline import notebook as api
+    from pricing_pipeline.modeling.recipes import ModelRecipe
+    from pricing_pipeline.orchestration.publish_completed_build import (
+        _discard_redundant_completed_build_attempt,
+    )
+
+    pricing, model, first, glm = fitted_case
+    saved = api.save_model_version(pricing, first)
+    incoming = api.fit_model(
+        pricing,
+        model=model,
+        frame=api.apply_transforms(model.spec.dataset.df, model.spec.transforms),
+        superglm_model=glm,
+    )
+    canonical_result = replace(saved, was_existing=True, deduplicated=True)
+    from pathlib import Path
+
+    artifact = Path(incoming.completed_build.candidate_artifact_path)
+
+    def publish(engine, *, completed_build, settings, **kwargs):
+        _discard_redundant_completed_build_attempt(
+            completed_build,
+            publish_result=canonical_result,
+            artifact_root=settings.workbench_artifact_root,
+        )
+        assert not artifact.exists()
+        return canonical_result
+
+    monkeypatch.setattr(api, "publish_completed_model_build", publish)
+    assert api.save_model_version(replace(pricing, mode="remote"), incoming) is canonical_result
+    exported = incoming.recipe.save(tmp_path / "after-save.toml")
+    assert ModelRecipe.load(exported).sha256 == incoming.completed_build.recipe_sha256
+    # Retained evidence cannot conceal a newly present but corrupt artifact.
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"tampered")
+    with pytest.raises(CandidateArtifactError):
+        _ = incoming.recipe
+
+
+def test_remote_save_does_not_retain_unverified_recipe(fitted_case, monkeypatch):
+    from pathlib import Path
+
+    from pricing_pipeline import notebook as api
+
+    pricing, _, candidate, _ = fitted_case
+    Path(candidate.completed_build.candidate_artifact_path).write_bytes(b"tampered")
+    monkeypatch.setattr(
+        api,
+        "publish_completed_model_build",
+        lambda *a, **k: pytest.fail("published unverified recipe"),
+    )
+    with pytest.raises(CandidateArtifactError):
+        api.save_model_version(replace(pricing, mode="remote"), candidate)
+    with pytest.raises(CandidateArtifactError):
+        _ = candidate.recipe
+
+
+def test_missing_artifact_without_legitimate_cleanup_has_no_recipe_fallback(fitted_case):
+    from pathlib import Path
+
+    _, _, candidate, _ = fitted_case
+    Path(candidate.completed_build.candidate_artifact_path).unlink()
+    with pytest.raises(CandidateArtifactError):
+        _ = candidate.recipe
