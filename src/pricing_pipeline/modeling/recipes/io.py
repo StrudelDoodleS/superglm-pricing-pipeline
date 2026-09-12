@@ -22,7 +22,7 @@ COMMENTS = """# Declared model choices for refitting. SQL assigns revisions when
 def _nulls(value, *, encode):
     if encode and value is None:
         return {"none": True}
-    if not encode and value == {"none": True}:
+    if not encode and isinstance(value, dict) and set(value) == {"none"} and value["none"] is True:
         return None
     if isinstance(value, dict):
         return {key: _nulls(item, encode=encode) for key, item in value.items()}

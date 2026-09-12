@@ -9,13 +9,13 @@ from pricing_pipeline.models.config import ValidationSplitConfig
 
 @pytest.fixture
 def recipe_data():
-    return dict(
-        name="CLAIM_FREQUENCY",
-        label="Claim frequency",
-        model_type="frequency",
-        deployment_slot="PRODUCTION",
-        target="claim_count",
-        features={
+    return {
+        "name": "CLAIM_FREQUENCY",
+        "label": "Claim frequency",
+        "model_type": "frequency",
+        "deployment_slot": "PRODUCTION",
+        "target": "claim_count",
+        "features": {
             "region": {
                 "type": "Categorical",
                 "base": "A",
@@ -23,8 +23,8 @@ def recipe_data():
             },
             "x": {"type": "Numeric"},
         },
-        estimator={"family": "poisson", "retain_fit_state": False},
-    )
+        "estimator": {"family": "poisson", "retain_fit_state": False},
+    }
 
 
 @pytest.fixture
@@ -71,3 +71,21 @@ def grouped_model_case():
         validation=ValidationSplitConfig.kfold(n_splits=3),
     )
     return dataset, spec, SuperGLM(features=features, selection_penalty=0.0, retain_fit_state=False)
+
+
+@pytest.fixture
+def fitted_case(grouped_model_case, tmp_path):
+    dataset, spec, glm = grouped_model_case
+    pricing = api.connect(mode="local", local_root=tmp_path / "local")
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "definition.py").write_text("# model definition\n")
+    model = api.register_model(pricing, spec, source_root=source)
+    candidate = api.fit_model(
+        pricing,
+        model=model,
+        frame=api.apply_transforms(dataset.df, spec.transforms),
+        superglm_model=glm,
+    )
+    yield pricing, model, candidate, glm
+    pricing.engine.dispose()

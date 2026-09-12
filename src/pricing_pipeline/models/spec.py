@@ -8,6 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture
+
 from pricing_pipeline.models.kinds import normalise_model_kind
 
 
@@ -19,6 +21,23 @@ class ApprovedModelBuild(BaseModel):
     """Immutable notebook output passed unchanged into local or remote publication."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    recipe_capture: RecipeCapture = Field(default_factory=RecipeCapture)
+
+    @field_validator("recipe_capture", mode="before")
+    @classmethod
+    def _recipe_capture(cls, value):
+        return RecipeCapture.from_payload(
+            value.to_payload() if isinstance(value, RecipeCapture) else value
+        )
+
+    @property
+    def recipe_status(self) -> str:
+        return self.recipe_capture.status
+
+    @property
+    def recipe_sha256(self) -> str | None:
+        return self.recipe_capture.sha256
 
     model_id: int
     model_name: str

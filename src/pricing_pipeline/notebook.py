@@ -7,6 +7,7 @@ identifiers, audit records, artifact locations, and publication plumbing.
 from __future__ import annotations
 
 import getpass
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -56,6 +57,8 @@ from pricing_pipeline.modeling.level_grouping_artifact import (
 from pricing_pipeline.modeling.level_grouping_artifact import (
     load_level_groupings as _load_level_groupings,
 )
+from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, UnsupportedRecipeError
+from pricing_pipeline.modeling.recipes.schema import capture_environment
 from pricing_pipeline.modeling.manual_adjustment import (
     ManualAdjustmentPolicy,
     ManualAdjustmentRule,
@@ -337,6 +340,31 @@ class BuiltCandidate:
     @property
     def metrics(self) -> dict[str, float]:
         return dict(self.completed_build.metrics)
+
+    @property
+    def recipe(self) -> ModelRecipe:
+        """Read the immutable recipe verified against this build's artifact."""
+        from pricing_pipeline.workbench.artifacts import load_candidate_bundle
+
+        build = self.completed_build
+        bundle = load_candidate_bundle(
+            build.candidate_artifact_path,
+            expected_sha256=build.candidate_artifact_sha256,
+            expected_size_bytes=build.candidate_artifact_size_bytes,
+            expected_format=build.candidate_artifact_format,
+            expected_python_version=build.candidate_python_version,
+            expected_superglm_version=build.candidate_superglm_version,
+            allowed_root=Path(build.candidate_artifact_path).parent,
+        )
+        if bundle.recipe_capture != build.recipe_capture:
+            raise ValueError("candidate artifact recipe does not match completed build")
+        capture = bundle.recipe_capture
+        if capture.status != "CAPTURED":
+            raise UnsupportedRecipeError(
+                capture.unavailable_reason
+                or "recipe unavailable: legacy build has no captured constructor recipe"
+            )
+        return ModelRecipe(capture.document)
 
 
 def _required_text(value: Any, field_name: str) -> str:
@@ -721,6 +749,22 @@ def fit_model(
                 row_count=len(frame),
             ).folds
         )
+    # Own the final declared choices after input validation and before CV or full fitting.
+    spec = replace(spec)
+    superglm_model = superglm_model.clone_unfitted()
+    try:
+        recipe_capture = RecipeCapture.captured(
+            ModelRecipe.from_model(superglm_model, spec=spec).document
+        )
+    except UnsupportedRecipeError as exc:
+        recipe_capture = RecipeCapture(
+            status="UNSUPPORTED", unavailable_reason=str(exc), environment=capture_environment()
+        )
+        warnings.warn(
+            f"Model recipe unsupported: {exc}. Python fitting remains available without a verified recipe revision.",
+            UserWarning,
+            stacklevel=2,
+        )
     resolved_run_key = _new_notebook_run_key()
     export_id = build_export_id(model.name, resolved_run_key)
     if pricing.mode == "local":
@@ -789,6 +833,7 @@ def fit_model(
         offset_contract=offset_contract,
         input_transforms=transforms_metadata(spec.transforms) or None,
         continuous_kind="ppform" if spec.spline_export == "exact" else "binned",
+        recipe_capture=recipe_capture,
     )
     return BuiltCandidate(model=model, completed_build=completed_build)
 

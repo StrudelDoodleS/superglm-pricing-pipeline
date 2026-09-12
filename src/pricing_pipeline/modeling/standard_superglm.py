@@ -21,6 +21,7 @@ from pricing_pipeline.data.manifest import (
 from pricing_pipeline.data.row_identity import compute_row_order_sha256
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.kinds import normalise_model_kind
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture
 from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
@@ -91,7 +92,13 @@ def run_standard_superglm_build(
     input_transforms: dict[str, dict[str, Any]] | None = None,
     continuous_kind: str = "ppform",
     cross_validate_fn: Callable[..., Any] = cross_validate,
+    recipe_capture: RecipeCapture | None = None,
 ) -> ApprovedModelBuild:
+    recipe_capture = (
+        RecipeCapture()
+        if recipe_capture is None
+        else RecipeCapture.from_payload(recipe_capture.to_payload())
+    )
     resolved_model_kind = normalise_model_kind(model_kind)
     _validate_input_lengths(inputs)
     _validate_canonical_row_ids(
@@ -199,6 +206,7 @@ def run_standard_superglm_build(
         cv_report["scoring"] = _scoring_labels(scoring)
         cv_report["superglm_version"] = receipt.superglm_version
         bundle = CandidateBundle(
+            recipe_capture=recipe_capture,
             fitted_model=fitted,
             input_transforms=input_transforms,
             X=inputs.X.copy(),
@@ -243,6 +251,7 @@ def run_standard_superglm_build(
         )
         fit_metrics = _full_fit_metrics(telemetry)
         completed_build = ApprovedModelBuild(
+            recipe_capture=recipe_capture,
             model_id=model_id,
             model_name=model_config.model_name,
             rating_workbook_path=str(workbook_path),
@@ -461,6 +470,7 @@ def run_cross_validation(
     fit_mode: str,
     scoring: str | Callable | Sequence[str | Callable],
     cross_validate_fn: Callable[..., Any] = cross_validate,
+    recipe_capture: RecipeCapture | None = None,
 ) -> CVEvidence:
     _validate_input_lengths(inputs)
     splitter = PrecomputedSplitter(split_indices, row_count=len(inputs.X))

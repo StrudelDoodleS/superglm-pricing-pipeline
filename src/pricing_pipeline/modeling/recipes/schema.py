@@ -106,7 +106,12 @@ class RecipeDocument(BaseModel):
     transforms: dict[str, Any] = Field(default_factory=dict)
     transform_order: tuple[str, ...] = ()
     validation: dict[str, Any] = Field(
-        default_factory=lambda: dict(type="kfold", n_splits=5, shuffle=True, random_state=42)
+        default_factory=lambda: {
+            "type": "kfold",
+            "n_splits": 5,
+            "shuffle": True,
+            "random_state": 42,
+        }
     )
     groups_column: str | None = None
     scoring: tuple[str, ...] = ("deviance", "nll", "gini")
@@ -221,14 +226,14 @@ class RecipeCapture(BaseModel):
         )
 
     def to_payload(self):
-        return dict(
-            status=self.status,
-            document=None if self.document is None else self.document.to_dict(),
-            canonical=self.canonical,
-            sha256=self.sha256,
-            unavailable_reason=self.unavailable_reason,
-            environment=thaw(self.environment),
-        )
+        return {
+            "status": self.status,
+            "document": None if self.document is None else self.document.to_dict(),
+            "canonical": self.canonical,
+            "sha256": self.sha256,
+            "unavailable_reason": self.unavailable_reason,
+            "environment": thaw(self.environment),
+        }
 
     @classmethod
     def from_payload(cls, payload):

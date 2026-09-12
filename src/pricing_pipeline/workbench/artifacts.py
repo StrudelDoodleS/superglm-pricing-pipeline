@@ -16,9 +16,11 @@ import pandas as pd
 from packaging.version import InvalidVersion, Version
 
 from pricing_pipeline.data.transforms import transforms_from_metadata, transforms_metadata
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture, RecipeError
 from pricing_pipeline.publishing.metadata import OffsetExportContract
 
-BUNDLE_FORMAT = "superglm-candidate-joblib-v2"
+BUNDLE_FORMAT = "superglm-candidate-joblib-v3"
+LEGACY_BUNDLE_FORMAT = "superglm-candidate-joblib-v2"
 EDITED_MODEL_FORMAT = "superglm-edited-model-joblib-v1"
 
 
@@ -51,8 +53,21 @@ class CandidateBundle:
     model_frame_sha256: str | None = None
     input_transforms: dict[str, dict[str, Any]] | None = None
     continuous_kind: str = "binned"
+    recipe_capture: RecipeCapture | None = None
 
     def __post_init__(self) -> None:
+        capture = getattr(self, "recipe_capture", None)
+        try:
+            capture = (
+                RecipeCapture()
+                if capture is None
+                else RecipeCapture.from_payload(
+                    capture.to_payload() if isinstance(capture, RecipeCapture) else capture
+                )
+            )
+        except RecipeError as exc:
+            raise CandidateArtifactError(f"invalid recipe capture: {exc}") from exc
+        object.__setattr__(self, "recipe_capture", capture)
         if self.continuous_kind not in {"ppform", "binned"}:
             raise CandidateArtifactError("continuous_kind must be 'ppform' or 'binned'")
         metadata = getattr(self, "input_transforms", None)
@@ -311,7 +326,7 @@ def load_candidate_bundle(
         raise CandidateArtifactError(
             f"candidate artifact is outside configured artifact root {root}: {artifact_path}"
         )
-    if expected_format != BUNDLE_FORMAT:
+    if expected_format not in {BUNDLE_FORMAT, LEGACY_BUNDLE_FORMAT}:
         raise CandidateArtifactError(f"unsupported candidate artifact format {expected_format!r}")
 
     _validate_runtime_versions(
@@ -341,7 +356,7 @@ def load_candidate_bundle(
         )
 
     envelope = joblib.load(io.BytesIO(artifact_bytes))
-    if not isinstance(envelope, dict) or envelope.get("format") != BUNDLE_FORMAT:
+    if not isinstance(envelope, dict) or envelope.get("format") != expected_format:
         raise CandidateArtifactError("candidate artifact envelope has an invalid format")
     if envelope.get("python_version") != expected_python_version:
         raise CandidateArtifactError("candidate artifact Python metadata is inconsistent")
@@ -350,7 +365,13 @@ def load_candidate_bundle(
     bundle = envelope.get("bundle")
     if not isinstance(bundle, CandidateBundle):
         raise CandidateArtifactError("candidate artifact envelope does not contain a bundle")
-    bundle = replace(bundle)
+    if expected_format == LEGACY_BUNDLE_FORMAT:
+        # Historical metadata never contained a complete constructor recipe.
+        bundle = replace(bundle, recipe_capture=None)
+    else:
+        if getattr(bundle, "recipe_capture", None) is None:
+            raise CandidateArtifactError("v3 candidate artifact is missing recipe status")
+        bundle = replace(bundle)
     for field_name in ("model_name", "model_version", "export_id"):
         value = getattr(bundle, field_name, None)
         if not isinstance(value, str) or not value.strip() or value != value.strip():

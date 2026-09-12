@@ -1528,6 +1528,7 @@ def export_edited_model(
             edited_model_superglm_version=submission.edited_model_superglm_version,
         )
     completed_build = ApprovedModelBuild(
+        recipe_capture=edited_bundle.recipe_capture,
         model_id=parent.model_id,
         model_name=parent.model_name,
         model_version=parent.model_version,

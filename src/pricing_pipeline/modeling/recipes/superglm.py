@@ -159,7 +159,7 @@ def _checked(data, allowed, path):
         raise RecipeError(f"{path}: expected a table")
     extra = set(data) - set(allowed)
     if extra:
-        raise RecipeError(f"{path}.{sorted(extra)[0]}: unknown field")
+        raise RecipeError(f"{path}.{min(extra)}: unknown field")
     return dict(data)
 
 
@@ -364,7 +364,7 @@ def encode_feature(feature, path):
             lambda_policy=encode_policy(feature._lambda_policy, path + ".lambda_policy"),
             constraint=None
             if feature.constraint_kind is None
-            else dict(kind=feature.constraint_kind, mode=feature.constraint_mode),
+            else {"kind": feature.constraint_kind, "mode": feature.constraint_mode},
         )
         return result
     raise UnsupportedRecipeError(f"{path}: unsupported {kind.__module__}.{kind.__qualname__}")
@@ -627,12 +627,12 @@ def normalize_document_parts(document):
         data["estimator"], data["features"], data["feature_order"], data["interactions"]
     )
     estimator, features, interactions = encode_estimator(model)
-    return dict(
-        estimator=estimator,
-        features=features,
-        interactions=interactions,
-        transforms=encode_transforms(
+    return {
+        "estimator": estimator,
+        "features": features,
+        "interactions": interactions,
+        "transforms": encode_transforms(
             decode_transforms(data["transforms"], data["transform_order"])
         ),
-        validation=encode_validation(decode_validation(data["validation"])),
-    )
+        "validation": encode_validation(decode_validation(data["validation"])),
+    }

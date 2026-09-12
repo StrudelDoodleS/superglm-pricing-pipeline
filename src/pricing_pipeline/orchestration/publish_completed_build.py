@@ -194,6 +194,10 @@ def _verify_candidate_artifact(
     except Exception as exc:
         raise ApprovedModelBuildError(f"candidate artifact verification failed: {exc}") from exc
 
+    if bundle.recipe_capture != build.recipe_capture:
+        raise ApprovedModelBuildError(
+            "candidate artifact recipe does not match completed-build evidence"
+        )
     expected_lineage = {
         "model_name": build.model_name,
         "model_version": build.model_version,
