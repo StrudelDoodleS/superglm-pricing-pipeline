@@ -902,6 +902,7 @@ def _seed_monitoring_lineage(
     *,
     model_frame_sha256: str,
     candidate: Candidate | None = None,
+    recipe=None,
     monitor_row_count: int = 360,
     weight_column: str | None = None,
     offset_column: str | None = None,
@@ -989,6 +990,13 @@ def _seed_monitoring_lineage(
             ),
             {"receipt_sha": technical.get("publication_receipt_sha256") or "d" * 64},
         )
+        stored_recipe = None
+        if recipe is not None:
+            from pricing_pipeline.publishing.recipes import resolve_recipe
+
+            stored_recipe = resolve_recipe(
+                connection, model_id=91, recipe=recipe, created_by="pytest"
+            )
         connection.execute(
             text(
                 """
@@ -1002,7 +1010,7 @@ def _seed_monitoring_lineage(
                     candidate_artifact_format, candidate_artifact_size_bytes,
                     candidate_python_version, candidate_superglm_version,
                     model_source_sha256,
-                    run_status, created_by
+                    recipe_id, recipe_status, run_status, created_by
                 ) VALUES (
                     'baseline-run-1', 91, 'v1', 'baseline-export-1',
                     'ROUTINE_EDIT', :equivalence_sha, 'baseline-manifest-1',
@@ -1012,11 +1020,13 @@ def _seed_monitoring_lineage(
                     :artifact_path, :artifact_sha, :artifact_format,
                     :artifact_size, :python_version, :superglm_version,
                     :model_source_sha,
-                    'SUCCESS', 'pytest'
+                    :recipe_id, :recipe_status, 'SUCCESS', 'pytest'
                 )
                 """
             ),
             {
+                "recipe_id": None if stored_recipe is None else stored_recipe.recipe_id,
+                "recipe_status": "LEGACY" if stored_recipe is None else "CAPTURED",
                 "workbook_sha": "f" * 64,
                 "equivalence_sha": technical.get("model_equivalence_sha256") or "c" * 64,
                 "receipt_sha": technical.get("publication_receipt_sha256") or "d" * 64,
@@ -1374,7 +1384,22 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
     tmp_path,
     monitoring_case,
 ):
+    from pricing_pipeline.modeling.recipes import ModelRecipe
+    from pricing_pipeline.notebook import PricingModelSpec
+
     model, X, y = monitoring_case
+    spec = PricingModelSpec(
+        name="SYNTHETIC_TARGET",
+        label="Synthetic",
+        model_type="frequency",
+        deployment_slot="SYNTHETIC_PROD",
+        target="target",
+        features=tuple(X.columns),
+        dataset_name="baseline",
+        source_system="test",
+        pk_columns=("PolicyID",),
+    )
+    recipe = ModelRecipe.from_model(model, spec=spec)
     candidate = _monitoring_candidate(tmp_path, model, X, y)
     model_frame = X.assign(target=y)
     result = run_monitoring_fit(
@@ -1397,6 +1422,7 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
         engine,
         model_frame_sha256=model_frame_evidence(model_frame)[0],
         candidate=candidate,
+        recipe=recipe,
     )
 
     persisted = persist_monitoring_fit(
@@ -1471,6 +1497,9 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
             {"monitor_run_id": persisted.monitor_run_id},
         ).scalar_one()
 
+    assert run["baseline_recipe_revision"] == 1
+    assert run["baseline_recipe_sha256"] == recipe.sha256
+    assert run["baseline_recipe_status"] == "CAPTURED"
     assert run["variant_code"] == "STATIC_SCORE"
     assert run["component_role"] == "SEVERITY"
     assert run["invariant_status"] == "VERIFIED"

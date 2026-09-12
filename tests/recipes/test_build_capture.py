@@ -8,7 +8,6 @@ from pricing_pipeline.modeling.recipes import ModelRecipe, UnsupportedRecipeErro
 from pricing_pipeline.workbench.artifacts import load_candidate_bundle
 
 
-
 def test_snapshot_survives_original_mutation(fitted_case, tmp_path):
     _, model, candidate, glm = fitted_case
     before = candidate.recipe.sha256

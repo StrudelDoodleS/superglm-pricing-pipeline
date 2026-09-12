@@ -126,3 +126,43 @@ write guards off unless the analyst has explicitly requested those writes.
 Do not execute a whole notebook just to check syntax, since later cells save
 or deploy versions. Report what you changed, what you checked and the next
 cell the analyst should run. Say when live database checks were not run.
+
+## Reuse a selected model recipe
+
+Inspect existing `model.toml`, `raw_model.toml`, `routine_model.toml` and challenger
+files before asking for model choices again. Preserve analyst edits. Keep
+`RECIPE_PATH = None` for a first Python-authored build; set an explicit path for
+repeat training. File existence must never select a different model silently.
+
+Export a selected prototype with
+`ModelRecipe.from_model(prototype, spec=MODEL).save(path)`. The flat spec supplies
+target, transforms, offset, weights and validation that an estimator alone does
+not know. Export a completed fit with `candidate.recipe.save(path)` so the file
+comes from its verified immutable snapshot. Export the routine candidate when
+its applied groupings are intended; give raw and routine recipes distinct files.
+Existing files require `replace=True` and should be reviewed before replacement.
+
+Reload with `MODEL, glm = ModelRecipe.load(path).build(dataset=dataset)`, prepare
+`df = apply_transforms(dataset.df, MODEL.transforms)`, and use the existing
+register, fit and save calls. Preserve groups, singleton levels, ordered positions,
+special levels and basis settings. Constructor defaults are explicit; TOML uses
+`{ none = true }` for unset options. Keep feature_order in sync when adding a
+feature. Inspect the installed API before editing constructor options.
+
+The pipeline recaptures final Python overrides at fit entry. Do not automatically
+apply an old routine_groupings.joblib in recipe mode. Custom Python objects may
+fit with recipe status UNSUPPORTED, but cannot be exported or claim a verified
+recipe revision. Report the precise unsupported type and path instead of writing
+a partial recipe. Historical builds remain LEGACY.
+
+Never invent or increment version numbers. SQL assigns recipe revisions when a
+successful build is saved. A recipe revision identifies declared modelling
+choices; model_version and package_version retain their existing fitted-build
+and package meanings. New data can produce a new build using the same recipe.
+Post-fit edits retain their training recipe plus edit lineage. Loading a recipe
+is an ordinary refit; frozen learned structures still require baseline artifacts
+and monitoring variants. Saving a challenger does not deploy it. Keep notebook
+06 and deployment selection separate. SQL stores need V047 and V048 before use.
+
+`pricing-pipeline init` preserves customized agent files. An existing project's
+agent needs an intentional manual update to adopt these instructions.

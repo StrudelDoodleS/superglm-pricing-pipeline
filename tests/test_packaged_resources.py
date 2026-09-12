@@ -65,6 +65,8 @@ EXPECTED_MIGRATIONS = (
     "V044__unified_final_model_relativity.sql",
     "V045__score_per_unit_factors.sql",
     "V046__full_fit_diagnostics.sql",
+    "V047__model_recipes.sql",
+    "V048__recipe_revision_views.sql",
 )
 
 

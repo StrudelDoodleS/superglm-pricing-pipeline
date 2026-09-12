@@ -257,7 +257,7 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert 'as_of="data_as_of"' in ingestion
     assert "dataset=dataset" in training
     assert "features=tuple(RAW_FEATURES)" in training
-    assert "df = apply_transforms(df, transforms)" in training
+    assert "df = apply_transforms(dataset.df, MODEL.transforms)" in training
     assert "transforms=transforms" in training
     assert 'model_kind="RAW"' in training
     assert 'model_kind="ROUTINE_EDIT"' in training

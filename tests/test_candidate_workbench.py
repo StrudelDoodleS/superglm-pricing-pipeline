@@ -135,6 +135,8 @@ def test_candidates_returns_friendly_columns_and_hides_lineage_ids(monkeypatch):
     assert list(history.columns) == [
         "Package",
         "Kind",
+        "Recipe",
+        "Recipe status",
         "Fitted",
         "Data through",
         "Manifest",

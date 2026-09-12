@@ -2138,7 +2138,26 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
         selection_penalty=0.0,
         retain_fit_state=retain_fit_state,
     ).fit(frame, y)
+    from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture
+    from pricing_pipeline.notebook import PricingModelSpec
+
+    training_spec = PricingModelSpec(
+        name="HOME_FREQ",
+        label="Home",
+        model_type="superglm_poisson",
+        deployment_slot="HOME_FREQ_UAT",
+        target="claim_count",
+        features=tuple(frame.columns),
+        dataset_name="home",
+        source_system="test",
+        pk_columns=("policy_id",),
+        fit_mode="fit",
+    )
+    training_capture = RecipeCapture.captured(
+        ModelRecipe.from_model(parent_model, spec=training_spec).document
+    )
     bundle = CandidateBundle(
+        recipe_capture=training_capture,
         fitted_model=parent_model,
         X=frame,
         y=y,
@@ -2245,6 +2264,9 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
     assert relativities["B"] == pytest.approx(relativities["C"])
 
     child_bundle = joblib.load(write_dir / "candidate_bundle.joblib")["bundle"]
+    assert child_bundle.recipe_capture == training_capture
+    assert exported.completed_build.recipe_capture == training_capture
+    assert not training_capture.document.features["region"]["groups"]
     for fitted in (loaded, child_bundle.fitted_model):
         assert fitted._retain_fit_state is retain_fit_state
         assert fitted._config.retain_fit_state is retain_fit_state

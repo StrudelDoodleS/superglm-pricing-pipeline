@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# ruff: noqa: TRY004 - Pydantic validators require ValueError for validation errors.
 import math
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -9,7 +10,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from pricing_pipeline.modeling.recipes.schema import RecipeCapture
-
 from pricing_pipeline.models.kinds import normalise_model_kind
 
 

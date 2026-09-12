@@ -202,8 +202,10 @@ def encode_object(obj, category, path):
 def decode_object(data, category, path):
     if data is None or isinstance(data, str):
         return data
+    if not isinstance(data, dict):
+        raise RecipeError(f"{path}: expected a name or constructor table")
     name = data.get("type")
-    if name not in OBJECT_TYPES[category]:
+    if not isinstance(name, str) or name not in OBJECT_TYPES[category]:
         raise UnsupportedRecipeError(f"{path}.type: unsupported {name!r}")
     kwargs = _checked(data, ("type", *OBJECT_FIELDS[name]), path)
     kwargs.pop("type")
@@ -214,6 +216,8 @@ def decode_object(data, category, path):
 
 def _labels(levels, path):
     values = _plain(levels, path)
+    if not isinstance(values, list):
+        raise RecipeError(f"{path}: expected an array of levels")
     if any(type(v) not in (str, int, float, bool) for v in values):
         raise RecipeError(f"{path}: levels must be scalar strings, numbers or booleans")
     for i, value in enumerate(values):
@@ -289,6 +293,8 @@ def encode_policy(value, path):
 def decode_policy(value, path):
     if value is None:
         return None
+    if not isinstance(value, dict):
+        raise RecipeError(f"{path}: expected a policy table")
     if "mode" in value:
         return _construct(LambdaPolicy, _checked(value, ("mode", "value"), path), path)
     return {k: decode_policy(v, f"{path}.{k}") for k, v in value.items()}
@@ -296,6 +302,16 @@ def decode_policy(value, path):
 
 def encode_feature(feature, path):
     kind = type(feature)
+    signatures = {
+        Numeric: (),
+        Polynomial: ("degree", "powers"),
+        Categorical: ("base", "grouping", "levels", "unseen"),
+        OrderedCategorical: ("values", "order", "basis", "base", "grouping", "specials"),
+    }
+    if kind in signatures:
+        _guard_signature(kind, signatures[kind], path)
+    elif kind in SPLINE_KINDS:
+        _guard_signature(Spline, SPLINE_FIELDS, path)
     if kind is Numeric:
         return {"type": "Numeric"}
     if kind is Polynomial:
@@ -371,6 +387,8 @@ def encode_feature(feature, path):
 
 
 def decode_feature(data, path):
+    if not isinstance(data, dict):
+        raise RecipeError(f"{path}: expected a feature table")
     name = data.get("type")
     if name == "Numeric":
         _checked(data, ("type",), path)
@@ -467,12 +485,16 @@ def encode_validation(validation):
 
 
 def decode_validation(data):
+    if not isinstance(data, dict):
+        raise RecipeError("validation: expected a table")
     name = data.get("type", "kfold")
     splitters = {
         "KFold": (KFold, ("n_splits", "shuffle", "random_state")),
         "GroupKFold": (GroupKFold, ("n_splits", "shuffle", "random_state")),
         "TimeSeriesSplit": (TimeSeriesSplit, ("n_splits", "max_train_size", "test_size", "gap")),
     }
+    if not isinstance(name, str):
+        raise RecipeError("validation.type: expected a string")
     if name in splitters:
         cls, params = splitters[name]
         kwargs = _checked(data, ("type", *params), "validation")
@@ -547,6 +569,10 @@ def encode_estimator(model):
         )
     for key in ("features", "splines", "interactions"):
         kwargs.pop(key)
+    # Record the resolved declared link explicitly so a future family default
+    # cannot reinterpret an exported recipe. This reads no fitted distribution.
+    kwargs["family"] = distributions.resolve_distribution(kwargs["family"])
+    kwargs["link"] = links.resolve_link(kwargs["link"], kwargs["family"])
     for key in ("family", "link", "penalty"):
         kwargs[key] = encode_object(kwargs[key], key, "estimator." + key)
     return _plain(kwargs, "estimator"), feature_data, interactions
@@ -595,6 +621,8 @@ def decode_transforms(data, order):
     result = {}
     for name in order:
         item = data[name]
+        if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+            raise RecipeError(f"transforms.{name}: expected a transform table with a type")
         cls = TRANSFORMS.get(item.get("type"))
         if cls is None:
             raise UnsupportedRecipeError(
@@ -627,12 +655,80 @@ def normalize_document_parts(document):
         data["estimator"], data["features"], data["feature_order"], data["interactions"]
     )
     estimator, features, interactions = encode_estimator(model)
+    transforms = decode_transforms(data["transforms"], data["transform_order"])
+    validation = decode_validation(data["validation"])
+    # Validate portable roles before dataset binding. Dataset-specific role checks
+    # remain the responsibility of PricingModelSpec.build's normal constructor.
+    names = (
+        "name",
+        "label",
+        "model_type",
+        "deployment_slot",
+        "target",
+        "groups_column",
+        "offset_column",
+        "offset_source_column",
+        "offset_label",
+        "sample_weight_column",
+        "export_weight_column",
+    )
+    for name in names:
+        value = data[name]
+        if value is not None and (not value.strip() or value != value.strip()):
+            raise RecipeError(f"{name}: must be non-empty without surrounding whitespace")
+    for name in (*features, *transforms):
+        if not name.strip() or name != name.strip():
+            raise RecipeError(f"features/transforms.{name}: invalid column name")
+    if not data["scoring"] or len(set(data["scoring"])) != len(data["scoring"]):
+        raise RecipeError("scoring: requires at least one metric without duplicates")
+    if any(not metric.strip() or metric != metric.strip() for metric in data["scoring"]):
+        raise RecipeError("scoring: metric names must be non-empty without surrounding whitespace")
+    if type(validation) is ValidationSplitConfig and data["groups_column"] is not None:
+        raise RecipeError("groups_column: requires a splitter in validation")
+    offset = {
+        name: data[name] for name in ("offset_column", "offset_source_column", "offset_label")
+    }
+    if offset["offset_column"] in transforms:
+        transform = transforms[offset["offset_column"]]
+        for name, expected in (
+            ("offset_source_column", transform.source),
+            ("offset_label", transform.expression),
+        ):
+            if offset[name] is not None and offset[name] != expected:
+                raise RecipeError(f"{name}: conflicts with the offset transform")
+            offset[name] = expected
+    if any(value is not None for value in offset.values()) and any(
+        value is None for value in offset.values()
+    ):
+        raise RecipeError(
+            "offset_column, offset_source_column, offset_label: must be configured together"
+        )
+    roles = {
+        "target": [data["target"]],
+        "feature": list(features),
+        "split": [validation.column] if type(validation) is ValidationSplitConfig else [],
+        "offset": [offset["offset_column"]],
+        "offset source": [offset["offset_source_column"]],
+        "sample weight": [data["sample_weight_column"]],
+        "export weight": [data["export_weight_column"]],
+    }
+    seen = {}
+    for role, columns in roles.items():
+        for column in columns:
+            if column is not None:
+                seen.setdefault(column, []).append(role)
+    overlaps = {
+        column: assigned
+        for column, assigned in seen.items()
+        if len(assigned) > 1 and set(assigned) & {"target", "feature", "split"}
+    }
+    if overlaps:
+        raise RecipeError(f"model column roles overlap: {overlaps}")
     return {
         "estimator": estimator,
         "features": features,
         "interactions": interactions,
-        "transforms": encode_transforms(
-            decode_transforms(data["transforms"], data["transform_order"])
-        ),
-        "validation": encode_validation(decode_validation(data["validation"])),
+        "transforms": encode_transforms(transforms),
+        "validation": encode_validation(validation),
+        **offset,
     }

@@ -594,3 +594,58 @@ cannot execute T-SQL.
 The Mermaid sources and the on-demand schema-rendering commands above are the
 maintained ERD guidance. Their generated output belongs in ignored state
 directories; do not commit copied runnable SQL.
+
+## Recipe revisions, V047 and V048
+
+Run the existing migration command through V048 before using recipe publication.
+V047 adds `pricing.MODEL_RECIPE` and recipe linkage/status on `MODEL_RUN`. Old
+runs remain `LEGACY`; their model/package identifiers and dates are unchanged.
+V048 adds recipe revision, SHA-256 and status to the final-model and validation
+summary views. Monitoring exposes the baseline recipe through its existing run.
+
+Recipe rows hold semantic canonical JSON without registration bindings,
+environment versions or execution-only cache settings. The exact build snapshot
+retains those values in the v3 candidate artifact. V2 artifacts remain readable
+without fabricating a historical recipe. Bindings are needed when reconstructing
+a full editable document from a canonical SQL row.
+
+Publication allocates or reuses a per-model revision in the same transaction as
+the package/run. Recipe table constraints enforce unique model/revision and
+model/hash pairs; matching hashes also require equal canonical content. Reverting
+to an earlier recipe reuses its revision. Same-model foreign keys and immutable
+row/link guards prevent changing published recipe lineage.
+`TR_MODEL_RECIPE_IMMUTABLE` rejects recipe updates/deletes.
+`TR_MODEL_RUN_RECIPE_IMMUTABLE` protects published run recipe links.
+
+V047 replaces the old unique rating-equivalence index with a lookup index.
+Complete publication equality now includes recipe status/hash and validation
+split identity, whose SQL Server link lives in `mlops.MODEL_RUN_SPLIT_SET`.
+The SQL Server writer locks `PRICING_MODEL` with `UPDLOCK,HOLDLOCK` before retry
+lookup, staging and inserts. SQLite uses its existing publication file lock and
+`BEGIN IMMEDIATE`. The pre-publication reader and both transactional rechecks
+use the same normalized recipe/split criteria. The read-only pre-publication lookup
+takes no model lock; the writer repeats that lookup under its transaction lock.
+SQL Server holds the model row lock through staging, run/recipe insertion, parity
+verification and commit, including legacy and unsupported builds. Recipe allocation
+also obtains that lock when called directly with a transaction. Unsupported builds
+skip cross-export equivalence; exact-export retries remain valid.
+The rating fingerprint itself is unchanged.
+Direct SQL writes do not provide the complete publication protocol.
+
+Live SQL recipe checks require an explicitly designated test database and private
+runtime module. They never create or reset a database and leave committed test
+history for inspection. Run with:
+
+```bash
+PRICING_RECIPE_TEST_RUNTIME=work_runtime.recipe_test_database \
+PRICING_RECIPE_TEST_DATABASE=PricingRecipeTest \
+  uv run python -m pytest tests/recipes/test_sqlserver_integration.py -ra
+```
+
+Use a disposable test destination with the pipeline initialized through V046 to
+exercise the upgrade; a destination already at V048 skips that upgrade scenario.
+The tests validate the database name before writes. They cover migration,
+concurrent allocation, rollback, immutable links and view queries. SQLite and
+T-SQL parser results do not establish live SQL Server behavior. No live runtime
+or test database was available during this implementation, so live checks remain
+outstanding.

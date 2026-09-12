@@ -16,6 +16,8 @@ from pricing_pipeline.workbench.artifacts import CandidateBundle, load_candidate
 _FRIENDLY_COLUMNS = [
     "Package",
     "Kind",
+    "Recipe",
+    "Recipe status",
     "Fitted",
     "Data through",
     "Manifest",
@@ -30,6 +32,9 @@ _TECHNICAL_COLUMNS = [
     "model_name",
     "model_version",
     "model_kind",
+    "recipe_revision",
+    "recipe_sha256",
+    "recipe_status",
     "model_equivalence_sha256",
     "export_id",
     "package_version",
@@ -90,6 +95,29 @@ class Candidate:
     model_run_id: int
     bundle: CandidateBundle
     technical: dict[str, Any]
+
+    @property
+    def recipe_revision(self) -> int | None:
+        return self.technical.get("recipe_revision")
+
+    @property
+    def recipe_status(self) -> str:
+        return self.technical.get("recipe_status", "LEGACY")
+
+    @property
+    def recipe_sha256(self) -> str | None:
+        return self.technical.get("recipe_sha256")
+
+    @property
+    def recipe(self):
+        from pricing_pipeline.modeling.recipes import ModelRecipe, UnsupportedRecipeError
+
+        capture = self.bundle.recipe_capture
+        if capture.status != "CAPTURED":
+            raise UnsupportedRecipeError(
+                capture.unavailable_reason or "recipe unavailable: legacy build"
+            )
+        return ModelRecipe(capture.document)
 
 
 class Workbench:
@@ -171,6 +199,10 @@ class Workbench:
             expected_superglm_version=row["candidate_superglm_version"],
             allowed_root=Path(self.settings.workbench_artifact_root),
         )
+        if bundle.recipe_capture.status != row.get(
+            "recipe_status", "LEGACY"
+        ) or bundle.recipe_capture.sha256 != row.get("recipe_sha256"):
+            raise CandidateLineageError("candidate bundle recipe does not match SQL lineage")
         if bundle.manifest_id != row.get("manifest_id"):
             raise CandidateLineageError("candidate bundle manifest_id does not match SQL lineage")
         if bundle.split_set_id != row.get("split_set_id"):
@@ -228,6 +260,7 @@ class Workbench:
                 pm.model_name,
                 mr.model_version,
                 mr.model_kind,
+                mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256,
                 mr.model_equivalence_sha256,
                 mr.export_id,
                 rp.package_version,
@@ -274,6 +307,7 @@ class Workbench:
               ON parent_rp.rate_package_id = rp.parent_rate_package_id
             LEFT JOIN {schemas.pricing}.MODEL_RUN AS mr
               ON mr.rate_package_id = rp.rate_package_id
+            LEFT JOIN {schemas.pricing}.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
             LEFT JOIN {schemas.pricing}.MODEL_RUN AS parent_mr
               ON parent_mr.rate_package_id = rp.parent_rate_package_id
             LEFT JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
@@ -341,6 +375,8 @@ class Workbench:
         return {
             "Package": int(row["package_version"]),
             "Kind": row.get("model_kind"),
+            "Recipe": row.get("recipe_revision"),
+            "Recipe status": row.get("recipe_status", "LEGACY"),
             "Fitted": row.get("completed_ts"),
             "Data through": row.get("data_as_of_date"),
             "Manifest": row.get("manifest_id"),

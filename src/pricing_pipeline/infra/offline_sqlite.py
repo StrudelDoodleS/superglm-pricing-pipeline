@@ -21,6 +21,9 @@ SCHEMA_DB_FILES = {
     "mlops": "mlops.sqlite",
 }
 _OFFLINE_COLUMN_UPGRADES = (
+    ("pricing", "MODEL_RUN", "recipe_id", "INTEGER"),
+    ("pricing", "MODEL_RUN", "recipe_status", "TEXT NOT NULL DEFAULT 'LEGACY'"),
+    ("pricing", "MODEL_RUN", "recipe_unavailable_reason", "TEXT"),
     ("pricing_stg", "STG_RATE_CELL", "spline_a", "REAL"),
     ("pricing_stg", "STG_RATE_CELL", "spline_b", "REAL"),
     ("pricing_stg", "STG_RATE_CELL", "spline_c", "REAL"),
@@ -505,10 +508,11 @@ def apply_offline_ddl(engine: Engine) -> None:
                     WHERE rate_package_id IS NOT NULL
                     """
                 )
+            connection.execute("DROP INDEX IF EXISTS pricing.UX_MODEL_RUN_EQUIVALENT_SUCCESS")
             connection.execute(
                 """
-                CREATE UNIQUE INDEX IF NOT EXISTS
-                    pricing.UX_MODEL_RUN_EQUIVALENT_SUCCESS
+                CREATE INDEX IF NOT EXISTS
+                    pricing.IX_MODEL_RUN_EQUIVALENT_SUCCESS
                 ON MODEL_RUN(
                     model_id,
                     manifest_id,

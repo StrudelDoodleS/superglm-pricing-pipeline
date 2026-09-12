@@ -19,15 +19,68 @@ COMMENTS = """# Declared model choices for refitting. SQL assigns revisions when
 """
 
 
-def _nulls(value, *, encode):
+def _nullable(path):
+    """Null markers apply only to known optional constructor/spec fields."""
+    if len(path) == 1:
+        return path[0] in {
+            "groups_column",
+            "offset_column",
+            "offset_source_column",
+            "offset_label",
+            "sample_weight_column",
+            "export_weight_column",
+        }
+    if path[0] == "estimator":
+        return (
+            len(path) == 2
+            and path[1]
+            in {"link", "penalty", "selection_penalty", "spline_penalty", "penalty_features"}
+        ) or (
+            len(path) > 2 and path[1] == "penalty" and path[-1] in {"lambda1", "flavor", "features"}
+        )
+    if path[0] == "features" and len(path) >= 3:
+        return path[-1] in {
+            "group_domain",
+            "levels",
+            "knots",
+            "boundary",
+            "discrete",
+            "n_bins",
+            "constraint",
+            "lambda_policy",
+            "value",
+        }
+    if path[0] == "transforms" and len(path) == 3:
+        return path[-1] in {"lower", "upper"}
+    if path[0] == "validation" and len(path) == 2:
+        return path[-1] in {
+            "n_splits",
+            "test_size",
+            "random_state",
+            "stratify_column",
+            "column",
+            "max_train_size",
+        }
+    return False
+
+
+def _nulls(value, *, encode, path=()):
     if encode and value is None:
         return {"none": True}
-    if not encode and isinstance(value, dict) and set(value) == {"none"} and value["none"] is True:
+    if (
+        not encode
+        and isinstance(value, dict)
+        and set(value) == {"none"}
+        and value["none"] is True
+        and _nullable(path)
+    ):
         return None
     if isinstance(value, dict):
-        return {key: _nulls(item, encode=encode) for key, item in value.items()}
+        return {key: _nulls(item, encode=encode, path=(*path, key)) for key, item in value.items()}
     if isinstance(value, list):
-        return [_nulls(item, encode=encode) for item in value]
+        return [
+            _nulls(item, encode=encode, path=(*path, index)) for index, item in enumerate(value)
+        ]
     return value
 
 

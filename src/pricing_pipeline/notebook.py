@@ -57,8 +57,6 @@ from pricing_pipeline.modeling.level_grouping_artifact import (
 from pricing_pipeline.modeling.level_grouping_artifact import (
     load_level_groupings as _load_level_groupings,
 )
-from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, UnsupportedRecipeError
-from pricing_pipeline.modeling.recipes.schema import capture_environment
 from pricing_pipeline.modeling.manual_adjustment import (
     ManualAdjustmentPolicy,
     ManualAdjustmentRule,
@@ -76,6 +74,8 @@ from pricing_pipeline.modeling.monitoring import (
     persist_monitoring_fit,
     run_monitoring_fit,
 )
+from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, UnsupportedRecipeError
+from pricing_pipeline.modeling.recipes.schema import capture_environment
 from pricing_pipeline.modeling.standard_superglm import (
     ModelInputs,
     PrecomputedSplitter,
@@ -347,6 +347,10 @@ class BuiltCandidate:
         from pricing_pipeline.workbench.artifacts import load_candidate_bundle
 
         build = self.completed_build
+        if build.candidate_artifact_path is None:
+            raise UnsupportedRecipeError(
+                "recipe unavailable: build has no verified candidate artifact"
+            )
         bundle = load_candidate_bundle(
             build.candidate_artifact_path,
             expected_sha256=build.candidate_artifact_sha256,

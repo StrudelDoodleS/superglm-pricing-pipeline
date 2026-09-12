@@ -40,3 +40,19 @@ def test_v3_capture_checksum_is_validated_after_unpickle(fitted_case, tmp_path):
     joblib.dump(envelope, path)
     with pytest.raises(CandidateArtifactError, match="recipe|checksum"):
         _load(build, path, build.candidate_artifact_format, tmp_path)
+
+
+def test_legacy_candidate_without_artifact_has_clear_recipe_error(fitted_case):
+    from dataclasses import replace
+
+    from pricing_pipeline.modeling.recipes import RecipeCapture, UnsupportedRecipeError
+
+    _, _, candidate, _ = fitted_case
+    legacy = replace(
+        candidate,
+        completed_build=candidate.completed_build.model_copy(
+            update={"candidate_artifact_path": None, "recipe_capture": RecipeCapture()}
+        ),
+    )
+    with pytest.raises(UnsupportedRecipeError, match="recipe unavailable.*artifact"):
+        _ = legacy.recipe

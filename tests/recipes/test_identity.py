@@ -39,3 +39,19 @@ def test_mapping_order_is_irrelevant(recipe_data):
     data = doc.to_dict()
     data["estimator"] = dict(reversed(list(data["estimator"].items())))
     assert RecipeDocument(**data).canonical_json == doc.canonical_json
+
+
+def test_default_link_resolves_to_explicit_configured_link(recipe_data):
+    implicit = RecipeDocument(**recipe_data)
+    explicit = RecipeDocument(
+        **(recipe_data | {"estimator": recipe_data["estimator"] | {"link": "log"}})
+    )
+    assert implicit.sha256 == explicit.sha256
+
+
+def test_default_family_resolves_like_explicit_constructor(recipe_data):
+    implicit = RecipeDocument(**recipe_data)
+    explicit = RecipeDocument(
+        **(recipe_data | {"estimator": recipe_data["estimator"] | {"family": {"type": "Poisson"}}})
+    )
+    assert implicit.sha256 == explicit.sha256

@@ -9,7 +9,7 @@ writes, artifacts, publication, and deployment guards.
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
-| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Local grouping artifact or selected prototype recipe | Build, publish, or deploy |
 | `03_model_training.ipynb` | Source dataset; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
 | `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
 | `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
@@ -711,11 +711,14 @@ The lookup key is:
 
 ```text
 model_id + manifest_id + model_kind + model_equivalence_sha256
++ recipe_status + recipe_sha256 + validation split identity
 ```
 
 An equivalent successful build reuses the existing run/package and returns
 `deduplicated=True`; it does not create staging rows. A different manifest or
-model kind remains distinct. A different requested effective date raises
+model kind remains distinct. Different recipes or fold assignments retain separate
+build evidence. Unsupported recipes retain exact-export retries and skip cross-export
+equivalence because their declared identity is unavailable. A different requested effective date raises
 instead of silently discarding release intent.
 
 ## Artifact locations
@@ -724,3 +727,67 @@ Generated notebooks keep ignored local handoffs below the model directory.
 New build folders use compact run keys and short digest components to remain
 usable in Windows Explorer. Full identities remain inside receipts, bundles,
 and SQL.
+
+## Export and reload model recipes
+
+Keep Python authoring for the first build. The training notebook's explicit
+`RECIPE_PATH = None` selects that branch; a path selects recipe loading. A file's
+existence never changes the selected model. Export a selected completed build:
+
+```python
+raw_candidate.recipe.save(MODEL_DIR / "raw_model.toml")
+# If a routine fit applied groupings, export that candidate separately.
+routine_candidate.recipe.save(MODEL_DIR / "routine_model.toml")
+```
+
+A prototype can be exported before framework training. Supply its flat spec so
+that target, transforms, offset, weights and validation are explicit:
+
+```python
+from pricing_pipeline.notebook import ModelRecipe
+
+ModelRecipe.from_model(prototype, spec=MODEL).save(MODEL_DIR / "model.toml")
+recipe = ModelRecipe.load(MODEL_DIR / "challenger.toml")
+MODEL, glm = recipe.build(dataset=dataset)
+df = apply_transforms(dataset.df, MODEL.transforms)
+model = register_model(pricing, MODEL, source_root=MODEL_DIR)
+candidate = fit_model(pricing, model=model, frame=df, superglm_model=glm)
+saved = save_model_version(pricing, candidate)
+```
+
+`load` and `build` reconstruct an unfitted model without SQL access. `save` writes
+only TOML and requires `replace=True` to replace a file. Constructor defaults are
+explicit; `{ none = true }` records an unset option because TOML has no null.
+Feature and transform order are explicit. A challenger added in TOML must also
+appear in `feature_order`. Group entries retain every member, including singleton
+groups; typed domains and ordered numeric positions remain separate from grouping
+labels. Specials remain free levels outside the ordered smooth.
+
+The actual configuration is captured at the validated fit boundary, before CV or
+full fitting. Python overrides affect that snapshot; later changes to Python
+objects or TOML cannot change a completed build's recipe. The saved result exposes
+`recipe_revision`, `recipe_sha256` and `recipe_status`. SQL assigns revisions in
+the publication transaction. Same recipe with new data keeps its revision; a
+previous recipe reused later keeps its original revision. Model and package
+versions keep their existing meanings. Saving never deploys.
+
+Recipe mode skips `.local/routine_groupings.joblib`. Apply any further grouping
+explicitly in Python and fit again. Post-fit editor/manual packages inherit the
+training recipe and retain their separate edit/parent evidence. A training recipe
+alone does not reproduce those coefficient edits. Ordinary recipe loading refits
+declared choices; frozen learned knots, bases, lambdas or coefficients still use
+baseline artifacts and monitoring variants.
+
+Supported recipes include Numeric, Polynomial, Categorical, OrderedCategorical,
+one-dimensional spline variants and the existing categorical interactions, plus
+Log, Log1p and Clip transforms. ValidationSplitConfig, sklearn KFold, GroupKFold
+and TimeSeriesSplit have explicit codecs. Other Python objects can still fit
+through the existing API with `UNSUPPORTED` recipe status and a reason; they
+cannot be exported or claim a recipe revision. Historical artifacts remain
+`LEGACY`. No new interaction or LSS export support is added.
+
+Apply SQL migrations V047 and V048 before saving with this version. Local SQLite
+stores upgrade on opening. The [comparison notebook](../../tutorials/model_recipes/comparison.ipynb)
+exercises grouped/special-level parity and a saved challenger. `init` continues to
+preserve existing customized builder agents; update those files intentionally
+from the packaged `pricing-builder.agent.md` when adopting this workflow.

@@ -63,6 +63,9 @@ class CompletedModelPublishResult:
     deduplicated: bool = False
     model_kind: str = "RAW"
     model_equivalence_sha256: str | None = None
+    recipe_revision: int | None = None
+    recipe_sha256: str | None = None
+    recipe_status: str = "LEGACY"
 
 
 @dataclass(frozen=True)

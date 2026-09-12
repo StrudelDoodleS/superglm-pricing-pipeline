@@ -138,6 +138,13 @@ class _DraftResult:
     def scalar_one(self):
         return self.scalar
 
+    def scalar_one_or_none(self):
+        return self.scalar
+
+    def one(self):
+        assert self.row is not None
+        return self.row
+
 
 _DEFAULT_RESERVATION = object()
 
@@ -148,10 +155,19 @@ class _DraftConnection:
             {"model_version": "v1"} if reservation is _DEFAULT_RESERVATION else reservation
         )
         self.statements = []
+        self.dialect = SimpleNamespace(name="mssql")
 
     def execute(self, statement, params=None):
         sql = str(statement)
         self.statements.append((sql, params))
+        if "sys.sp_getapplock" in sql:
+            return _DraftResult(scalar=0)
+        if "FROM pricing.PRICING_MODEL WITH (UPDLOCK, HOLDLOCK)" in sql:
+            return _DraftResult(scalar=params["model_id"])
+        if "SELECT mr.recipe_status" in sql:
+            return _DraftResult(
+                row={"recipe_status": "LEGACY", "recipe_revision": None, "recipe_sha256": None}
+            )
         if "FROM pricing.PRICING_MODEL_VERSION_RESERVATION" in sql:
             return _DraftResult(row=self.reservation)
         if "SELECT ISNULL(MAX(package_version), 0) + 1" in sql:
@@ -459,7 +475,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
     engine = _Engine()
     events = []
     prepared = SimpleNamespace(
-        build=SimpleNamespace(export_id="export-1"),
+        build=SimpleNamespace(export_id="export-1", model_id=17),
         verification=object(),
     )
     tables = object()
@@ -475,6 +491,9 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
 
         return run
 
+    monkeypatch.setattr(sqlserver, "lock_model", stage("model_lock"))
+    monkeypatch.setattr(sqlserver, "recipe_result", stage("recipe_result", {}))
+    monkeypatch.setattr(sqlserver, "replace", lambda result, **kwargs: result)
     monkeypatch.setattr(sqlserver, "_lock_export", stage("lock"))
     monkeypatch.setattr(sqlserver, "_resolve_existing_or_equivalent", stage("resolve"))
     monkeypatch.setattr(sqlserver, "_replace_staging_frames", stage("stage"))
@@ -493,6 +512,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
     assert sqlserver.publish_sqlserver(engine, prepared, tables) is expected
     assert engine.transaction.active is False
     assert events == [
+        "model_lock",
         "lock",
         "resolve",
         "stage",
@@ -503,6 +523,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
         "publish",
         "cleanup",
         "result",
+        "recipe_result",
     ]
 
 
@@ -663,3 +684,33 @@ def test_package_writer_publishes_receipt_and_term_metadata_columns():
         "term_metadata_json",
     ):
         assert field in writer
+
+
+def test_sqlserver_equivalence_rechecks_all_split_links(tmp_path):
+    prepared, tables = _real_prepared_rating_tables(tmp_path)
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, statement, params):
+            sql = str(statement)
+            if "source_export_id = :export_id" in sql:
+                return _DraftResult()
+            if "ORDER BY rp.package_version" in sql:
+                assert "recipe_status = :recipe_status" in sql
+                assert "split_link.split_set_id = :recipe_split_set_id" in sql
+                return Rows([{"model_run_id": 501}])
+            if "COUNT(*) FROM mlops.MODEL_RUN_SPLIT_SET" in sql:
+                return _DraftResult(scalar=2)
+            raise AssertionError(sql)
+
+    with pytest.raises(RuntimeError, match="multiple training/validation split links"):
+        sqlserver._resolve_existing_or_equivalent(Connection(), prepared, tables)

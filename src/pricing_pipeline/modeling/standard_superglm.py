@@ -19,9 +19,9 @@ from pricing_pipeline.data.manifest import (
     create_model_frame_manifest_with_split,
 )
 from pricing_pipeline.data.row_identity import compute_row_order_sha256
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.kinds import normalise_model_kind
-from pricing_pipeline.modeling.recipes.schema import RecipeCapture
 from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
@@ -470,7 +470,6 @@ def run_cross_validation(
     fit_mode: str,
     scoring: str | Callable | Sequence[str | Callable],
     cross_validate_fn: Callable[..., Any] = cross_validate,
-    recipe_capture: RecipeCapture | None = None,
 ) -> CVEvidence:
     _validate_input_lengths(inputs)
     splitter = PrecomputedSplitter(split_indices, row_count=len(inputs.X))

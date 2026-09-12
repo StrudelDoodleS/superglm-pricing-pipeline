@@ -12,6 +12,7 @@ from sqlalchemy import text
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.recipes import identity_params, identity_predicate
 
 
 class ModelEquivalenceError(RuntimeError):
@@ -86,6 +87,9 @@ class EquivalentModelPublication:
     mlflow_run_id: str | None
     publication_receipt_path: str | None
     publication_receipt_sha256: str | None
+    recipe_revision: int | None = None
+    recipe_sha256: str | None = None
+    recipe_status: str = "LEGACY"
 
 
 def date_identity(value: object) -> str | None:
@@ -135,6 +139,7 @@ def find_equivalent_publication(
                         split_link.manifest_id AS split_manifest_id,
                         split_link.split_set_id,
                         mr.model_kind,
+                        mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256,
                         mr.model_equivalence_sha256,
                         mr.rating_workbook_path,
                         mr.mlflow_run_id,
@@ -147,6 +152,7 @@ def find_equivalent_publication(
                       ON rp.rate_package_id = mr.rate_package_id
                     JOIN {schemas.pricing}.PRICING_MODEL AS pm
                       ON pm.model_id = mr.model_id
+                    LEFT JOIN {schemas.pricing}.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
                     LEFT JOIN {schemas.mlops}.MODEL_RUN_SPLIT_SET AS split_link
                       ON split_link.model_run_id = mr.model_run_id
                      AND split_link.dataset_role = 'training'
@@ -157,9 +163,11 @@ def find_equivalent_publication(
                       AND mr.model_equivalence_sha256 =
                           :model_equivalence_sha256
                       AND mr.run_status = 'SUCCESS'
+                      {identity_predicate()}
                     """
                 ),
                 {
+                    **identity_params(build),
                     "model_id": build.model_id,
                     "manifest_id": build.manifest_id,
                     "model_kind": build.model_kind,
@@ -181,6 +189,16 @@ def find_equivalent_publication(
         if not rows:
             return None
         row = rows[0]
+        split_count = connection.execute(
+            text(
+                f"SELECT COUNT(*) FROM {schemas.mlops}.MODEL_RUN_SPLIT_SET WHERE model_run_id=:run AND dataset_role='training' AND split_role='validation'"
+            ),
+            {"run": row["model_run_id"]},
+        ).scalar_one()
+        if int(split_count) > 1:
+            raise ModelEquivalenceError(
+                "equivalent model run resolves multiple training/validation split links"
+            )
         training_links = connection.execute(
             text(
                 f"""
@@ -231,6 +249,9 @@ def find_equivalent_publication(
         manifest_id=str(row["manifest_id"]),
         split_set_id=(None if row["split_set_id"] is None else str(row["split_set_id"])),
         model_kind=str(row["model_kind"]),
+        recipe_revision=row["recipe_revision"],
+        recipe_sha256=row["recipe_sha256"],
+        recipe_status=row["recipe_status"],
         model_equivalence_sha256=str(row["model_equivalence_sha256"]),
         rating_workbook_path=str(row["rating_workbook_path"]),
         mlflow_run_id=str(row["mlflow_run_id"] or "") or None,

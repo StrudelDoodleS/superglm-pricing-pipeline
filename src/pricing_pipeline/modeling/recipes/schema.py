@@ -125,11 +125,17 @@ class RecipeDocument(BaseModel):
 
     def __init__(self, **data):
         data = thaw(freeze(data))
+        if "format_version" in data and type(data["format_version"]) is not int:
+            raise RecipeError("format_version: must be integer 1")
         for name in ("feature_order", "transform_order", "scoring", "interactions"):
             if name in data:
+                if not isinstance(data[name], (list, tuple)):
+                    raise RecipeError(f"{name}: expected an ordered array")
                 data[name] = tuple(data[name])
-        data.setdefault("feature_order", tuple(data.get("features", {})))
-        data.setdefault("transform_order", tuple(data.get("transforms", {})))
+        for name in ("feature", "transform"):
+            mapping = data.get(f"{name}s", {})
+            if isinstance(mapping, dict):
+                data.setdefault(f"{name}_order", tuple(mapping))
         try:
             super().__init__(**data)
         except ValidationError as exc:
@@ -209,7 +215,7 @@ class RecipeCapture(BaseModel):
             raise RecipeError(
                 "recipe capture: unavailable recipes cannot contain verified evidence"
             )
-        if self.status == "UNSUPPORTED" and not self.unavailable_reason:
+        if self.status == "UNSUPPORTED" and not (self.unavailable_reason or "").strip():
             raise RecipeError("recipe capture: UNSUPPORTED requires a reason")
         if self.status == "LEGACY" and self.unavailable_reason is not None:
             raise RecipeError("recipe capture: LEGACY cannot claim an unsupported reason")
@@ -234,6 +240,10 @@ class RecipeCapture(BaseModel):
             "unavailable_reason": self.unavailable_reason,
             "environment": thaw(self.environment),
         }
+
+    @model_serializer
+    def _serialize(self):
+        return self.to_payload()
 
     @classmethod
     def from_payload(cls, payload):
