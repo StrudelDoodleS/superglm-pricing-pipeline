@@ -95,6 +95,7 @@ BASE_REQUIREMENTS = (
     "scikit-learn",
     "sqlalchemy",
     "superglm>=0.30",
+    "tomli-w>=1.2.0",
 )
 OPTIONAL_REQUIREMENTS = {
     "sqlserver": ("pyodbc",),
