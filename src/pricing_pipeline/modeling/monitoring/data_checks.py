@@ -218,6 +218,23 @@ def _inspect_features(
             continue
         series = df[feature]
         spec = baseline._specs[feature]
+        if (
+            variant is not None
+            and variant is not MonitoringVariant.STATIC_SCORE
+            and feature not in configured
+        ):
+            _issue(
+                issues,
+                feature,
+                "error",
+                "MISSING_FEATURE_CONFIG",
+                f"Feature {feature!r} has no saved explicit constructor configuration. "
+                "Use STATIC_SCORE to score this baseline, or fit and review a baseline "
+                "with explicitly configured features before running refits.",
+            )
+            continue
+        # Legacy auto-detected features can still be scored from their fitted definitions.
+        feature_config = configured.get(feature, spec)
         missing = series.isna().to_numpy()
         if missing.any():
             _issue(
@@ -253,7 +270,7 @@ def _inspect_features(
                 )
             elif variant is not None:
                 for item in numeric_support_issues(
-                    feature, spec, configured[feature], numeric, weights, variant
+                    feature, spec, feature_config, numeric, weights, variant
                 ):
                     _issue(issues, feature, *item)
             continue
@@ -294,7 +311,7 @@ def _inspect_features(
             continue
         if isinstance(spec, OrderedCategorical) and variant is not None:
             for item in ordered_support_issues(
-                feature, spec, configured[feature], values, weights, variant
+                feature, spec, feature_config, values, weights, variant
             ):
                 _issue(issues, feature, *item)
         counts = np.bincount(codes, minlength=len(allowed))

@@ -14,6 +14,33 @@ from pricing_pipeline.modeling.monitoring.data_checks import (
 )
 
 
+@pytest.mark.parametrize("splines", [[], ["x"]])
+def test_static_monitoring_scores_automatically_detected_features(splines):
+    df = pd.DataFrame({"x": np.linspace(0, 1, 100), "band": ["a", "b"] * 50})
+    y = np.random.default_rng(710).poisson(2, len(df))
+    with pytest.warns(FutureWarning, match="auto"):
+        model = SuperGLM(splines=splines, selection_penalty=0).fit(df, y)
+    report = check_monitoring_data(model, df, reference_df=df, variant="STATIC_SCORE")
+    assert report.compatible
+    result = run_monitoring_fit(model, df, y, variant="STATIC_SCORE", continuous_points=11)
+    np.testing.assert_allclose(result.fitted_model.predict(df), model.predict(df))
+    assert result.fitted_model is model
+
+
+@pytest.mark.parametrize("variant", list(MonitoringVariant)[1:])
+def test_refit_preflight_explains_missing_explicit_feature_config(variant):
+    df = pd.DataFrame({"x": np.linspace(0, 1, 80)})
+    y = np.random.default_rng(711).poisson(2, len(df))
+    with pytest.warns(FutureWarning, match="auto"):
+        model = SuperGLM(splines=[], selection_penalty=0).fit(df, y)
+    report = check_monitoring_data(model, df, variant=variant)
+    assert not report.compatible
+    with pytest.raises(MonitoringDataError, match="x.*explicit.*configuration"):
+        report.raise_for_errors()
+    with pytest.raises(MonitoringDataError, match="x.*explicit.*configuration"):
+        run_monitoring_fit(model, df, y, variant=variant)
+
+
 @pytest.fixture(scope="module")
 def continuous_case():
     df = pd.DataFrame({"x": np.linspace(0, 100, 401)})

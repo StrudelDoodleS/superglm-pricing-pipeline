@@ -10,6 +10,45 @@ from pricing_pipeline.modeling.recipes import ModelRecipe
 from pricing_pipeline.modeling.recipes.schema import RecipeError, UnsupportedRecipeError
 
 
+@pytest.mark.parametrize(
+    "native,numpy_value",
+    [
+        ({"spline_penalty": 0.5}, {"spline_penalty": np.float64(0.5)}),
+        ({"n_bins": 256}, {"n_bins": np.int64(256)}),
+    ],
+)
+def test_numpy_estimator_settings_keep_recipe_identity(
+    grouped_model_case, tmp_path, native, numpy_value
+):
+    dataset, spec, glm = grouped_model_case
+    expected = ModelRecipe.from_model(SuperGLM(features=glm.features, **native), spec=spec)
+    recipe = ModelRecipe.from_model(SuperGLM(features=glm.features, **numpy_value), spec=spec)
+    loaded = ModelRecipe.load(recipe.save(tmp_path / "model.toml"))
+    rebuilt_spec, rebuilt = loaded.build(dataset=dataset)
+    assert recipe.sha256 == expected.sha256 == loaded.sha256
+    assert ModelRecipe.from_model(rebuilt, spec=rebuilt_spec).sha256 == expected.sha256
+
+
+def test_numpy_arrays_inside_feature_settings_keep_recipe_identity(grouped_model_case):
+    _, spec, _ = grouped_model_case
+    spec = replace(spec, features=["x"])
+    recipes = [
+        ModelRecipe.from_model(
+            SuperGLM(features={"x": Spline("cr", k=3, boundary=boundary)}), spec=spec
+        )
+        for boundary in ([0.0, 1.0], np.array([0.0, 1.0]))
+    ]
+    assert recipes[0].sha256 == recipes[1].sha256
+
+
+@pytest.mark.parametrize("value", [np.float64(np.nan), np.float64(np.inf), np.complex128(1j)])
+def test_numpy_normalization_still_rejects_invalid_recipe_values(grouped_model_case, value):
+    _, spec, glm = grouped_model_case
+    model = SuperGLM(features=glm.features, spline_penalty=value)
+    with pytest.raises(RecipeError, match=r"estimator.spline_penalty.*finite JSON"):
+        ModelRecipe.from_model(model, spec=spec)
+
+
 def test_grouped_special_recipe_roundtrip(grouped_model_case, tmp_path):
     dataset, spec, glm = grouped_model_case
     original = ModelRecipe.from_model(glm, spec=spec)

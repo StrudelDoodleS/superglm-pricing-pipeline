@@ -15,6 +15,7 @@ Auto-detected features, custom classes and new interaction types are not portabl
 from __future__ import annotations
 
 import inspect
+from collections.abc import Mapping
 from dataclasses import asdict, fields
 
 import numpy as np
@@ -147,10 +148,15 @@ OBJECT_FIELDS = {
 
 
 def _plain(value, path):
+    """Normalize NumPy values at every depth before validating recipe data."""
     if isinstance(value, np.ndarray):
         value = value.tolist()
     if isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, Mapping):
+        value = {key: _plain(item, f"{path}.{key}") for key, item in value.items()}
+    elif isinstance(value, (list, tuple)):
+        value = [_plain(item, f"{path}[{i}]") for i, item in enumerate(value)]
     return thaw(freeze(value, path))
 
 
