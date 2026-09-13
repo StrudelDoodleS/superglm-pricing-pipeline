@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command")
     init = subcommands.add_parser(
         "init",
-        help="create pricing_scaffold.toml and a GitHub Copilot pricing builder agent",
+        help="create pricing_scaffold.toml and GitHub Copilot builder/developer agents",
     )
     init.add_argument("--root", type=Path, default=Path("."))
     scaffold = subcommands.add_parser(

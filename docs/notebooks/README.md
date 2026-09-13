@@ -254,6 +254,9 @@ directory. If they are split into physical subdirectories, use `baseline/` and
 `monitoring/`; do not call the second lane `deployment`, because its variants
 are diagnostic observations rather than candidate packages.
 
+For the implementation owners and comparison diagram, see
+[From a baseline to monitoring evidence](../package-flows.md#from-a-baseline-to-monitoring-evidence).
+
 The four supported monitoring presets are deliberately limited:
 
 | Variant | Coefficients | REML lambdas | Data-driven knots | Always fixed |
@@ -276,7 +279,10 @@ keys to option fields, template tokens and generated notebook cells.
 `pricing-pipeline init` seeds `.github/agents/pricing-builder.agent.md` alongside
 the config. Select **Pricing builder** in Copilot for help choosing connections,
 features, transforms, offsets and validation, and applying those choices to the
-notebooks. Existing config and agent files are preserved when you rerun `init`.
+notebooks. Init also seeds `.github/agents/pricing-developer.agent.md` for package
+maintenance using the framework repository's module index and workflow guides.
+Existing config and agent files are preserved when you rerun `init`; missing
+agents are added.
 
 At the scaffold root, run `pricing-pipeline init` (or
 `python -m pricing_pipeline init` after installation), then edit the generated

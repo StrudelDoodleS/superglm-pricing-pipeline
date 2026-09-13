@@ -5,6 +5,17 @@ between operations. For a CLI option, use the [argument-to-notebook trace](scaff
 The [module index](module-index.md) links every Python file to its purpose.
 The [developer usability audit](dev-ux-audit.md) records remaining structural issues.
 
+Select **Pricing developer** in Copilot to follow these maps while working on
+the package. Its instructions are in
+[`.github/agents/pricing-developer.agent.md`](../.github/agents/pricing-developer.agent.md).
+It reads the relevant guide and follows the owner, caller and tests for the task.
+
+The canonical agent is shipped in
+[`resources/scaffold/pricing-developer.agent.md`](../src/pricing_pipeline/resources/scaffold/pricing-developer.agent.md).
+Keep the repository copy in sync when editing it. `pricing-pipeline init` seeds
+it alongside Pricing builder and preserves customized copies. The developer
+guides require the framework source checkout; they are not copied into analyst projects.
+
 The package has four jobs:
 
 ```text

@@ -56,9 +56,10 @@ init_result = subprocess.run(
 )
 assert init_result.returncode == 0, init_result.stderr
 assert str((consumer / "pricing_scaffold.toml").resolve()) in init_result.stdout
-assert (consumer / ".github/agents/pricing-builder.agent.md").read_bytes() == (
-    scaffold_root().joinpath("pricing-builder.agent.md").read_bytes()
-)
+for name in ("pricing-builder.agent.md", "pricing-developer.agent.md"):
+    assert (consumer / ".github/agents" / name).read_bytes() == (
+        scaffold_root().joinpath(name).read_bytes()
+    )
 scaffold_result = subprocess.run(
     [
         sys.executable,

@@ -60,6 +60,10 @@ flowchart LR
 Fitting already writes audit records and local files. Saving the rating package
 is the next step. A fit is not a read-only preview.
 
+For frozen or adaptive comparisons against a deployed model, follow
+[From a baseline to monitoring evidence](#from-a-baseline-to-monitoring-evidence).
+Those comparisons use the saved fitted model and its contract.
+
 ## From a completed fit to SQL
 
 `notebook.save_model_version` selects the local or remote path:
@@ -127,6 +131,51 @@ This workflow is implemented through notebook helpers; `workbench` is not a sepa
 
 Start with [`workflow.run_monitoring_fit`](../src/pricing_pipeline/modeling/monitoring/workflow.py).
 It calls the stages in order; it does not write monitoring rows itself.
+
+These are separate comparisons against the same saved baseline. Each selected
+variant starts from that baseline, not from the preceding comparison's refit.
+
+```mermaid
+flowchart TD
+    B["Deployed baseline model"] --> V["Verify baseline and bind dated data"]
+    D["New dated dataset"] --> V
+    V --> S["STATIC_SCORE: score unchanged model"]
+    V --> F["FROZEN_REFIT: refit coefficients"]
+    V --> L["REESTIMATE_LAMBDA: refit coefficients and smoothing"]
+    V --> A["FULL_ADAPTIVE: also rebuild data-driven spline geometry"]
+    S --> E["Checked metrics, relativities, lambdas and invariant evidence"]
+    F --> E
+    L --> E
+    A --> E
+    E --> R["MonitoringFitResult"]
+    R --> P["persist_monitoring_fit: SQL observation linked to baseline and dataset"]
+```
+
+| Preset | Coefficients | Smoothing parameters | Spline knots and boundaries |
+|---|---|---|---|
+| `STATIC_SCORE` | Keep baseline | Keep baseline | Keep baseline |
+| `FROZEN_REFIT` | Refit | Keep baseline fitted values | Keep baseline fitted geometry |
+| `REESTIMATE_LAMBDA` | Refit | Re-estimate under the declared lambda policy | Keep baseline fitted geometry |
+| `FULL_ADAPTIVE` | Refit | Re-estimate under the declared lambda policy | Rebuild data-driven geometry; keep caller-declared knots and boundaries |
+
+The smoothing comparison also refits coefficients. "Smoothing only" means that
+smoothing is the additional freedom compared with `FROZEN_REFIT`. Explicitly
+fixed lambda policies remain fixed. All three refit presets use `fit_reml`.
+
+All presets preserve the feature set/order, family/link, categorical levels,
+groupings and reference levels, ordered values and specials, spline type and
+dimension, and shape constraints. `FULL_ADAPTIVE` does not select new features
+or redesign groupings. Changing those choices belongs in the normal fit/save
+workflow with a revised model specification or recipe, followed by explicit
+deployment if selected. That deployment starts a new baseline comparison epoch.
+
+The declared policy is in
+[`MONITORING_VARIANT_POLICIES`](../src/pricing_pipeline/modeling/monitoring/contracts.py).
+[`materialize_monitoring_model`](../src/pricing_pipeline/modeling/monitoring/fitting.py)
+reconstructs each refit; [`invariants`](../src/pricing_pipeline/modeling/monitoring/invariants.py)
+checks its permitted changes. The [notebook guide](notebooks/README.md#baseline-epochs-and-monitoring)
+explains baseline epochs. The implementation also rejects unsupported frozen
+bases and refits with a group-selection penalty rather than relaxing the contract.
 
 | Stage | Owner | Handoff |
 |---|---|---|

@@ -171,7 +171,7 @@ they are not a list of additional public APIs.
 
 | Module | Purpose |
 |---|---|
-| [resources/scaffold/__init__.py](../src/pricing_pipeline/resources/scaffold/__init__.py) | Ship the default project TOML, builder agent and six notebook templates. |
+| [resources/scaffold/__init__.py](../src/pricing_pipeline/resources/scaffold/__init__.py) | Ship the default project TOML, builder/developer agents and six notebook templates. |
 
 ## Developer tools
 

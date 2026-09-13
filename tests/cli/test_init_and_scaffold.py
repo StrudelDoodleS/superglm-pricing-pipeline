@@ -45,9 +45,7 @@ def _assert_notebook_is_clean_and_compiles(path: Path) -> None:
         assert cell["outputs"] == []
 
 
-def test_init_seeds_config_and_builder_agent_from_an_unrelated_cwd(
-    tmp_path: Path, monkeypatch, capsys
-):
+def test_init_seeds_config_and_agents_from_an_unrelated_cwd(tmp_path: Path, monkeypatch, capsys):
     root = tmp_path / "model-repo"
     unrelated = tmp_path / "unrelated"
     _project(root)
@@ -65,8 +63,9 @@ def test_init_seeds_config_and_builder_agent_from_an_unrelated_cwd(
     }
     from pricing_pipeline.resources import scaffold_root
 
-    agent = root / ".github/agents/pricing-builder.agent.md"
-    assert agent.read_bytes() == scaffold_root().joinpath("pricing-builder.agent.md").read_bytes()
+    for name in ("pricing-builder.agent.md", "pricing-developer.agent.md"):
+        agent = root / ".github/agents" / name
+        assert agent.read_bytes() == scaffold_root().joinpath(name).read_bytes()
     assert not (unrelated / ".github").exists()
     assert not (root / "uv.lock").exists()
     lines = capsys.readouterr().out.splitlines()
@@ -427,7 +426,13 @@ def test_init_adds_missing_agent_to_existing_project_and_preserves_customization
 
 
 @pytest.mark.parametrize(
-    "relative_path", (".github", ".github/agents", ".github/agents/pricing-builder.agent.md")
+    "relative_path",
+    (
+        ".github",
+        ".github/agents",
+        ".github/agents/pricing-builder.agent.md",
+        ".github/agents/pricing-developer.agent.md",
+    ),
 )
 @pytest.mark.parametrize("kind", ("symlink", "wrong_type"))
 def test_init_rejects_unsafe_agent_paths_before_creating_config(
@@ -452,3 +457,30 @@ def test_init_rejects_unsafe_agent_paths_before_creating_config(
     assert "error:" in capsys.readouterr().err
     if kind == "wrong_type" and path.suffix != ".md":
         assert path.read_text() == "keep this file"
+
+
+def test_init_upgrades_builder_only_project_and_preserves_both_custom_agents(tmp_path: Path):
+    from pricing_pipeline.resources import scaffold_root
+
+    root = tmp_path / "model-repo"
+    _project(root)
+    agents = root / ".github/agents"
+    agents.mkdir(parents=True)
+    builder = agents / "pricing-builder.agent.md"
+    developer = agents / "pricing-developer.agent.md"
+    builder.write_text("Custom builder", encoding="utf-8")
+    fixed_mtime_ns = 1_700_000_000_000_000_000
+    os.utime(builder, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+    assert cli.main(["init", "--root", str(root)]) == 0
+    assert developer.read_bytes() == scaffold_root().joinpath(developer.name).read_bytes()
+    assert builder.read_text() == "Custom builder"
+    assert builder.stat().st_mtime_ns == fixed_mtime_ns
+
+    developer.write_text("Custom developer", encoding="utf-8")
+    os.utime(developer, ns=(fixed_mtime_ns, fixed_mtime_ns))
+    assert cli.main(["init", "--root", str(root)]) == 0
+    assert developer.read_text() == "Custom developer"
+    assert developer.stat().st_mtime_ns == fixed_mtime_ns
+    assert builder.read_text() == "Custom builder"
+    assert builder.stat().st_mtime_ns == fixed_mtime_ns

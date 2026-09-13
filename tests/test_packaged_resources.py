@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from sqlalchemy import text
 
@@ -117,3 +118,10 @@ def test_offline_bootstrap_works_outside_checkout(tmp_path, monkeypatch):
             ).scalar_one()
             == 0
         )
+
+
+def test_repository_developer_agent_matches_shipped_instructions():
+    root = Path(__file__).resolve().parents[1]
+    assert (root / ".github/agents/pricing-developer.agent.md").read_bytes() == (
+        scaffold_root().joinpath("pricing-developer.agent.md").read_bytes()
+    )
