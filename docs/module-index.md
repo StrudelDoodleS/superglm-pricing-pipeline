@@ -52,6 +52,7 @@ they are not a list of additional public APIs.
 | [models/__init__.py](../src/pricing_pipeline/models/__init__.py) | Define model registration, validation and completed-build records. |
 | [models/config.py](../src/pricing_pipeline/models/config.py) | Describe stable model registration and validation split choices. |
 | [models/kinds.py](../src/pricing_pipeline/models/kinds.py) | Name and validate the origin of a saved model build. |
+| [models/pricing.py](../src/pricing_pipeline/models/pricing.py) | Analyst model choices and the validation of their data-column roles. |
 | [models/spec.py](../src/pricing_pipeline/models/spec.py) | Validate the immutable evidence passed from a completed fit to publication. |
 
 ## Fitting, monitoring and adjustments
@@ -61,10 +62,22 @@ they are not a list of additional public APIs.
 | [modeling/__init__.py](../src/pricing_pipeline/modeling/__init__.py) | Fit models, preserve reusable configuration and run monitoring refits. |
 | [modeling/level_grouping_artifact.py](../src/pricing_pipeline/modeling/level_grouping_artifact.py) | Save and reapply categorical groups chosen in the SuperGLM editor. |
 | [modeling/manual_adjustment.py](../src/pricing_pipeline/modeling/manual_adjustment.py) | Describe and replay business adjustments to selected model relativities. |
-| [modeling/monitoring.py](../src/pricing_pipeline/modeling/monitoring.py) | Compare controlled SuperGLM refits with a verified deployed baseline. |
 | [modeling/scratch_benchmark.py](../src/pricing_pipeline/modeling/scratch_benchmark.py) | Disposable unconstrained and boosted-tree benchmarks for scratch notebooks. |
 | [modeling/scratch_diagnostics.py](../src/pricing_pipeline/modeling/scratch_diagnostics.py) | Held-out diagnostics for governed GAM/GBM scratch comparisons. |
 | [modeling/standard_superglm.py](../src/pricing_pipeline/modeling/standard_superglm.py) | Run validation and full fitting, then write a completed build's evidence. |
+
+## Monitoring refits and evidence
+
+| Module | Purpose |
+|---|---|
+| [modeling/monitoring/__init__.py](../src/pricing_pipeline/modeling/monitoring/__init__.py) | Controlled monitoring refits and their saved audit evidence. |
+| [modeling/monitoring/baseline.py](../src/pricing_pipeline/modeling/monitoring/baseline.py) | Verify the saved baseline and bind a monitoring dataframe to its declared roles. |
+| [modeling/monitoring/contracts.py](../src/pricing_pipeline/modeling/monitoring/contracts.py) | Records, variant policies and canonical values used by monitoring. |
+| [modeling/monitoring/evidence.py](../src/pricing_pipeline/modeling/monitoring/evidence.py) | Extract monitoring terms, smoothing parameters, relativities and loss metrics. |
+| [modeling/monitoring/fitting.py](../src/pricing_pipeline/modeling/monitoring/fitting.py) | Capture baseline structure and reconstruct the model allowed by a monitoring variant. |
+| [modeling/monitoring/invariants.py](../src/pricing_pipeline/modeling/monitoring/invariants.py) | Verify the structural restrictions and canonical evidence of a monitoring fit. |
+| [modeling/monitoring/persistence.py](../src/pricing_pipeline/modeling/monitoring/persistence.py) | Save a verified monitoring observation and recover identical concurrent retries. |
+| [modeling/monitoring/workflow.py](../src/pricing_pipeline/modeling/monitoring/workflow.py) | Run one monitoring comparison through its explicit verification and fitting steps. |
 
 ## Editable model recipes
 
@@ -90,6 +103,11 @@ they are not a list of additional public APIs.
 | [publishing/__init__.py](../src/pricing_pipeline/publishing/__init__.py) | Turn completed builds into SQL rating packages and deploy selected packages. |
 | [publishing/deployment.py](../src/pricing_pipeline/publishing/deployment.py) | Activate a published rating package in a model's deployment slot. |
 | [publishing/editor.py](../src/pricing_pipeline/publishing/editor.py) | Verify editor or manual changes and publish them as a child package. |
+| [publishing/editor_contracts.py](../src/pricing_pipeline/publishing/editor_contracts.py) | Records and submission identity shared by the edit publication stages. |
+| [publishing/editor_export.py](../src/pricing_pipeline/publishing/editor_export.py) | Export a verified edited model and compare it with its parent and champion. |
+| [publishing/editor_parent.py](../src/pricing_pipeline/publishing/editor_parent.py) | Load and verify an editor submission's saved parent and deployed comparison model. |
+| [publishing/editor_replay.py](../src/pricing_pipeline/publishing/editor_replay.py) | Load submitted edits and verify them by replaying the recorded intent. |
+| [publishing/editor_retry.py](../src/pricing_pipeline/publishing/editor_retry.py) | Verify exact retries and equivalent editor publications against stored lineage. |
 | [publishing/identity.py](../src/pricing_pipeline/publishing/identity.py) | Identify registered models, exact retries and equivalent publications. |
 | [publishing/lineage.py](../src/pricing_pipeline/publishing/lineage.py) | Write the provenance attached to a published model run. |
 | [publishing/metadata.py](../src/pricing_pipeline/publishing/metadata.py) | Describe fitted SuperGLM terms in a verifiable publication receipt. |
@@ -117,8 +135,11 @@ they are not a list of additional public APIs.
 | [reporting/_underwriter_html.py](../src/pricing_pipeline/reporting/_underwriter_html.py) | Self-contained HTML shell for the underwriter report. |
 | [reporting/_underwriter_styles.py](../src/pricing_pipeline/reporting/_underwriter_styles.py) | Define the CSS embedded in the standalone underwriter HTML report. |
 | [reporting/diagnostics.py](../src/pricing_pipeline/reporting/diagnostics.py) | Side-effect-free aggregate diagnostics for already-scored predictions. |
-| [reporting/evidence.py](../src/pricing_pipeline/reporting/evidence.py) | Library-neutral evidence supplied to scored-data reporting. |
+| [reporting/evidence.py](../src/pricing_pipeline/reporting/evidence.py) | Collect model evidence and normalize it before report calculations. |
+| [reporting/evidence_types.py](../src/pricing_pipeline/reporting/evidence_types.py) | Records and declared limits shared by report adapters and evidence validation. |
+| [reporting/evidence_values.py](../src/pricing_pipeline/reporting/evidence_values.py) | Validate scalar values, reporting context and category identities in model evidence. |
 | [reporting/inputs.py](../src/pricing_pipeline/reporting/inputs.py) | Validate and align the data supplied to a model-comparison report. |
+| [reporting/interaction_evidence.py](../src/pricing_pipeline/reporting/interaction_evidence.py) | Normalize interaction coordinates, reporting support and plot metadata. |
 | [reporting/movement.py](../src/pricing_pipeline/reporting/movement.py) | Privacy-safe aggregate comparisons of model prediction movement. |
 | [reporting/report.py](../src/pricing_pipeline/reporting/report.py) | Build an offline HTML report from validated predictions and model evidence. |
 

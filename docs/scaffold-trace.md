@@ -30,7 +30,7 @@ flowchart TD
 | Select the handler | [`cli.main` and `_HANDLERS`](../src/pricing_pipeline/cli.py) | `scaffold` calls `commands.run_scaffold`. |
 | Read defaults and merge | [`commands.run_scaffold` and `_raw_scaffold_options`](../src/pricing_pipeline/scaffold/commands.py) | The explicit CLI value wins over TOML. |
 | Validate | [`config.resolve_scaffold_options`](../src/pricing_pipeline/scaffold/config.py) | Check the dotted module name and produce resolved options. |
-| Forward to rendering | [`service.scaffold_resolved_pricing_model`](../src/pricing_pipeline/scaffold/service.py) | The explicit keyword arguments connect each option to `render_notebooks`. |
+| Forward to rendering | [`service.scaffold_resolved_pricing_model`](../src/pricing_pipeline/scaffold/service.py) | Pass the same `ResolvedScaffoldOptions` object into `render_notebooks(options)`. |
 | Substitute | [`render.render_notebooks`](../src/pricing_pipeline/scaffold/render.py) | `_python_literal` encodes the value and the token map selects its placeholder. |
 | Read the cell | [`03_model_training.ipynb`](../src/pricing_pipeline/resources/scaffold/notebooks/03_model_training.ipynb) | The settings cell contains `RUNTIME_MODULE = __RUNTIME_MODULE_LITERAL__`. All six templates have this setting. |
 | Write the file | [`service.scaffold_resolved_pricing_model`](../src/pricing_pipeline/scaffold/service.py) | Write the rendered JSON under `pricing_models/<package_name>`. |
@@ -74,7 +74,7 @@ edited in the notebook or loaded through its explicit `RECIPE_PATH`.
 |---|---|
 | New CLI flag | `cli.build_parser`, `commands._raw_scaffold_options` |
 | New TOML default | `resources/scaffold/pricing_scaffold.toml`, `config.ScaffoldConfig`, `config.load_scaffold_config`, then the command merge |
-| New value passed to notebooks | Both option dataclasses, `resolve_scaffold_options`, the service's renderer call, the renderer signature/token map and the affected templates |
+| New value passed to notebooks | Both option dataclasses, `resolve_scaffold_options`, the renderer token map and the affected templates. The service passes the options object unchanged. |
 | Different explanation or model code in a cell | The `.ipynb` file under `resources/scaffold/notebooks` |
 | Different folder or overwrite behavior | `scaffold.service` |
 | Different connection behavior when a cell runs | `notebook.connect` and `infra.runtime` |
@@ -90,10 +90,21 @@ From the source checkout:
 .venv/bin/python -m pytest -q tests/test_scaffold_pricing_model.py tests/cli/test_init_and_scaffold.py tests/test_packaged_resources.py
 ```
 
-To inspect output without writing a project, call
-`scaffold.render.render_notebooks` with its explicit keyword arguments. It
-returns a dictionary of filenames to JSON strings. This is also a useful
-place to stop in a debugger when an option reaches the wrong cell.
+To inspect output without writing a project, use the internal renderer:
+
+```python
+from pricing_pipeline.scaffold.config import ScaffoldOptions, resolve_scaffold_options
+from pricing_pipeline.scaffold.render import render_notebooks
+
+options = resolve_scaffold_options(
+    ScaffoldOptions(model_name="Motor_Frequency", target_name="ClaimNb")
+)
+notebooks = render_notebooks(options)
+```
+
+It returns a dictionary of filenames to JSON strings. The token map reads
+`options.<field>` directly, so adding an option needs no extra service forwarding
+argument. Stop here in a debugger when an option reaches the wrong cell.
 
 See the [package flow guide](package-flows.md) for the same input-to-output
 trace through fitting, saving, editing and reporting.

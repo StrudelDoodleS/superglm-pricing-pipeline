@@ -50,6 +50,7 @@ flowchart LR
 | Handoff | Where to read | What to check |
 |---|---|---|
 | Source column to prepared column | [`data.transforms.apply_transforms`](../src/pricing_pipeline/data/transforms.py) | Mapping keys name outputs; transform objects name sources. |
+| Analyst choices to validated spec | [`models.pricing.PricingModelSpec`](../src/pricing_pipeline/models/pricing.py) | Validate column roles, transforms, CV and fit choices. The existing notebook import points to this class. |
 | Prepared column to model role | [`notebook.fit_model`](../src/pricing_pipeline/notebook.py) | `spec.features` selects X; `target` selects y; weight and offset fields select their vectors. |
 | Dataset to reproducible splits | [`data.manifest`](../src/pricing_pipeline/data/manifest.py) | Frame identity, ordered row keys, split positions and recorded SQL references. |
 | Declared estimator to recipe | [`modeling.recipes.ModelRecipe.from_model`](../src/pricing_pipeline/modeling/recipes/__init__.py) | Capture constructor choices before CV/full fitting changes model state. |
@@ -109,22 +110,36 @@ load_model_version
 [`workbench.artifacts`](../src/pricing_pipeline/workbench/artifacts.py) owns model
 files; [`workbench.submission`](../src/pricing_pipeline/workbench/submission.py)
 owns proposed edit files. [`publishing.editor`](../src/pricing_pipeline/publishing/editor.py)
-checks those edits before saving a child package. This workflow is implemented
-through notebook helpers; `workbench` is not a separate GUI.
+coordinates the checks before saving a child package:
+
+| Stage | Owner | Result |
+|---|---|---|
+| Verify an exact retry or equivalent publication | [`editor_retry`](../src/pricing_pipeline/publishing/editor_retry.py) | A checked existing publication, or continue with a new one. |
+| Load trusted parent evidence | [`editor_parent`](../src/pricing_pipeline/publishing/editor_parent.py) | `ParentCandidate`, including verified data and model artifacts. |
+| Replay proposed changes | [`editor_replay`](../src/pricing_pipeline/publishing/editor_replay.py) | An edited model checked against the submission and manual policy. |
+| Export the child | [`editor_export`](../src/pricing_pipeline/publishing/editor_export.py) | `EditorExport` containing completed-build evidence. |
+| Publish and clean up attempts | [`editor`](../src/pricing_pipeline/publishing/editor.py) | `PublicationRequest` into the common publisher, then `EditorPublicationResult`. |
+
+The records live in [`editor_contracts`](../src/pricing_pipeline/publishing/editor_contracts.py).
+This workflow is implemented through notebook helpers; `workbench` is not a separate GUI.
 
 ## From a baseline to monitoring evidence
 
-Read [`modeling.monitoring`](../src/pricing_pipeline/modeling/monitoring.py)
-in this order:
+Start with [`workflow.run_monitoring_fit`](../src/pricing_pipeline/modeling/monitoring/workflow.py).
+It calls the stages in order; it does not write monitoring rows itself.
 
-1. `ModelFitContract` and `MonitoringVariant` describe the baseline structure and permitted changes.
-2. `run_monitoring_fit` verifies/binds the baseline and calls `materialize_monitoring_model` for the selected comparison.
-3. The `_result_*` helpers extract terms, lambdas, relativities and metrics; invariant checks confirm the selected restrictions.
-4. `MonitoringFitResult` carries those outputs into `persist_monitoring_fit`.
-5. Persistence links the observation to its baseline run, deployment and dataset manifest.
+| Stage | Owner | Handoff |
+|---|---|---|
+| Describe the baseline and permitted changes | [`contracts`](../src/pricing_pipeline/modeling/monitoring/contracts.py) | `ModelFitContract`, `MonitoringVariant` and result records. |
+| Verify and bind the saved baseline | [`baseline`](../src/pricing_pipeline/modeling/monitoring/baseline.py) | A verified fitted model bound to the checked dataframe. |
+| Reconstruct and fit the comparison | [`fitting`](../src/pricing_pipeline/modeling/monitoring/fitting.py) | `materialize_monitoring_model` applies the selected frozen/reestimated policy. |
+| Extract terms, lambdas, relativities and metrics | [`evidence`](../src/pricing_pipeline/modeling/monitoring/evidence.py) | Result records and hashes of fitted configuration. |
+| Check restrictions and saved evidence | [`invariants`](../src/pricing_pipeline/modeling/monitoring/invariants.py) | Verified invariant evidence attached to `MonitoringFitResult`. |
+| Save the observation | [`persistence`](../src/pricing_pipeline/modeling/monitoring/persistence.py) | `persist_monitoring_fit` links the result to its baseline run, deployment and dataset manifest. |
 
-Monitoring observations do not allocate deployable packages. The module currently
-owns all these steps; its size is a refactoring priority in the [audit](dev-ux-audit.md).
+Existing imports from `pricing_pipeline.modeling.monitoring` still work.
+Monitoring observations do not allocate deployable packages. The persistence
+transaction and its retry handling remain together in one module.
 
 ## From predictions to an offline report
 
@@ -139,21 +154,35 @@ reporting.build_scored_model_report
 ```
 
 [`reporting.inputs`](../src/pricing_pipeline/reporting/inputs.py) aligns the
-actuals, predictions and weights. [`reporting.evidence`](../src/pricing_pipeline/reporting/evidence.py)
+actuals, predictions and weights. [`reporting.evidence_types`](../src/pricing_pipeline/reporting/evidence_types.py)
 defines the objects adapters return. `adapters.superglm` and
 `adapters.rating_workbook` translate fitted models or workbooks into those objects.
-`diagnostics` and `movement` calculate aggregates; the HTML module renders them.
+[`evidence`](../src/pricing_pipeline/reporting/evidence.py) collects and normalizes them;
+[`evidence_values`](../src/pricing_pipeline/reporting/evidence_values.py) owns shared
+value/context checks, and [`interaction_evidence`](../src/pricing_pipeline/reporting/interaction_evidence.py)
+validates interaction grids and support. `diagnostics` and `movement` calculate
+aggregates; the HTML module renders them. Existing type imports from `evidence`
+remain available.
 
 `build_underwriter_report` is the convenience entry point that creates adapter
 requests before calling the scored-report workflow. Reporting writes an HTML
 artifact and returns aggregate results; it does not change model publication state.
 
+The copyable report script embeds these modules. When moving a reporting owner,
+update the dependency-ordered `SOURCE_MODULES` list in
+[`scripts/export_portable_underwriter_report.py`](../scripts/export_portable_underwriter_report.py),
+then run that script to regenerate `scripts/portable_underwriter_report.py`.
+`tests/test_portable_underwriter_report.py` checks that the copied script runs
+without importing the installed package and matches its source modules.
+
 ## Follow or change a handoff
 
 Use the called function's signature and return type to follow the next object.
 Docstrings should name its producer or consumer when the type name alone is
-ambiguous. Keep an explicit argument mapping at boundaries such as
-`ScaffoldOptions` to renderer arguments or `PricingModelSpec` to `ModelInputs`.
+ambiguous. Pass an existing record through when it already represents the input:
+the scaffold service passes `ResolvedScaffoldOptions` directly to the renderer.
+Keep conversions explicit where meanings change, such as `PricingModelSpec`
+column roles becoming arrays in `ModelInputs`.
 
 When adding an option, check every stage it crosses: input parsing, validation,
 conversion, persistence or rendering, and the eventual consumer. Update the

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from superglm import SuperGLM
 
     from pricing_pipeline.data.dataset import PricingDataset
-    from pricing_pipeline.notebook import PricingModelSpec
+    from pricing_pipeline.models.pricing import PricingModelSpec
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ class ModelRecipe:
         data to ``fit_model``. This method constructs objects without fitting them.
         """
 
-        from pricing_pipeline.notebook import PricingModelSpec
+        from pricing_pipeline.models.pricing import PricingModelSpec
 
         data = self.document.to_dict()
         model = decode_estimator(

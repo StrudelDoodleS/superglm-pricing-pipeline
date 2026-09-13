@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping
 
 from pricing_pipeline.resources import scaffold_notebook_root
+from pricing_pipeline.scaffold.config import ResolvedScaffoldOptions
 
 NOTEBOOK_NAMES = (
     "01_data_ingestion.ipynb",
@@ -66,23 +67,10 @@ def _resource_templates() -> dict[str, dict[str, object]]:
     }
 
 
-def render_notebooks(
-    *,
-    package_name: str,
-    model_name: str,
-    model_label: str,
-    target_name: str,
-    model_type: str,
-    deployment_slot: str,
-    database_mode: str,
-    runtime_module: str | None,
-    expected_remote_database: str,
-    manual_edit_source_selector: str,
-    manual_edit_carry_forward: bool,
-) -> dict[str, str]:
+def render_notebooks(options: ResolvedScaffoldOptions) -> dict[str, str]:
     """Map resolved options to template tokens and return notebook JSON by filename.
 
-    For example, ``runtime_module`` becomes ``__RUNTIME_MODULE_LITERAL__``,
+    For example, ``options.runtime_module`` becomes ``__RUNTIME_MODULE_LITERAL__``,
     which each template places after ``RUNTIME_MODULE =``. ``string_values``
     replaces text already inside quotes; ``*_LITERAL__`` tokens insert the whole
     Python value. ``MODEL_LABEL_MARKDOWN`` supplies the notebook title.
@@ -91,28 +79,32 @@ def render_notebooks(
     function's result into ``pricing_models/<package_name>``.
     """
 
-    feature = "feature_1" if target_name != "feature_1" else "feature_2"
-    primary_key = "row_id" if target_name != "row_id" else "record_id"
+    feature = "feature_1" if options.target_name != "feature_1" else "feature_2"
+    primary_key = "row_id" if options.target_name != "row_id" else "record_id"
     string_values = {
-        "__PACKAGE_NAME__": package_name,
-        "__MODEL_NAME__": model_name,
-        "__MODEL_LABEL__": model_label,
-        "__TARGET_NAME__": target_name,
-        "__MODEL_TYPE__": model_type,
-        "__DEPLOYMENT_SLOT__": deployment_slot,
+        "__PACKAGE_NAME__": options.package_name,
+        "__MODEL_NAME__": options.model_name,
+        "__MODEL_LABEL__": options.model_label,
+        "__TARGET_NAME__": options.target_name,
+        "__MODEL_TYPE__": options.model_type,
+        "__DEPLOYMENT_SLOT__": options.deployment_slot,
         "__FEATURE_NAME__": feature,
         "__PRIMARY_KEY__": primary_key,
-        "__DATASET_NAME__": f"{package_name}_model_frame",
+        "__DATASET_NAME__": f"{options.package_name}_model_frame",
     }
     replacements = {token: json.dumps(value)[1:-1] for token, value in string_values.items()}
     replacements.update(
         {
-            "__MODEL_LABEL_MARKDOWN__": model_label,
-            "__DATABASE_MODE_LITERAL__": _python_literal(database_mode),
-            "__RUNTIME_MODULE_LITERAL__": _python_literal(runtime_module),
-            "__EXPECTED_REMOTE_DATABASE_LITERAL__": _python_literal(expected_remote_database),
-            "__MANUAL_SOURCE_SELECTOR_LITERAL__": _python_literal(manual_edit_source_selector),
-            "__MANUAL_CARRY_FORWARD_LITERAL__": _python_literal(manual_edit_carry_forward),
+            "__MODEL_LABEL_MARKDOWN__": options.model_label,
+            "__DATABASE_MODE_LITERAL__": _python_literal(options.database_mode),
+            "__RUNTIME_MODULE_LITERAL__": _python_literal(options.runtime_module),
+            "__EXPECTED_REMOTE_DATABASE_LITERAL__": _python_literal(
+                options.expected_remote_database
+            ),
+            "__MANUAL_SOURCE_SELECTOR_LITERAL__": _python_literal(
+                options.manual_edit_source_selector
+            ),
+            "__MANUAL_CARRY_FORWARD_LITERAL__": _python_literal(options.manual_edit_carry_forward),
         }
     )
 

@@ -60,7 +60,8 @@ Scaffold:
 ```
 
 The final reporting owners are `reporting.inputs` for input contracts and
-normalization, `reporting.evidence` for neutral evidence, `reporting.movement`
+normalization, `reporting.evidence_types` for adapter records,
+`reporting.evidence` for collection and normalization, `reporting.movement`
 for movement calculations, `reporting.diagnostics` for diagnostic assembly,
 and `reporting.report` for both supported workflows. The HTML and style modules
 render only and are intentionally excluded from functional-flow simplification.
@@ -74,13 +75,14 @@ render only and are intentionally excluded from functional-flow simplification.
 | candidate -> immutable published package | `publishing/publish.py`, `publishing/sqlserver.py`, `publishing/sqlite.py` |
 | published package -> editor/manual child | `workbench/`, `publishing/editor.py`, `modeling/manual_adjustment.py` |
 | published package -> deployment | `publishing/deployment.py` |
-| deployment -> monitoring evidence | `modeling/monitoring.py` |
+| deployment -> monitoring evidence | `modeling/monitoring/workflow.py`, `modeling/monitoring/persistence.py` |
 | schema version -> migrated/seeded/reset database | `infra/`, packaged SQL resources |
 
 ## Publication module map
 
 The supported boundary is `pricing_pipeline.notebook`; the publishing
-modules are internal owners with no compatibility facades:
+modules own the implementation. `editor.py` also re-exports its existing public
+records and helpers; their definitions live with the stages below:
 
 | Module | Purpose |
 |---|---|
@@ -91,7 +93,12 @@ modules are internal owners with no compatibility facades:
 | `lineage.py` | durable model-run, dataset, split, metric, fold, and parent evidence |
 | `sqlserver.py` | SQL Server registration, version reservation, locking, package transaction, and persisted parity verification |
 | `sqlite.py` | local registration, version reservation, locking, package transaction, and local audit lineage |
-| `editor.py` | signed editor/manual loading, trusted replay, edited artifact export, and publication request construction |
+| `editor.py` | publication workflow, artifact attempt cleanup and request construction |
+| `editor_contracts.py` | parent, export and publication records; submission identity helpers |
+| `editor_parent.py` | verify and load parent data, artifacts and champion evidence |
+| `editor_replay.py` | replay edits and verify fitted-model state and manual policies |
+| `editor_export.py` | write the child build and comparison metrics |
+| `editor_retry.py` | verify existing or equivalent publications against stored lineage |
 | `deployment.py` | explicit deployment transition and stale-champion protection |
 | `recipes.py` | automatic recipe revisions, model locking, and verification of reused recipe content |
 | `spline_segments.py` | polynomial coefficients, interval bounds, and tail validation for exact spline export |

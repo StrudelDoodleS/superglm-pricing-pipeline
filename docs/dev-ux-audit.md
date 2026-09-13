@@ -22,18 +22,24 @@ identifies the deprecated alias; the
 [contextlib documentation](https://docs.python.org/3.14/library/contextlib.html#contextlib.contextmanager)
 continues to document the decorator.
 
-## Structural work still worth doing
+## Structural follow-up implemented
 
-Counts below describe the source before this documentation pass. Functions and
-classes are top-level definitions, excluding methods. These are indicators of
-reading effort, not automatic reasons to split a file.
+The follow-up refactor starts at `2d4719f`, the documentation pass above.
+It moves existing definitions into focused owners and removes three editor
+functions that only forwarded arguments. It adds no model record classes.
 
-| Priority | File | Lines / functions / classes | Proposed boundary |
-|---|---|---|---|
-| First | `modeling/monitoring.py` | 2,378 / 45 / 10 | Separate contract types, model reconstruction, evidence extraction and SQL persistence. Keep the public monitoring calls together. |
-| Next | `publishing/editor.py` | 1,569 / 38 / 5 | Separate parent/submission verification and edit replay from child-build construction. Preserve the common publication path. |
-| Next | `reporting/evidence.py` | 1,186 / 51 / 11 | Separate evidence types from normalization, with interaction normalization as one focused owner. |
-| Review with the next API change | `notebook.py` | 1,208 / 23 / 4 | Keep analyst entry points easy to find; move validation or conversion helpers only when they form a coherent unit. |
+| Area | Before | Current ownership |
+|---|---|---|
+| Monitoring | One 2,404-line module | A 202-line workflow; separate baseline checks, reconstruction, evidence, invariants and persistence; shared records in `contracts`. |
+| Editor publication | One 1,589-line module | A 355-line workflow; parent verification, replay, export and retry checks each have an owner. Three forwarding functions removed. |
+| Report evidence | One 1,208-line module | A 498-line collection/normalization workflow; records, shared value checks and interaction normalization separated. |
+| Notebook API | 1,286 lines with configuration validation mixed into operations | 1,065 lines of notebook operations; `models/pricing.py` owns `PricingModelSpec` and its validation. The notebook import is unchanged. |
+| Scaffold handoff | Service copied eleven fields into renderer keywords | Service passes `ResolvedScaffoldOptions` unchanged; the renderer maps `options.<field>` directly to template tokens. |
+
+Start at the workflow module and follow its named calls. Existing public imports
+remain explicit re-exports, including old serialized record paths. Each group
+has one-way dependencies; verification and record modules do not import their
+workflow. Tests patch helpers at their new implementation owners.
 
 `publishing/sqlserver.py` has 1,719 lines, 23 functions and one class. Keeping a
 transaction readable in one place is useful, so splitting it purely to hit a
@@ -46,9 +52,10 @@ The small scaffold files demonstrate that size is only part of the issue.
 was still hard to follow. Explicit mappings and named consumers matter even in
 small modules.
 
-This pass documents the current architecture. It does not move functions,
-rename imports, add forwarding layers or change SQL schemas. The structural
-items above remain separate refactoring work.
+The notebook API still has several lifecycle operations in one file. Further
+splitting should make a specific operation easier to follow without forcing
+analysts to learn more entry points. SQL transactions and embedded HTML remain
+with their current owners.
 
 ## Keep future changes traceable
 
@@ -62,7 +69,7 @@ items above remain separate refactoring work.
 Use short descriptions such as "write the edited model and its hashes". Avoid
 phrases such as "governed artifact plumbing" that leave the operation unspecified.
 
-## Verification
+## Documentation-pass verification
 
 - All 76 Python modules and all 117 publicly named top-level classes have purpose docstrings.
 - The 70 existing file-lock, scaffold, CLI, resource and recipe-notebook tests passed.
@@ -73,3 +80,14 @@ phrases such as "governed artifact plumbing" that leave the operation unspecifie
 
 The full model-fitting suite was not repeated for this documentation pass.
 Existing SQL migration and notebook-template bytes were preserved.
+
+## Structural-refactor verification
+
+- All 92 Python modules and 117 publicly named top-level classes have purpose docstrings.
+- Mechanical AST comparison found 184 unchanged moved definitions and values. The only two changed editor bodies call the same checked operations directly after removal of the forwarding functions.
+- The scaffold's 67 focused tests passed. Six configurations across all six notebooks produced the same 36 rendered outputs byte for byte, including remote/local settings, non-ASCII labels and token-shaped text.
+- Existing monitoring, reporting, editor and notebook regressions passed in focused runs. Compatibility tests exercise original serialized class paths.
+- The first full run exposed a missing handoff in the portable report exporter: its explicit embedded-source inventory needed the three new evidence modules. Updated the list, regenerated the artifact and passed all 28 portable-report tests.
+- The independent xhigh review found no remaining issues after redirecting recipe construction to the new spec owner. It checked 25 baseline serialized classes, 194 runtime type hints, the public exports and 101 focused cases.
+- Changed-code Ruff lint and formatting, `uv lock --check`, and wheel/source-distribution builds passed. All current documentation links resolve and the module index covers every source file exactly once.
+- Final full suite: **1,640 passed, 4 skipped** in 153.65 seconds, including distribution-content checks and clean-wheel execution outside the checkout. Three skips require an explicitly configured live SQL Server; the fourth requires optional CatBoost. No live SQL Server verification was performed.

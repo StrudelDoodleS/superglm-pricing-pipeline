@@ -34,7 +34,6 @@ from pricing_pipeline.infra.offline_sqlite import (
     apply_offline_ddl,
     sqlite_engine_with_offline_schemas,
 )
-from pricing_pipeline.modeling import monitoring as monitoring_module
 from pricing_pipeline.modeling.monitoring import (
     MonitoringError,
     MonitoringVariant,
@@ -43,6 +42,7 @@ from pricing_pipeline.modeling.monitoring import (
     persist_monitoring_fit,
     run_monitoring_fit,
 )
+from pricing_pipeline.modeling.monitoring import contracts as monitoring_contracts
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
     build_superglm_publication_receipt,
@@ -415,12 +415,12 @@ def test_case_distinct_categorical_keys_are_collation_safe_and_deterministic():
 
 
 def test_label_point_key_is_case_safe_for_composite_interaction_labels():
-    upper = monitoring_module._label_point_key({"level": "region=A|channel=Web"})
-    lower = monitoring_module._label_point_key({"level": "region=a|channel=Web"})
+    upper = monitoring_contracts._label_point_key({"level": "region=A|channel=Web"})
+    lower = monitoring_contracts._label_point_key({"level": "region=a|channel=Web"})
 
     assert upper != lower
     assert upper.casefold() != lower.casefold()
-    assert upper == monitoring_module._label_point_key({"level": "region=A|channel=Web"})
+    assert upper == monitoring_contracts._label_point_key({"level": "region=A|channel=Web"})
 
 
 @pytest.mark.parametrize(
@@ -439,7 +439,7 @@ def test_categorical_scalar_identity_fails_closed_for_unsupported_types(
         MonitoringError,
         match=f"unsupported categorical level type: {type_name}",
     ):
-        monitoring_module._categorical_scalar_identity(value)
+        monitoring_contracts._categorical_scalar_identity(value)
 
 
 def test_monitoring_metrics_use_declared_sample_weights(monitoring_case):
@@ -1962,7 +1962,9 @@ def test_persisted_monitoring_is_sealed(persisted_monitoring_case):
 
 @pytest.mark.parametrize("recovery", [False, True])
 def test_monitoring_retry_rejects_unsealed_observation(persisted_monitoring_case, recovery):
-    from pricing_pipeline.modeling.monitoring import _recover_concurrent_monitoring_retry
+    from pricing_pipeline.modeling.monitoring.persistence import (
+        _recover_concurrent_monitoring_retry,
+    )
 
     engine, result, kwargs, _ = persisted_monitoring_case
     # Simulate an interrupted legacy/manual writer. Ordinary writes cannot reopen a run.
