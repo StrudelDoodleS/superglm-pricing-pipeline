@@ -1,5 +1,10 @@
 # Maintainer map
 
+Start with [How the package fits together](package-flows.md) to follow objects
+between operations. For a CLI option, use the [argument-to-notebook trace](scaffold-trace.md).
+The [module index](module-index.md) links every Python file to its purpose.
+The [developer usability audit](dev-ux-audit.md) records remaining structural issues.
+
 The package has four jobs:
 
 ```text
@@ -14,7 +19,7 @@ workspace scaffold -> scheduled execution
 | Library API | `pricing_pipeline.notebook` | `data/`, `modeling/`, `publishing/`, `workbench/` | [Notebook API](notebooks/README.md) |
 | Database lifecycle | packaged migrations and guarded scripts | `infra/`, `resources/migrations/`, `resources/offline_sqlite/` | [SQL schema](sql/README.md) |
 | Workspace scaffold | `pricing-pipeline init`, `pricing-pipeline scaffold` | `cli.py`, `scaffold/`, `resources/scaffold/` | [Notebook workflow](notebooks/README.md) |
-| Scheduled execution | future `pricing-pipeline weekly` | must compose the public library API | [Architecture](architecture/maintainability-consolidation.md) |
+| Scheduled execution | No installed scheduler command | external runners can call the library API | [Current call flows](package-flows.md) |
 | Reporting | documented reporting API | `reporting/` | [Notebook API](notebooks/README.md) |
 | Scratch experiments | optional, never governed or published | `modeling/scratch_*` | [Notebook API](notebooks/README.md) |
 
@@ -74,7 +79,7 @@ render only and are intentionally excluded from functional-flow simplification.
 
 ## Publication module map
 
-The supported boundary is `pricing_pipeline.notebook`; the nine publishing
+The supported boundary is `pricing_pipeline.notebook`; the publishing
 modules are internal owners with no compatibility facades:
 
 | Module | Purpose |
@@ -88,6 +93,8 @@ modules are internal owners with no compatibility facades:
 | `sqlite.py` | local registration, version reservation, locking, package transaction, and local audit lineage |
 | `editor.py` | signed editor/manual loading, trusted replay, edited artifact export, and publication request construction |
 | `deployment.py` | explicit deployment transition and stale-champion protection |
+| `recipes.py` | automatic recipe revisions, model locking, and verification of reused recipe content |
+| `spline_segments.py` | polynomial coefficients, interval bounds, and tail validation for exact spline export |
 
 Every RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT publication follows one
 linear sequence:

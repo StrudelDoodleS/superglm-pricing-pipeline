@@ -1,3 +1,9 @@
+"""Render installed notebook templates with validated model options.
+
+Check template names and tokens, substitute Python literals, and return
+notebook JSON text. ``service`` chooses where to write it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -19,6 +25,8 @@ _TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 
 
 def _python_literal(value: object) -> str:
+    """Encode a whole Python value, including quotes or None, for a literal token."""
+
     if value is None:
         return "None"
     if isinstance(value, bool):
@@ -37,6 +45,8 @@ def _tokens(value: object) -> set[str]:
 
 
 def _render(value: object, replacements: Mapping[str, str]) -> object:
+    """Replace known tokens recursively in notebook JSON strings without executing code."""
+
     if isinstance(value, str):
         return _TEMPLATE_TOKEN.sub(lambda match: replacements[match.group()], value)
     if isinstance(value, list):
@@ -70,6 +80,17 @@ def render_notebooks(
     manual_edit_source_selector: str,
     manual_edit_carry_forward: bool,
 ) -> dict[str, str]:
+    """Map resolved options to template tokens and return notebook JSON by filename.
+
+    For example, ``runtime_module`` becomes ``__RUNTIME_MODULE_LITERAL__``,
+    which each template places after ``RUNTIME_MODULE =``. ``string_values``
+    replaces text already inside quotes; ``*_LITERAL__`` tokens insert the whole
+    Python value. ``MODEL_LABEL_MARKDOWN`` supplies the notebook title.
+
+    Templates live in ``resources/scaffold/notebooks``. The service writes this
+    function's result into ``pricing_models/<package_name>``.
+    """
+
     feature = "feature_1" if target_name != "feature_1" else "feature_2"
     primary_key = "row_id" if target_name != "row_id" else "record_id"
     string_values = {

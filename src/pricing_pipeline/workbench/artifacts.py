@@ -1,3 +1,10 @@
+"""Save and verify the fitted-model files attached to a saved version.
+
+``CandidateBundle`` contains the model, fitting inputs, CV evidence and recipe
+capture. Loaders check recorded hashes, paths and runtime versions before
+returning the objects needed for review or editing.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +37,12 @@ class CandidateArtifactError(RuntimeError):
 
 @dataclass(frozen=True)
 class CandidateBundle:
+    """The fitted model and inputs needed to reproduce its review and edits.
+
+    Includes CV evidence, dataset/build identities and captured recipe metadata.
+    Saved as an artifact whose hash is recorded with the SQL model run.
+    """
+
     fitted_model: Any
     X: pd.DataFrame
     y: np.ndarray
@@ -137,6 +150,8 @@ class CandidateBundle:
 
 @dataclass(frozen=True)
 class CandidateArtifactMetadata:
+    """File identity and runtime versions recorded when a candidate bundle is saved."""
+
     path: str
     sha256: str
     format: str

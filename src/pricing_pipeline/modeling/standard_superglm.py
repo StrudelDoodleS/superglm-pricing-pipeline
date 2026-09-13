@@ -1,3 +1,10 @@
+"""Run validation and full fitting, then write a completed build's evidence.
+
+Persist the dataset manifest and split references, fit SuperGLM, and export
+the workbook, receipt and candidate bundle. Return ``ApprovedModelBuild`` for
+a later publication step. Notebook callers enter through ``fit_model``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -41,6 +48,8 @@ _SAFE_ATTEMPT_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 @dataclass(frozen=True)
 class ModelInputs:
+    """Aligned features, response, weights, offset and row keys supplied to fitting."""
+
     X: pd.DataFrame
     y: pd.Series | pd.DataFrame | np.ndarray
     sample_weight: pd.Series | np.ndarray | None = None
@@ -55,6 +64,8 @@ class ModelInputs:
 
 @dataclass(frozen=True)
 class FoldMetric:
+    """One named validation metric for one fold."""
+
     fold_no: int
     metric_name: str
     metric_value: float
@@ -62,6 +73,8 @@ class FoldMetric:
 
 @dataclass(frozen=True)
 class CVEvidence:
+    """Materialized fold positions, the CV report and aggregate/per-fold metrics."""
+
     fold_indices: tuple[tuple[np.ndarray, np.ndarray], ...]
     report: dict[str, Any]
     metrics: dict[str, float]
@@ -94,6 +107,13 @@ def run_standard_superglm_build(
     cross_validate_fn: Callable[..., Any] = cross_validate,
     recipe_capture: RecipeCapture | None = None,
 ) -> ApprovedModelBuild:
+    """Fit the configured estimator and return verifiable publication evidence.
+
+    Validate row alignment, persist manifest/split evidence, run CV and the full
+    fit, then write the rating workbook, receipt and fitted-model bundle.
+    Notebook callers normally use ``fit_model`` to construct these inputs.
+    """
+
     recipe_capture = (
         RecipeCapture()
         if recipe_capture is None
@@ -545,6 +565,8 @@ def run_cross_validation(
 
 
 class PrecomputedSplitter:
+    """Replay validated train/test row positions through the splitter interface used by CV."""
+
     def __init__(
         self,
         folds: Iterable[tuple[Any, Any]],

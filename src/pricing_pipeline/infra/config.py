@@ -1,3 +1,9 @@
+"""Load runtime settings and resolve project-relative artifact paths.
+
+``Settings`` holds connection, schema and storage choices. Model feature and
+fit choices live in ``PricingModelSpec`` and model recipes.
+"""
+
 from __future__ import annotations
 
 import os
@@ -40,6 +46,8 @@ def resolve_project_path(value: str | Path, env: Mapping[str, str]) -> Path:
 
 @dataclass(frozen=True)
 class Settings:
+    """Database, schema and artifact-location settings shared by pipeline operations."""
+
     mssql_server: str = "mssql,1433"
     pricing_database: str = "PricingLab"
     mlflow_database: str = "MLflowTracking"

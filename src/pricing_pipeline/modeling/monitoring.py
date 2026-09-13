@@ -1,13 +1,14 @@
-"""Controlled SuperGLM refits for model and feature-drift monitoring.
+"""Compare controlled SuperGLM refits with a verified deployed baseline.
 
-The deployed package remains the production authority.  Monitoring runs are
-lightweight observations against one exact deployment and dataset manifest;
-they are never publishable rate packages.
+Start with ``build_model_fit_contract`` to record the frozen feature structure,
+then ``run_monitoring_fit`` to score or refit a variant. ``persist_monitoring_fit``
+writes its metrics, relativities and invariant checks as monitoring evidence.
+Monitoring observations do not create deployable rating packages.
 
-This module owns the narrow SuperGLM 0.26 compatibility seam needed to turn a
-fitted model into a controlled refit.  Groupings, categorical universes,
-reporting bases, ordered special levels, basis types, dimensions, penalty
-orders, and shape constraints are frozen for every automatic variant.
+Contract and result classes describe the handoffs. Baseline checks and model
+reconstruction precede evidence extraction; SQL persistence is at the end of
+this module. Private SuperGLM access here preserves categorical groups, bases,
+special levels and spline geometry across the controlled variants.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ class MonitoringError(RuntimeError):
 
 
 class MonitoringVariant(StrEnum):
-    """The only supported, interpretable monitoring comparisons."""
+    """Select which baseline parameters a monitoring comparison may re-estimate."""
 
     STATIC_SCORE = "STATIC_SCORE"
     FROZEN_REFIT = "FROZEN_REFIT"
@@ -77,6 +78,8 @@ class MonitoringVariant(StrEnum):
 
 @dataclass(frozen=True)
 class MonitoringVariantPolicy:
+    """The coefficient, lambda and knot changes permitted by one monitoring variant."""
+
     refit_coefficients: bool
     reestimate_lambdas: bool
     reposition_data_driven_knots: bool
@@ -94,6 +97,8 @@ MONITORING_VARIANT_POLICIES: Mapping[MonitoringVariant, MonitoringVariantPolicy]
 
 @dataclass(frozen=True)
 class ModelFitContract:
+    """Canonical baseline structure and smoothing settings used to check monitoring refits."""
+
     contract_json: str
     contract_sha256: str
     structure_sha256: str
@@ -106,6 +111,8 @@ class ModelFitContract:
 
 @dataclass(frozen=True)
 class MonitoringTerm:
+    """One baseline or refitted term recorded in monitoring evidence."""
+
     term_name: str
     term_kind: str
     sequence_no: int
@@ -115,6 +122,8 @@ class MonitoringTerm:
 
 @dataclass(frozen=True)
 class MonitoringLambda:
+    """One smoothing parameter and its policy recorded for a monitoring term."""
+
     term_name: str | None
     component_name: str
     lambda_value: float
@@ -123,6 +132,8 @@ class MonitoringLambda:
 
 @dataclass(frozen=True)
 class MonitoringRelativity:
+    """A monitoring relativity at one recorded feature level or evaluation point."""
+
     term_name: str
     term_kind: str
     point_key: str
@@ -135,6 +146,8 @@ class MonitoringRelativity:
 
 @dataclass(frozen=True)
 class MonitoringInvariantEvidence:
+    """Canonical checks showing which baseline properties a monitoring variant preserved."""
+
     status: str
     evidence_json: str
     evidence_sha256: str
@@ -146,6 +159,8 @@ class MonitoringInvariantEvidence:
 
 @dataclass(frozen=True)
 class MonitoringFitResult:
+    """The refitted/scored model and extracted evidence passed to monitoring persistence."""
+
     variant: MonitoringVariant
     contract: ModelFitContract
     fitted_model: SuperGLM
@@ -161,6 +176,8 @@ class MonitoringFitResult:
 
 @dataclass(frozen=True)
 class PersistedMonitoringRun:
+    """Saved monitoring identity and whether an identical observation was reused."""
+
     monitor_run_id: str
     fit_contract_id: str
     run_signature_sha256: str
@@ -1611,7 +1628,12 @@ def run_monitoring_fit(
     target_column: str | None = None,
     offset_column: str | None = None,
 ) -> MonitoringFitResult:
-    """Score or refit one preset and return SQL-ready lightweight evidence."""
+    """Score or refit a baseline under the selected monitoring variant.
+
+    Verify the baseline and supplied data, materialize the permitted model,
+    then extract metrics and relativities and check its frozen structure.
+    Return ``MonitoringFitResult`` for ``persist_monitoring_fit``.
+    """
     baseline, baseline_identity, baseline_bundle = _resolve_monitoring_baseline(baseline_model)
     preparation = (
         transforms_metadata(
@@ -2329,7 +2351,11 @@ def persist_monitoring_fit(
     created_by: str,
     component_role: str = "OTHER",
 ) -> PersistedMonitoringRun:
-    """Persist one observation and exactly recover a concurrent identical retry."""
+    """Verify and save a monitoring result against its baseline and dataset.
+
+    Write the contract, metrics and relativity evidence in the audit database.
+    Reuse an identical observation on retry and return ``PersistedMonitoringRun``.
+    """
     try:
         return _persist_monitoring_fit_once(
             engine,

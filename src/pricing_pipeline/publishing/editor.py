@@ -1,4 +1,8 @@
-"""Verify signed editor/manual submissions and publish one trusted child request."""
+"""Verify editor or manual changes and publish them as a child package.
+
+Reload the submitted files, replay changes against the recorded parent, and
+build the publication request with the parent's training lineage.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +71,8 @@ from pricing_pipeline.workbench.submission import (
 
 @dataclass(frozen=True)
 class ChampionSnapshot:
+    """The currently deployed package and its model, or the reason that model is unavailable."""
+
     deployment_slot: str
     rate_package_id: int | None
     bundle: CandidateBundle | None
@@ -92,6 +98,8 @@ class ChampionSnapshot:
 
 @dataclass(frozen=True)
 class ParentCandidate:
+    """The saved parent model, its SQL lineage and the champion snapshot used to review edits."""
+
     model_id: int
     model_name: str
     model_version: str
@@ -107,6 +115,8 @@ class ParentCandidate:
 
 @dataclass(frozen=True)
 class EditorExport:
+    """Replayed edit output and artifacts ready to become a child publication request."""
+
     completed_build: ApprovedModelBuild
     publication_receipt: SuperGLMPublicationReceipt
     revision_metadata: dict[str, Any]
@@ -116,6 +126,8 @@ class EditorExport:
 
 @dataclass(frozen=True)
 class EditorPublicationResult:
+    """The saved child package identity and whether publication reused an earlier result."""
+
     submission_id: str
     model_name: str
     parent_rate_package_id: int
@@ -130,6 +142,8 @@ class EditorPublicationResult:
 
 @dataclass(frozen=True)
 class EditorPublicationAttempt:
+    """Temporary and final artifact directories for one edit publication attempt."""
+
     staging_dir: Path
     final_dir: Path
 
@@ -148,6 +162,12 @@ def publish_editor_submission(
     created_by: str,
     model_config: ModelBuildConfig,
 ) -> EditorPublicationResult:
+    """Verify proposed edits against their saved parent and publish a child package.
+
+    Load the submission, replay the session or manual policy, export checked
+    artifacts and pass a ``PublicationRequest`` to the common publisher.
+    """
+
     publisher_identity = _publisher_identity(created_by)
     submission = _load_submission(
         submission_path=submission_path,

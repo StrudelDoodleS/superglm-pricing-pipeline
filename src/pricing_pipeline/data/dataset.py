@@ -1,4 +1,8 @@
-"""A named dataset snapshot with verified local persistence and provenance."""
+"""Keep a named dataframe snapshot with its source, row keys and as-at column.
+
+``PricingDataset`` returns copies of its data and saves a local artifact with
+an integrity receipt. ``manifest`` handles the separate SQL provenance record.
+"""
 
 from __future__ import annotations
 
@@ -34,7 +38,12 @@ def _text(value: str, *, field: str) -> str:
 
 @dataclass(frozen=True, init=False, eq=False)
 class PricingDataset:
-    """Keep a defensive frame snapshot and the provenance needed to identify it."""
+    """A copied dataframe with its dataset name, source, row key and as-at column.
+
+    ``key`` names columns that uniquely identify rows. ``as_of`` names a column
+    containing one dataset date. Access ``df`` for a fresh copy, and use
+    ``save``/``load`` to carry the snapshot between notebooks.
+    """
 
     _df: pd.DataFrame = field(repr=False)
     name: str
@@ -91,6 +100,8 @@ class PricingDataset:
 
     @property
     def df(self) -> pd.DataFrame:
+        """Return a copy of the snapshot so caller edits do not alter this dataset."""
+
         return _copy_frame(self._df)
 
     def _metadata(self) -> dict[str, Any]:

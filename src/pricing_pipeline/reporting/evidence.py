@@ -101,6 +101,8 @@ _PROBLEM_POWERS = {"frequency": 1.0, "severity": 2.0}
 
 @dataclass(frozen=True)
 class ReportContext:
+    """Aligned report inputs and aggregation limits supplied to evidence adapters."""
+
     frame: pd.DataFrame
     actual: np.ndarray
     predictions: Mapping[str, np.ndarray]
@@ -116,18 +118,24 @@ class ReportContext:
 
 @dataclass(frozen=True)
 class EvidenceFact:
+    """A named scalar fact an adapter supplies for display alongside model diagnostics."""
+
     label: str
     value: str | int | float | bool | None
 
 
 @dataclass(frozen=True)
 class CapabilityUnavailable:
+    """A report section the adapter cannot supply, with a reason to show the reader."""
+
     capability: Literal["importance", "main_effects", "interactions", "exact_loss"]
     reason: str
 
 
 @dataclass(frozen=True)
 class FeatureImportanceEvidence:
+    """A feature-importance table with the method and source needed to interpret it."""
+
     table: pd.DataFrame
     method: str
     source: str
@@ -135,6 +143,8 @@ class FeatureImportanceEvidence:
 
 @dataclass(frozen=True)
 class SuppressionMetadata:
+    """The reason a report hides or limits a result with insufficient reporting support."""
+
     status: SuppressionStatus
     reason: SuppressionReason
     presentation: SuppressionPresentation
@@ -142,6 +152,8 @@ class SuppressionMetadata:
 
 @dataclass(frozen=True)
 class MainEffectEvidence:
+    """One feature's relativity or contribution, with optional density and smoothness information."""
+
     feature: str
     semantic: EvidenceSemantic
     effect: pd.DataFrame
@@ -155,6 +167,8 @@ class MainEffectEvidence:
 
 @dataclass(frozen=True)
 class InteractionEvidence:
+    """A two-feature contribution table and the axes/support needed to plot it."""
+
     name: str
     parents: tuple[str, str]
     semantic: EvidenceSemantic
@@ -172,6 +186,8 @@ class InteractionEvidence:
 
 @dataclass(frozen=True)
 class ExactLossEvidence:
+    """Likelihood contributions and fitted distribution metadata needed for comparable loss scores."""
+
     contributions: np.ndarray
     size_basis: ExactLossSizeBasis
     comparison_group: str
@@ -185,6 +201,8 @@ class ExactLossEvidence:
 
 @dataclass(frozen=True)
 class ModelEvidence:
+    """One model's normalized diagnostics, relativities and metadata supplied to reporting."""
+
     source: str
     importance: FeatureImportanceEvidence | None = None
     main_effects: Mapping[str, MainEffectEvidence] = field(default_factory=dict)
@@ -196,6 +214,8 @@ class ModelEvidence:
 
 
 class ModelEvidenceAdapter(Protocol):
+    """Adapter interface: collect model-specific evidence using the supplied report context."""
+
     def collect(
         self,
         *,
@@ -208,6 +228,8 @@ class ModelEvidenceAdapter(Protocol):
 
 @dataclass(frozen=True)
 class EvidenceRequest:
+    """A model name, artifact and adapter for ``collect_model_evidence`` to evaluate."""
+
     model_name: str
     adapter: ModelEvidenceAdapter
     source: object

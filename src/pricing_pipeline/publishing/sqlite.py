@@ -1,7 +1,7 @@
-"""Publish prepared rating tables in one explicit SQLite transaction.
+"""Save prepared rating tables and audit records in one SQLite transaction.
 
-The concrete audit, package, rating-table, and lineage SQL intentionally stays
-together so maintainers can verify the complete local transaction top-to-bottom.
+Own local registration, version reservation, retry checks and package writes.
+The file lock and database transaction serialize local publication decisions.
 """
 
 from __future__ import annotations

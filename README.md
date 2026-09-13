@@ -84,6 +84,7 @@ The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same
 - [Notebook workflow and function reference](docs/notebooks/README.md)
 - [SQL schema, relationships, triggers, views, and migration runbook](docs/sql/README.md)
 - [Script command index](scripts/README.md)
+- [Developer guide: package flows, module owners and argument-to-notebook mapping](docs/MAINTAINERS.md)
 
 For an underwriter comparison of already-scored models, use
 `scripts/build_underwriter_report.py` with

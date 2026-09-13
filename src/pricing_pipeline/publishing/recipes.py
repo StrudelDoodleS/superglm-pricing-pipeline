@@ -1,4 +1,9 @@
-"""Allocate immutable per-model recipe revisions in the publication transaction."""
+"""Allocate and verify recipe revisions within a publication transaction.
+
+Lock the registered model, reuse an identical canonical recipe or allocate
+its next revision. Compare stored content as well as its hash on reuse.
+TOML editing and estimator reconstruction belong to ``modeling.recipes``.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,8 @@ from pricing_pipeline.modeling.recipes.schema import RecipeError
 
 @dataclass(frozen=True)
 class StoredRecipe:
+    """The SQL identity, revision and hash of a registered model recipe."""
+
     recipe_id: int
     recipe_revision: int
     recipe_sha256: str
@@ -62,6 +69,11 @@ def validate_recipe_capture(row, capture):
 def resolve_recipe(
     connection, *, model_id: int, recipe: ModelRecipe, created_by: str
 ) -> StoredRecipe:
+    """Reuse identical canonical content or allocate the model's next recipe revision.
+
+    Acquire the model lock and write within the caller's transaction.
+    """
+
     lock_model(connection, model_id)
     schema = schema_names_from_connectable(connection).pricing
     params = {"model_id": model_id, "sha256": recipe.sha256}

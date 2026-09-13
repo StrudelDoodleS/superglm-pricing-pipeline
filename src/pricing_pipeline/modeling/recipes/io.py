@@ -1,4 +1,9 @@
-"""Safe TOML editing files. Reading never executes Python or opens a database."""
+"""Read and write editable model recipes as TOML.
+
+Convert TOML values into ``RecipeDocument`` on load. On save, preserve table
+order and omit metadata derived from transforms; the document's canonical
+identity is computed separately by ``schema``.
+"""
 
 from __future__ import annotations
 

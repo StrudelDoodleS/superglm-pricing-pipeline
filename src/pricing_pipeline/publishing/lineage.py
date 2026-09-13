@@ -1,4 +1,8 @@
-"""Persist model-run, dataset, split, metric, and parent lineage evidence."""
+"""Write the provenance attached to a published model run.
+
+Persist dataset and split links, metrics, fold evidence and parent references
+inside the SQL Server publication transaction.
+"""
 
 from __future__ import annotations
 

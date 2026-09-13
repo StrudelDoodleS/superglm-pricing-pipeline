@@ -1,3 +1,10 @@
+"""Validate the immutable evidence passed from a completed fit to publication.
+
+``ApprovedModelBuild`` contains artifact references, hashes, metrics and
+lineage. Its name does not mean a model has been deployed. Analyst choices
+belong in ``notebook.PricingModelSpec``.
+"""
+
 from __future__ import annotations
 
 # ruff: noqa: TRY004 - Pydantic validators require ValueError for validation errors.
@@ -18,7 +25,12 @@ class ApprovedModelBuildError(ValueError):
 
 
 class ApprovedModelBuild(BaseModel):
-    """Immutable notebook output passed unchanged into local or remote publication."""
+    """Validated, immutable build evidence handed to the publication workflow.
+
+    Stores identities, metrics and artifact hashes rather than the fitted model
+    itself. The builder creates this record after fitting; publication verifies
+    its referenced files before saving a package.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

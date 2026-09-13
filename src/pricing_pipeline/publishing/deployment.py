@@ -1,3 +1,9 @@
+"""Activate a published rating package in a model's deployment slot.
+
+Check package eligibility and the deployment snapshot reviewed by the caller
+before changing the active package. Saving a model does not call this module.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +17,8 @@ from pricing_pipeline.models.config import ModelBuildConfig
 
 @dataclass(frozen=True)
 class DeploymentResult:
+    """The activated package and the package it replaced, with the recorded deployment reason."""
+
     model_id: int
     deployment_slot: str
     previous_rate_package_id: int | None

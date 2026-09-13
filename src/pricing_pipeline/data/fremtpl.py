@@ -1,3 +1,9 @@
+"""Fetch and prepare the freMTPL demonstration dataset.
+
+Includes helpers to insert and read the demo's raw SQL table. Production
+projects supply their own ingestion logic and pass a prepared dataset onward.
+"""
+
 from __future__ import annotations
 
 from typing import Any

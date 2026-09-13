@@ -269,6 +269,10 @@ supported because most do not have a stable business interpretation.
 
 ## Scaffold configuration
 
+To follow a setting through the implementation, use the
+[argument-to-notebook trace](../scaffold-trace.md). It maps CLI flags and TOML
+keys to option fields, template tokens and generated notebook cells.
+
 `pricing-pipeline init` seeds `.github/agents/pricing-builder.agent.md` alongside
 the config. Select **Pricing builder** in Copilot for help choosing connections,
 features, transforms, offsets and validation, and applying those choices to the

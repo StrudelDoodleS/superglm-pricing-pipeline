@@ -1,4 +1,10 @@
-"""Modeling exports, loaded on demand to keep build-evidence imports acyclic."""
+"""Fit models, preserve reusable configuration and run monitoring refits.
+
+``standard_superglm`` builds training evidence; ``recipes`` saves declared
+configuration; ``monitoring`` compares controlled refits with a baseline.
+Exports load on first access to avoid circular build-evidence imports.
+Notebook callers use ``pricing_pipeline.notebook``.
+"""
 
 from importlib import import_module
 

@@ -1,3 +1,8 @@
+"""Hash ordered row keys so saved split positions can be checked against data.
+
+A change in row order must change this identity even when the row set is equal.
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,9 @@
+"""Drop and rebuild selected pipeline schemas after checking the destination.
+
+This is the destructive reset implementation used by the reset script.
+Use ``migrations`` to apply missing changes to a database with existing data.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,6 +26,8 @@ CONFIRMATION_FLAG = "--i-understand-this-drops-pricing-objects"
 
 @dataclass(frozen=True)
 class ResetSchemaResult:
+    """The checked database, planned drop count and migrations applied by a reset or dry run."""
+
     dry_run: bool
     expected_database: str
     actual_database: str

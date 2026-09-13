@@ -1,3 +1,9 @@
+"""Write validation fold positions to NPZ files and calculate file hashes.
+
+``manifest`` stores the artifact reference alongside the row-order identity
+needed to interpret those positions.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

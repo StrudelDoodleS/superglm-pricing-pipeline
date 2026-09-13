@@ -1,4 +1,8 @@
-"""Python-side model equivalence checks performed before SQL staging."""
+"""Identify registered models, exact retries and equivalent publications.
+
+Normalize identifiers and compare rating, recipe and split evidence before
+staging. Database writers repeat the lookup inside their locked transaction.
+"""
 
 from __future__ import annotations
 
@@ -74,6 +78,8 @@ def bind_model_equivalence(
 
 @dataclass(frozen=True)
 class EquivalentModelPublication:
+    """A saved package whose rating, recipe and split identity matches a proposed publication."""
+
     model_id: int
     model_name: str
     model_version: str

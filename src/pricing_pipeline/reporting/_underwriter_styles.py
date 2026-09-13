@@ -1,4 +1,4 @@
-"""Report-owned CSS primitives for the standalone underwriter HTML."""
+"""Define the CSS embedded in the standalone underwriter HTML report."""
 
 REPORT_BASE_CSS = r"""
 :root {

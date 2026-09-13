@@ -1,4 +1,9 @@
-"""Small, serializable dataframe transforms declared alongside a model spec."""
+"""Declare and apply named dataframe transformations such as Log and Clip.
+
+Mapping keys are output columns; each transform names its source column.
+``apply_transforms`` returns a prepared copy. The same declarations describe
+transformed inputs in recipes and exported rating tables.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +26,8 @@ def _name(value: str, *, field: str) -> str:
 
 @dataclass(frozen=True)
 class Log:
+    """Take the natural logarithm of a strictly positive source column."""
+
     source: str
 
     def __post_init__(self) -> None:
@@ -36,6 +43,8 @@ class Log:
 
 @dataclass(frozen=True)
 class Log1p:
+    """Take the natural logarithm of one plus a source column whose values exceed -1."""
+
     source: str
 
     def __post_init__(self) -> None:
@@ -51,6 +60,8 @@ class Log1p:
 
 @dataclass(frozen=True)
 class Clip:
+    """Limit source-column values to the declared lower and/or upper bound."""
+
     source: str
     lower: float | None = None
     upper: float | None = None

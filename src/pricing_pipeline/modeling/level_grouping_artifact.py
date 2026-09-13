@@ -1,11 +1,9 @@
-"""Verified handoff for editor-created SuperGLM level groupings.
+"""Save and reapply categorical groups chosen in the SuperGLM editor.
 
-SuperGLM 0.26 exposes the defensive ``model.features`` mapping, but currently
-stores each fitted categorical ``LevelGrouping`` on the private
-``feature_spec._grouping`` attribute. This module is the one allowed
-compatibility seam for that final private read/write. Notebook code deals only
-in the public helpers below, so a future SuperGLM grouping-export API can
-replace this module without changing the notebook workflow.
+Read the model's feature mapping and isolate access to its private
+``_grouping`` attribute here. Artifacts bind the resulting ``LevelGrouping``
+objects to model and dataset identity. Notebook callers use
+``export_level_groupings``, ``load_level_groupings`` and ``apply_level_groupings``.
 """
 
 from __future__ import annotations
@@ -44,6 +42,8 @@ class LevelGroupingArtifactError(RuntimeError):
 
 @dataclass(frozen=True)
 class LevelGroupingArtifact:
+    """Saved grouping-file metadata and the model/dataset identity it belongs to."""
+
     path: str
     metadata_path: str
     format: str

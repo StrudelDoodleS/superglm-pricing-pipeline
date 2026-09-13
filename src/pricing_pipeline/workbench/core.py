@@ -1,3 +1,9 @@
+"""List saved packages and load one with its verified model artifacts.
+
+``Workbench`` is bound to a registered model. It returns ``Candidate`` records
+that include SQL lineage and the deployment snapshot used for later review.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -88,6 +94,13 @@ class CandidateLineageError(RuntimeError):
 
 @dataclass
 class Candidate:
+    """A saved SQL package loaded for review, editing or deployment.
+
+    ``bundle`` holds the verified fitted model and inputs; ``technical`` holds
+    SQL lineage and the reviewed deployment snapshot. A freshly fitted,
+    unsaved result is the separate ``notebook.BuiltCandidate`` type.
+    """
+
     workbench: Workbench
     model_name: str
     package_version: int
@@ -122,6 +135,12 @@ class Candidate:
 
 
 class Workbench:
+    """Read saved versions for one registered model and verify their artifacts.
+
+    Notebook callers use ``list_model_versions`` and ``load_model_version``.
+    This object owns their registry queries and package-to-artifact checks.
+    """
+
     def __init__(
         self,
         *,
@@ -166,6 +185,12 @@ class Workbench:
         return pd.DataFrame(friendly, columns=_FRIENDLY_COLUMNS)
 
     def open(self, model_name: str, *, package_version: int) -> Candidate:
+        """Resolve a saved package and return a Candidate with verified model files.
+
+        Read SQL lineage, load its bundle and capture the current deployment IDs
+        needed when the analyst later requests deployment.
+        """
+
         model_name = self._required_model_name(model_name)
         version = int(package_version)
         deployment_slot = self.model_config.deployment_slot

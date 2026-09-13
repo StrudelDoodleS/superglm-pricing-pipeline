@@ -1,3 +1,9 @@
+"""Implement CLI init and scaffold requests using resolved project options.
+
+Initialize the config and builder-agent files, combine command options with
+TOML defaults, then call the scaffold filesystem service.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -88,6 +94,11 @@ def _validate_agent_path(root: Path) -> Path:
 
 
 def run_init(namespace: argparse.Namespace) -> tuple[str, ...]:
+    """Seed project config and the builder agent from installed resources.
+
+    Preserve existing files. Notebook creation happens later in ``run_scaffold``.
+    """
+
     root = _root(namespace.root)
     _require_project_root(root)
     agent_path = _validate_agent_path(root)
@@ -126,6 +137,14 @@ def _raw_scaffold_options(
     root: Path,
     scaffold_config: config.ScaffoldConfig,
 ) -> config.ScaffoldOptions:
+    """Merge parsed CLI arguments with loaded TOML defaults.
+
+    An explicit CLI value wins; ``None`` means use the corresponding config value.
+    For example, ``namespace.runtime_module`` overrides
+    ``scaffold_config.runtime_module``. The result still needs
+    ``config.resolve_scaffold_options`` before rendering.
+    """
+
     return config.ScaffoldOptions(
         model_name=namespace.model_name,
         target_name=namespace.target_name,
@@ -164,6 +183,14 @@ def _raw_scaffold_options(
 
 
 def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
+    """Connect CLI input to notebook creation.
+
+    Load TOML, merge CLI overrides into ``ScaffoldOptions``, validate them into
+    ``ResolvedScaffoldOptions``, then call
+    ``service.scaffold_resolved_pricing_model`` to render and write the notebooks.
+    Return the created paths for ``cli.main`` to print.
+    """
+
     root = _root(namespace.root)
     _require_project_root(root)
     scaffold_config = _load_installed_config(namespace, root)

@@ -1,4 +1,8 @@
-"""Input contracts and validation for aggregate reporting."""
+"""Validate and align the data supplied to a model-comparison report.
+
+Own report options, normalized input records and output result types.
+The report workflow calls this module before evidence or diagnostics work.
+"""
 
 from __future__ import annotations
 
@@ -116,6 +120,8 @@ class UnderwriterReportResult:
 
 @dataclass(frozen=True)
 class ValidatedReportInputs:
+    """Aligned, checked report data passed to evidence collection and aggregate diagnostics."""
+
     frame: pd.DataFrame
     actual: np.ndarray
     predictions: Mapping[str, np.ndarray]

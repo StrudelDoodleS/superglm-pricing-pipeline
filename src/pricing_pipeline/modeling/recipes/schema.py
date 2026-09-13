@@ -91,6 +91,12 @@ BINDING_FIELDS = frozenset({"name", "label", "model_type", "deployment_slot"})
 
 
 class RecipeDocument(BaseModel):
+    """Validated configuration with immutable values and canonical recipe identity.
+
+    The full document retains reconstruction settings. ``canonical_json`` and
+    ``sha256`` include only settings that define the declared modeling recipe.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     format_version: Literal[1] = 1
@@ -185,6 +191,12 @@ class RecipeDocument(BaseModel):
 
 
 class RecipeCapture(BaseModel):
+    """Recipe evidence captured at a build boundary, including availability status.
+
+    CAPTURED includes the document; LEGACY has no recorded recipe; UNSUPPORTED
+    records why the Python configuration could not be encoded.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
     status: Literal["CAPTURED", "LEGACY", "UNSUPPORTED"] = "LEGACY"
     document: RecipeDocument | None = None

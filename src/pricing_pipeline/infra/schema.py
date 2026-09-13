@@ -1,3 +1,9 @@
+"""Validate SQL schema names and substitute them into pipeline SQL.
+
+``SchemaNames`` identifies the pricing, staging and audit schemas. Engines
+carry this configuration so queries and migrations use the same names.
+"""
+
 from __future__ import annotations
 
 import re
@@ -14,6 +20,8 @@ _RUNTIME_SCHEMA_QUALIFIER_PATTERN = re.compile(
 
 @dataclass(frozen=True)
 class SchemaNames:
+    """Validated names for the pricing, staging and audit SQL schemas."""
+
     pricing: str = "pricing"
     pricing_staging: str = "pricing_stg"
     mlops: str = "mlops"

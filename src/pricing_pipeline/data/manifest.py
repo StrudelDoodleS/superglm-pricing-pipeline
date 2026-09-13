@@ -1,3 +1,10 @@
+"""Record which dataset rows, columns and validation splits a fit used.
+
+Build frame and row-order hashes, persist manifests and split metadata in SQL,
+and write split positions to local artifacts. ``standard_superglm`` calls
+this module before fitting so the resulting build can refer to that evidence.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -34,6 +41,8 @@ _SPLIT_SET_ID_MAX_LENGTH = 128
 
 @dataclass(frozen=True)
 class DatasetManifestResult:
+    """Manifest identity, frame hash and optional split-artifact references returned to the builder."""
+
     manifest_id: str
     model_frame_sha256: str
     split_set_id: str | None = None
@@ -84,6 +93,8 @@ def _normalise_pk_columns(value: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ModelFrameManifestSpec:
+    """Dataset identity and column roles recorded with a prepared model frame."""
+
     dataset_name: str
     source_system: str
     data_as_of_date: date | datetime | str
@@ -224,6 +235,12 @@ def create_model_frame_manifest_with_split(
     split_indices: list[tuple[object, object]] | None = None,
     created_by: str = "airflow",
 ) -> DatasetManifestResult:
+    """Record frame provenance and validation splits, then return their references.
+
+    Called by the standard builder before fitting. The returned manifest and
+    split IDs are retained in ``ApprovedModelBuild`` and checked on publication.
+    """
+
     _validate_model_frame(frame, spec=spec, validation_split=validation_split)
     supplied_split_indices = (
         _normalise_supplied_split_indices(split_indices, row_count=len(frame))

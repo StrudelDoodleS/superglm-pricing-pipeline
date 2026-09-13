@@ -1,7 +1,8 @@
-"""Publish prepared rating tables in one explicit SQL Server transaction.
+"""Save prepared rating tables and audit records in one SQL Server transaction.
 
-Concrete package SQL remains here; lineage writes live in ``lineage.py`` and run in
-the same transaction so maintainers can audit order without a repository abstraction.
+Own registration, version reservation, staging, locking and package writes.
+``lineage`` writes evidence in the same transaction; prediction parity is
+checked before the draft package is marked published.
 """
 
 from __future__ import annotations

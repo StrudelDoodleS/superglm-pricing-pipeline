@@ -1,3 +1,10 @@
+"""Load saved model versions for review and retain proposed edits.
+
+``core`` resolves SQL packages, ``artifacts`` verifies fitted-model files,
+and ``submission`` records editor changes for later publication. This package
+supports the notebook workflow; it does not provide a standalone GUI.
+"""
+
 from pricing_pipeline.workbench.artifacts import (
     BUNDLE_FORMAT,
     CandidateArtifactError,

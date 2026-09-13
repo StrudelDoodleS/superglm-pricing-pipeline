@@ -1,7 +1,12 @@
-"""Small, synchronous entry points for pricing-model notebooks.
+"""Public Python entry points for the pricing-model workflow.
 
-The notebook owns model and data decisions.  These helpers own generated SQL
-identifiers, audit records, artifact locations, and publication plumbing.
+Connect, register a model, fit it, save a version, then review or deploy it.
+``PricingDataset`` identifies the data; ``PricingModelSpec`` maps model roles
+to columns; ``ModelRecipe`` saves reusable model configuration as TOML.
+
+Fitting writes audit evidence and local artifacts. Saving publishes a SQL
+rating package. Deployment is a separate explicit operation. Implementation
+owners live in ``data``, ``modeling``, ``publishing`` and ``workbench``.
 """
 
 from __future__ import annotations
@@ -109,6 +114,12 @@ from pricing_pipeline.workbench.submission import save_editor_submission
 
 @dataclass(frozen=True)
 class NotebookContext:
+    """Connection, artifact locations and write permission returned by ``connect``.
+
+    Pass this object to notebook operations as ``pricing``. ``destination``
+    identifies the connected database; local mode also exposes SQLite paths.
+    """
+
     engine: Any
     settings: Settings
     mode: str
@@ -127,6 +138,23 @@ class NotebookContext:
 
 @dataclass(frozen=True)
 class PricingModelSpec:
+    """Declare which data columns the model uses and how fitting is evaluated.
+
+    Supply a ``PricingDataset`` for source, key and as-at metadata. ``features``
+    is an ordered list or tuple of prepared column names; the SuperGLM instance
+    supplies their categorical, numeric or spline treatment.
+
+    ``transforms`` maps output names to source-column operations. Prepare the
+    fit input with ``apply_transforms(dataset.df, spec.transforms)``. An offset
+    column supplies a covariate with coefficient fixed at one; its source and
+    label are inferred when that column has a declared transform.
+
+    ``validation`` accepts a split configuration or a splitter with ``split``.
+    ``groups_column`` supplies groups to that splitter. ``fit_mode`` defaults
+    to ``fit_reml``; ``spline_export`` chooses exact polynomial or binned output.
+    Constructing a spec validates these choices without fitting or writing SQL.
+    """
+
     name: str
     label: str
     target: str
@@ -322,6 +350,12 @@ class PricingModelSpec:
 
 @dataclass(frozen=True)
 class RegisteredModel:
+    """SQL model identity and source directory used by notebook operations.
+
+    ``register_model`` also attaches a spec for fitting. ``load_registered_model``
+    returns a review reference with ``spec=None``.
+    """
+
     model_id: int
     config: ModelBuildConfig
     source_root: Path
@@ -334,6 +368,12 @@ class RegisteredModel:
 
 @dataclass(frozen=True)
 class BuiltCandidate:
+    """A completed fit with metrics and verified references to its local artifacts.
+
+    Returned by ``fit_model`` before the rating package is saved. Pass it to
+    ``save_model_version`` for publication, or export ``recipe`` for reuse.
+    """
+
     model: RegisteredModel
     completed_build: ApprovedModelBuild
     _retained_recipe_capture: tuple[str, str, RecipeCapture] | None = field(
@@ -475,7 +515,13 @@ def connect(
     expected_remote_database: str | None = None,
     allow_remote_writes: bool = False,
 ) -> NotebookContext:
-    """Connect locally or through a governed private runtime without Airflow."""
+    """Open local SQLite storage or connect through a project's SQL runtime.
+
+    Local mode creates or opens audit databases beneath ``local_root``.
+    Remote mode checks the connected database against ``expected_remote_database``;
+    mutating operations also require ``allow_remote_writes=True``.
+    Return a ``NotebookContext`` shared by the remaining notebook operations.
+    """
     selected_mode = str(mode).strip().lower()
     if selected_mode == "local":
         return _connect_local(local_root)
@@ -495,7 +541,11 @@ def register_model(
     source_root: str | Path,
     created_by: str | None = None,
 ) -> RegisteredModel:
-    """Create a model once, then strictly validate its stable SQL identity."""
+    """Create or validate the SQL registry entry and return a fitting reference.
+
+    ``source_root`` is the model directory whose source files become build evidence.
+    An existing registration must match the supplied stable model identity.
+    """
     pricing.require_write("register_model")
     root = Path(source_root).expanduser().resolve()
     if not root.is_dir():
@@ -544,7 +594,11 @@ def load_registered_model(
     model_name: str | None = None,
     model_label: str | None = None,
 ) -> RegisteredModel:
-    """Resolve one existing SQL model by name and/or label for review or deployment."""
+    """Find a registered SQL model by name or label for review and deployment.
+
+    Return a ``RegisteredModel`` with no fitting spec. Use ``register_model``
+    with a ``PricingModelSpec`` when preparing a new fit.
+    """
     name = None if model_name is None else _required_text(model_name, "model_name")
     label = None if model_label is None else _required_text(model_label, "model_label")
     if name is None and label is None:
@@ -612,7 +666,11 @@ def list_model_versions(
     model: RegisteredModel,
     technical: bool = False,
 ) -> pd.DataFrame:
-    """List saved model versions newest-first for review or deployment."""
+    """Return saved model versions newest first, with metrics and lineage.
+
+    Use this list to select a package for ``load_model_version``. Listing does
+    not deserialize fitted-model artifacts.
+    """
     return Workbench(
         engine=pricing.engine,
         settings=pricing.settings,
@@ -673,7 +731,15 @@ def fit_model(
     data_as_of: date | datetime | str | None = None,
     created_by: str | None = None,
 ) -> BuiltCandidate:
-    """Run CV, fit the full model and export review artifacts and audit evidence."""
+    """Run cross-validation and a full fit, then return a ``BuiltCandidate``.
+
+    ``frame`` must contain the prepared dataset, including declared transforms.
+    The configured SuperGLM model is cloned before fitting. This call reserves a
+    model version, records dataset/split evidence and writes local review artifacts.
+
+    Use ``save_model_version`` to publish the rating package. Recipe revisions
+    are assigned on save; this call does not deploy the model.
+    """
     pricing.require_write("fit_model")
     resolved_model_kind = normalise_model_kind(model_kind)
     spec = model.spec
@@ -864,7 +930,12 @@ def save_model_version(
     pricing: NotebookContext,
     candidate: BuiltCandidate,
 ) -> CompletedModelPublishResult:
-    """Save a fitted model version and its audit lineage to the selected database."""
+    """Publish a fitted candidate's rating package and evidence to the database.
+
+    Verify the artifacts and reuse an equivalent publication when one exists.
+    Return ``CompletedModelPublishResult`` with package identity and recipe
+    revision. Activation requires a separate ``deploy_model_version`` call.
+    """
     pricing.require_write("save_model_version")
     if pricing.mode == "local":
         return publish_sqlite_candidate(
@@ -909,7 +980,11 @@ def load_model_version(
     model: RegisteredModel,
     package_version: int,
 ):
-    """Verify and load one saved model version for editing or deployment review."""
+    """Load a saved package with its verified fitted model and review evidence.
+
+    Return a ``Candidate`` containing SQL lineage, the model bundle and the
+    current deployment snapshot. Missing or changed artifacts stop loading.
+    """
     if pricing.mode == "local":
         raise RuntimeError(
             "Remote mode is required for the editor; local SQLite records "
@@ -959,11 +1034,10 @@ def export_level_groupings(
     path: str | Path,
     replace: bool = False,
 ) -> LevelGroupingArtifact:
-    """Export every editor-created collapse as actual ``LevelGrouping`` objects.
+    """Save editor-created categorical groupings for a later training fit.
 
-    This temporary notebook API deliberately hides SuperGLM's private grouping
-    attribute.  It can be replaced by a future public SuperGLM export method
-    without changing the scratch/training notebook contract.
+    The artifact binds those groupings to the model and data-as-at. Extraction
+    of SuperGLM's private grouping state stays in ``level_grouping_artifact``.
     """
     if not isinstance(candidate, Candidate):
         raise TypeError("candidate must come from load_model_version()")
@@ -1034,7 +1108,11 @@ def publish_edits(
     reason: str,
     created_by: str | None = None,
 ):
-    """Persist and synchronously publish the analyst's editor session."""
+    """Save an editor session and publish its changes as an EDITOR_EDIT child.
+
+    The child retains the selected parent's training lineage. Supply the edit
+    reason for its audit record; deployment remains a separate operation.
+    """
     pricing.require_write("publish_edits")
     if pricing.mode == "local":
         raise RuntimeError(

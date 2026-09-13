@@ -1,3 +1,9 @@
+"""Describe fitted SuperGLM terms in a verifiable publication receipt.
+
+Extract term, transform and offset metadata, then serialize it with a stable
+hash. ``rating_tables`` uses the receipt to interpret workbook values.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -119,6 +125,12 @@ def _json_metadata_value(value: Any) -> Any:
 
 
 class OffsetExportContract(BaseModel):
+    """Describe how the model's fixed offset contribution appears in rating output.
+
+    The notebook derives source and expression metadata from declared transforms;
+    the receipt carries this information to workbook parsing and SQL scoring.
+    """
+
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -184,6 +196,12 @@ class OffsetExportContract(BaseModel):
 
 
 class SuperGLMPublicationReceipt(BaseModel):
+    """Fitted term and package metadata serialized alongside the rating workbook.
+
+    The publisher verifies the receipt hash and uses this metadata to interpret
+    workbook terms, transforms and offset handling.
+    """
+
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -712,6 +730,11 @@ def build_superglm_publication_receipt(
     export_weight_name: str | None = None,
     input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> SuperGLMPublicationReceipt:
+    """Extract fitted term metadata for the receipt saved by the standard builder.
+
+    Return a validated receipt for serialization and rating-table preparation.
+    """
+
     preparation = transforms_metadata(
         transforms_from_metadata({} if input_transforms is None else input_transforms)
     )
