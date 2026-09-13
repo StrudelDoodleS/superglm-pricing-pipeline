@@ -142,7 +142,7 @@ def test_missing_entire_ordered_group_blocks_refit(ordered_case, missing, varian
         assert "middle" in issue.message
         assert "OrderedCategorical(" in issue.message
         assert "Received raw levels: ['1', '2', '3', '6', '7', '8', 'NA']" in issue.message
-        assert "No positive-weight observations: ['middle']" in issue.message
+        assert "Missing levels or groups: ['middle']" in issue.message
         assert "'middle': ['4', '5']" in issue.message
 
 
@@ -162,7 +162,7 @@ def test_zero_weight_ordered_group_is_unsupported(ordered_case):
     assert "MISSING_ORDERED_SUPPORT" in set(report.issues.code)
     message = report.issues.query("code == 'MISSING_ORDERED_SUPPORT'").iloc[0].message
     assert "Received raw levels: ['1', '2', '3', '4', '5', '6', '7', '8', 'NA']" in message
-    assert "No positive-weight observations: ['middle']" in message
+    assert "Missing levels or groups: []" in message
     assert "Present only on zero-weight rows: ['middle']" in message
 
 

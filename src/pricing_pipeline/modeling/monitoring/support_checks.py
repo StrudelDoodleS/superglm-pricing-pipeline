@@ -44,7 +44,6 @@ def _ordered_support_message(
     configured: Any,
     raw_levels: list[Any],
     grouped_values: np.ndarray,
-    effective: set[Any],
     absent: list[Any],
 ) -> str:
     """Show the saved feature definition and the observed support that blocks a refit."""
@@ -59,6 +58,7 @@ def _ordered_support_message(
     if len(groups) > 20:
         grouping += f" ... ({len(groups)} groups total)"
     observed = set(grouped_values)
+    missing = [level for level in absent if level not in observed]
     zero_weight = [level for level in absent if level in observed]
     return "\n".join(
         [
@@ -68,8 +68,8 @@ def _ordered_support_message(
             f"Saved base: {spec._base_level!r}; specials: {_level_preview(spec._special_raw or [])}",
             f"Grouping: {grouping}",
             f"Received raw levels: {_level_preview(raw_levels)}",
-            f"Smooth groups with positive weight: {_level_preview(level for level in ordered if level in effective)}",
-            f"No positive-weight observations: {_level_preview(absent)}",
+            f"Observed levels or groups: {_level_preview(level for level in ordered if level in observed)}",
+            f"Missing levels or groups: {_level_preview(missing)}",
             f"Present only on zero-weight rows: {_level_preview(zero_weight)}",
             (
                 "Check the source data, filters and fitting weights. If the feature definition "
@@ -122,9 +122,7 @@ def ordered_support_issues(
         yield SupportIssue(
             "error",
             "MISSING_ORDERED_SUPPORT",
-            _ordered_support_message(
-                feature, spec, configured, raw_levels, values, effective, absent
-            ),
+            _ordered_support_message(feature, spec, configured, raw_levels, values, absent),
         )
     # Specials have independent indicators and must not count as spline support.
     smooth = (
