@@ -31,6 +31,55 @@ def _effective(values: np.ndarray, weights: np.ndarray | None) -> np.ndarray:
     return values if weights is None else values[weights > 0]
 
 
+def _level_preview(values: Any) -> str:
+    """Keep long categorical domains readable in notebook exceptions."""
+    values = list(values)
+    suffix = f" ... ({len(values)} total)" if len(values) > 20 else ""
+    return repr(values[:20]) + suffix
+
+
+def _ordered_support_message(
+    feature: str,
+    spec: Any,
+    configured: Any,
+    raw_levels: list[Any],
+    grouped_values: np.ndarray,
+    effective: set[Any],
+    absent: list[Any],
+) -> str:
+    """Show the saved feature definition and the observed support that blocks a refit."""
+    ordered = sorted(spec._smooth_levels, key=spec._level_to_value.__getitem__)
+    groups = spec._grouping.group_to_originals if spec._grouping is not None else {}
+    grouping = (
+        "; ".join(
+            f"{name!r}: {_level_preview(members)}" for name, members in list(groups.items())[:20]
+        )
+        or "none"
+    )
+    if len(groups) > 20:
+        grouping += f" ... ({len(groups)} groups total)"
+    observed = set(grouped_values)
+    zero_weight = [level for level in absent if level in observed]
+    return "\n".join(
+        [
+            f"Cannot refit ordered feature {feature!r}.",
+            f"Config: {configured!r}",
+            f"Saved smooth positions (level, value): {_level_preview((level, spec._level_to_value[level]) for level in ordered)}",
+            f"Saved base: {spec._base_level!r}; specials: {_level_preview(spec._special_raw or [])}",
+            f"Grouping: {grouping}",
+            f"Received raw levels: {_level_preview(raw_levels)}",
+            f"Smooth groups with positive weight: {_level_preview(level for level in ordered if level in effective)}",
+            f"No positive-weight observations: {_level_preview(absent)}",
+            f"Present only on zero-weight rows: {_level_preview(zero_weight)}",
+            (
+                "Check the source data, filters and fitting weights. If the feature definition "
+                "changed deliberately, build and review a revised baseline. This refit will not "
+                "estimate the curve across missing groups."
+            ),
+        ]
+    )
+
+
 def numeric_support_issues(
     feature: str,
     spec: Any,
@@ -64,6 +113,7 @@ def ordered_support_issues(
     """Require support for whole smooth groups after mapping original labels once."""
     if not isinstance(getattr(spec, "_spline", None), _SplineBase):
         return
+    raw_levels = pd.unique(values).tolist()
     if spec._grouping is not None:
         values = pd.Series(values).map(spec._grouping.original_to_group).to_numpy()
     effective = set(_effective(values, weights))
@@ -72,10 +122,9 @@ def ordered_support_issues(
         yield SupportIssue(
             "error",
             "MISSING_ORDERED_SUPPORT",
-            f"Ordered feature {feature!r} has no positive-weight observations for smooth "
-            f"groups/levels {list(map(str, absent[:10]))} ({len(absent)} absent). "
-            "The curve there would rely on smoothing or extrapolation. Review the snapshot "
-            "before refitting; changing knots does not restore the missing support.",
+            _ordered_support_message(
+                feature, spec, configured, raw_levels, values, effective, absent
+            ),
         )
     # Specials have independent indicators and must not count as spline support.
     smooth = (

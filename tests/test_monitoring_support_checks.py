@@ -140,6 +140,10 @@ def test_missing_entire_ordered_group_blocks_refit(ordered_case, missing, varian
     assert issue.feature == "band"
     if missing == ["4", "5"]:
         assert "middle" in issue.message
+        assert "OrderedCategorical(" in issue.message
+        assert "Received raw levels: ['1', '2', '3', '6', '7', '8', 'NA']" in issue.message
+        assert "No positive-weight observations: ['middle']" in issue.message
+        assert "'middle': ['4', '5']" in issue.message
 
 
 def test_missing_one_group_member_is_only_a_warning(ordered_case):
@@ -156,6 +160,10 @@ def test_zero_weight_ordered_group_is_unsupported(ordered_case):
     report = check_monitoring_data(model, df, sample_weight=weights)
     assert not report.compatible
     assert "MISSING_ORDERED_SUPPORT" in set(report.issues.code)
+    message = report.issues.query("code == 'MISSING_ORDERED_SUPPORT'").iloc[0].message
+    assert "Received raw levels: ['1', '2', '3', '4', '5', '6', '7', '8', 'NA']" in message
+    assert "No positive-weight observations: ['middle']" in message
+    assert "Present only on zero-weight rows: ['middle']" in message
 
 
 def test_missing_special_is_not_a_missing_smooth_group(ordered_case):
