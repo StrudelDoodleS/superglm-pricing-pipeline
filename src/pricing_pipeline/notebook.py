@@ -1028,6 +1028,7 @@ __all__ = [
     "ManualEditReview",
     "ModelFitContract",
     "ModelFrameArtifact",
+    "ModelRecipe",
     "MonitoringDataCheck",
     "MonitoringDataError",
     "MonitoringFitResult",

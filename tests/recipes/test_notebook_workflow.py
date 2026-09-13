@@ -7,6 +7,14 @@ from pricing_pipeline.scaffold.config import ScaffoldOptions
 from pricing_pipeline.scaffold.service import scaffold_pricing_model
 
 
+def test_wildcard_notebook_import_can_capture_a_recipe(grouped_model_case):
+    _, spec, glm = grouped_model_case
+    namespace = {"spec": spec, "glm": glm}
+    exec("from pricing_pipeline.notebook import *", namespace)
+    exec("recipe = ModelRecipe.from_model(glm, spec=spec)", namespace)
+    assert namespace["recipe"].sha256 == api.ModelRecipe.from_model(glm, spec=spec).sha256
+
+
 def test_generated_configuration_authors_exports_and_loads(grouped_model_case, tmp_path):
     dataset, _, _ = grouped_model_case
     # Use the renderer's chosen feature/target names with a realistic fresh dataset.

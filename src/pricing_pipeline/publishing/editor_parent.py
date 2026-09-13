@@ -11,11 +11,13 @@ from typing import Any
 from sqlalchemy import text
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
+from pricing_pipeline.modeling.recipes import RecipeError
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.publishing.editor_contracts import ChampionSnapshot, ParentCandidate
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
 )
+from pricing_pipeline.publishing.recipes import validate_recipe_capture
 from pricing_pipeline.workbench.artifacts import (
     CandidateArtifactError,
     CandidateBundle,
@@ -80,6 +82,10 @@ def load_parent_candidate(
             mr.model_version AS run_model_version,
             mr.export_id,
             mr.manifest_id,
+            mr.recipe_status,
+            recipe.recipe_sha256,
+            recipe.recipe_json,
+            recipe.recipe_format_version,
             manifest.model_frame_sha256,
             split_link.split_set_id,
             mr.candidate_artifact_path,
@@ -94,6 +100,8 @@ def load_parent_candidate(
           ON pm.model_id = rp.model_id
         JOIN {schemas.pricing}.MODEL_RUN AS mr
           ON mr.rate_package_id = rp.rate_package_id
+        LEFT JOIN {schemas.pricing}.MODEL_RECIPE AS recipe
+          ON recipe.model_id = mr.model_id AND recipe.recipe_id = mr.recipe_id
         JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
           ON manifest.manifest_id = mr.manifest_id
         LEFT JOIN {schemas.mlops}.MODEL_RUN_SPLIT_SET AS split_link
@@ -152,6 +160,12 @@ def load_parent_candidate(
         expected_superglm_version=row["candidate_superglm_version"],
         allowed_root=allowed_root,
     )
+    try:
+        validate_recipe_capture(row, bundle.recipe_capture)
+    except RecipeError as exc:
+        raise EditorSubmissionError(
+            f"parent candidate recipe does not match SQL lineage: {exc}"
+        ) from exc
     for field_name, expected_value in (
         ("model_name", row["model_name"]),
         ("model_version", row["run_model_version"]),

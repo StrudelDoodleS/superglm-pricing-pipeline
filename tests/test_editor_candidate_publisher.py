@@ -1310,6 +1310,7 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     submission_relative_path,
     effective_from_date,
 ):
+    from pricing_pipeline.modeling.recipes import RecipeCapture
     from pricing_pipeline.publishing import editor_parent as editor
 
     configured_root = tmp_path / "configured-workbench"
@@ -1385,6 +1386,7 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
             return Begin(self.connection)
 
     bundle = SimpleNamespace(
+        recipe_capture=RecipeCapture(),
         model_name="HOME_FREQ",
         model_version="v4",
         export_id="parent-export",
