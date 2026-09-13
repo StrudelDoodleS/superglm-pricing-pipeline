@@ -19,8 +19,13 @@ from superglm import Categorical, OrderedCategorical, SuperGLM
 from pricing_pipeline.modeling.monitoring.baseline import _resolve_monitoring_baseline
 from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringError,
+    MonitoringVariant,
     _canonical_json,
     _categorical_scalar_identity,
+)
+from pricing_pipeline.modeling.monitoring.support_checks import (
+    numeric_support_issues,
+    ordered_support_issues,
 )
 from pricing_pipeline.workbench.core import Candidate
 
@@ -187,7 +192,7 @@ def _inspect_features(
     df: pd.DataFrame,
     sample_weight: Any,
     *,
-    allow_prediction_fallback: bool = False,
+    variant: MonitoringVariant | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, dict[str, Any]]]]:
     issues: list[dict[str, Any]] = []
     profiles: dict[str, dict[str, dict[str, Any]]] = {}
@@ -203,6 +208,9 @@ def _inspect_features(
         )
         return issues, profiles
     weights = _weights(df, sample_weight, issues)
+    if sample_weight is not None and weights is None:
+        return issues, profiles
+    configured = dict(baseline._config.feature_templates)
     weight_total = None if weights is None else float(weights.sum())
     for feature in baseline._feature_order:
         if feature not in df:
@@ -243,6 +251,11 @@ def _inspect_features(
                     f"Feature {feature!r} requires finite numeric values.",
                     len(series) if not valid else int(bad.sum()),
                 )
+            elif variant is not None:
+                for item in numeric_support_issues(
+                    feature, spec, configured[feature], numeric, weights, variant
+                ):
+                    _issue(issues, feature, *item)
             continue
         try:
             allowed, values = _categorical_domain(spec, series.to_numpy())
@@ -262,7 +275,7 @@ def _inspect_features(
         unknown = codes < 0
         if unknown.any():
             fallback = (
-                allow_prediction_fallback
+                variant is MonitoringVariant.STATIC_SCORE
                 and isinstance(spec, Categorical)
                 and spec.unseen == "base"
                 and spec._grouping is None
@@ -279,6 +292,11 @@ def _inspect_features(
                 None if weights is None else float(weights[unknown].sum()),
             )
             continue
+        if isinstance(spec, OrderedCategorical) and variant is not None:
+            for item in ordered_support_issues(
+                feature, spec, configured[feature], values, weights, variant
+            ):
+                _issue(issues, feature, *item)
         counts = np.bincount(codes, minlength=len(allowed))
         masses = (
             None if weights is None else np.bincount(codes, weights=weights, minlength=len(allowed))
@@ -293,7 +311,7 @@ def _inspect_features(
                 "warning",
                 "ABSENT_LEVELS",
                 f"Feature {feature!r} has no fitting support for baseline levels {labels}. "
-                "A refitted categorical level may be pinned to base; this is not an estimated change.",
+                "Review missing support before interpreting refitted relativities.",
             )
         profiles[feature] = {
             _canonical_json(identity): {
@@ -327,12 +345,10 @@ def _require_compatible_monitoring_data(
     df: pd.DataFrame,
     sample_weight: Any,
     *,
-    static_score: bool,
+    variant: MonitoringVariant,
 ) -> None:
     """Keep compatibility checks mandatory even when callers skip the drift report."""
-    issues, _ = _inspect_features(
-        baseline, df, sample_weight, allow_prediction_fallback=static_score
-    )
+    issues, _ = _inspect_features(baseline, df, sample_weight, variant=variant)
     _report(issues, [], [], "not_requested").raise_for_errors()
 
 
@@ -344,12 +360,16 @@ def check_monitoring_data(
     reference_df: pd.DataFrame | None = None,
     reference_sample_weight: Any = None,
     drift_threshold: float = 0.2,
+    variant: MonitoringVariant | str = MonitoringVariant.FROZEN_REFIT,
 ) -> MonitoringDataCheck:
     """Check a snapshot once before running the controlled monitoring presets.
 
     Compare raw categorical/ordered levels against the fitted baseline. Unknown
-    levels and invalid inputs are errors; absent levels and changed mixes are
-    warnings. Extra columns are ignored. Weight vectors follow dataframe row order.
+    levels, invalid inputs, constant numeric features, unsupported ordered smooth
+    groups and splines with no saved-domain overlap block refits. Partial continuous
+    coverage losses and changed mixes warn. Extra columns are ignored. Weights follow
+    dataframe row order. ``variant`` defaults to FROZEN_REFIT; STATIC_SCORE checks
+    prediction compatibility without requiring support to estimate coefficients.
 
     A verified Candidate supplies reference inputs and fitting weights from its
     saved bundle. For a standalone SuperGLM, supply reference_df for drift checks.
@@ -359,6 +379,7 @@ def check_monitoring_data(
     test. Weight distances require weights on both sides. This checks categorical
     marginals; matching marginals cannot certify unchanged upstream semantics.
     """
+    resolved_variant = MonitoringVariant(variant)
     if (
         isinstance(drift_threshold, bool)
         or not isinstance(drift_threshold, Real)
@@ -378,7 +399,7 @@ def check_monitoring_data(
         reference_source = "saved_candidate"
         reference_df = bundle.X
         reference_sample_weight = bundle.sample_weight if sample_weight is not None else None
-    issues, current = _inspect_features(baseline, df, sample_weight)
+    issues, current = _inspect_features(baseline, df, sample_weight, variant=resolved_variant)
     if reference_df is None:
         _issue(
             issues,

@@ -55,7 +55,7 @@ Useful starting points under `src/pricing_pipeline/`:
 | Fit, CV and export | `modeling/standard_superglm.py` |
 | Save or deploy a version | `publishing/publish.py`, `publishing/deployment.py` |
 | Editor publication | `publishing/editor.py`, then its named stage modules |
-| Monitoring | `modeling/monitoring/data_checks.py` for preflight, `workflow.py` for refits, `persistence.py` for SQL |
+| Monitoring | `modeling/monitoring/data_checks.py` for preflight, `support_checks.py` for spline support, `workflow.py` for refits, `persistence.py` for SQL |
 | Reports | `reporting/report.py`; adapter records are in `evidence_types.py` |
 
 Notebook generation reads six complete `.ipynb` templates, substitutes tokens

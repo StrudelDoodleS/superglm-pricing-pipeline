@@ -563,8 +563,35 @@ results = {
 The check compares against the candidate's reverified training inputs. New raw
 categorical levels, missing feature columns, nulls, invalid numeric values and
 invalid weights block controlled refits. Known levels with no rows or no positive
-weight remain allowed but produce a support warning. Grouped features are checked
-against their original input levels, and ordered categories include their specials.
+weight produce a support warning. Grouped features are checked against their
+original input levels, and ordered categories include their specials.
+
+Refits also require support to estimate each feature:
+
+- Numeric features need at least two distinct values with positive fitting weight.
+- Ordered splines need positive-weight observations for every declared smooth
+  group or level. Losing one member of a surviving group only warns. Losing the
+  entire group blocks the refit, including `FULL_ADAPTIVE`. Specials do not count
+  as observations of the smooth; absent specials retain the support warning.
+- Continuous splines need observations inside the saved domain and variation
+  after applying their extrapolation policy. A shift from `0–100` to `200–300`
+  blocks a controlled refit. A smaller range such as `50–100` warns about lost
+  tails and empty saved knot intervals.
+- Out-of-bound rows raise with `extrapolation="error"` and warn with `"clip"` or
+  `"extend"`. Adaptive fits may move data-driven boundaries, but retain explicit
+  boundaries and knots. Declared knots outside the new adaptive domain block.
+
+The check defaults to `variant="FROZEN_REFIT"`. Pass the variant when checking a
+specific comparison. `variant="STATIC_SCORE"` checks prediction compatibility
+without requiring support for re-estimation. Every `run_monitoring_fit` call
+enforces the checks for its own variant before REML starts.
+
+These checks use positive weight, not row presence, to assess fitting support.
+Out-of-bound errors include zero-weight rows because the model still evaluates
+their feature values. Coverage warnings do not certify a reliable fit: these
+checks do not test joint rank, near-collinearity, or numerical conditioning.
+Inspect fit diagnostics as well. No check moves knots, changes groupings, chooses
+a refit strategy, or establishes a new baseline automatically.
 
 `check.distributions` contains per-level counts and shares for both snapshots.
 `check.drift` measures categorical total variation distance: half the sum of
@@ -582,7 +609,7 @@ Continue using dashboard trends and upstream investigation for those questions.
 `check.to_json()` returns aggregate evidence for a runner's logs or an artifact.
 This preflight report is not automatically persisted to SQL or a dashboard.
 `run_monitoring_fit` also enforces compatibility before fitting, so bypassing the
-explicit check cannot silently accept new levels. Direct `STATIC_SCORE` calls
+explicit check cannot silently accept new levels or unsupported refits. Direct `STATIC_SCORE` calls
 retain an existing ungrouped categorical `unseen="base"` prediction policy;
 that fallback does not permit refitting unknown levels.
 

@@ -151,7 +151,7 @@ def run_monitoring_fit(
         baseline,
         X,
         sample_weight,
-        static_score=resolved_variant is MonitoringVariant.STATIC_SCORE,
+        variant=resolved_variant,
     )
     contract = build_model_fit_contract(
         baseline,

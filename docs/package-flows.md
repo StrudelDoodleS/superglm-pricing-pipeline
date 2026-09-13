@@ -134,8 +134,13 @@ It calls the stages in order; it does not write monitoring rows itself.
 
 Run [`check_monitoring_data`](../src/pricing_pipeline/modeling/monitoring/data_checks.py)
 once before the preset loop. Inspect its issues and drift table, then call
-`raise_for_errors()`. Compatibility errors stop the loop; absent levels and large
-categorical mix changes request review while allowing fitting. The reference
+`raise_for_errors()`. Invalid inputs and unsupported refits stop the loop. Losing
+an entire ordered smooth group blocks; losing one raw member of a surviving
+group warns. Constant numeric values and splines with no saved-domain overlap
+also block. Partial continuous coverage losses and categorical mix changes warn.
+Pass `variant` to check a specific comparison; the default is `FROZEN_REFIT`.
+`STATIC_SCORE` requires prediction compatibility, not support for re-estimation.
+The reference
 comes from the candidate's reverified saved training inputs. Aggregate reports
 can be logged with `to_json()`; they are separate from SQL monitoring observations.
 
@@ -190,6 +195,7 @@ bases and refits with a group-selection penalty rather than relaxing the contrac
 | Stage | Owner | Handoff |
 |---|---|---|
 | Check snapshot compatibility and categorical drift | [`data_checks`](../src/pricing_pipeline/modeling/monitoring/data_checks.py) | `MonitoringDataCheck` with issues, per-level distributions and distances. |
+| Check numeric and ordered spline support | [`support_checks`](../src/pricing_pipeline/modeling/monitoring/support_checks.py) | Findings for constant values, missing smooth groups, boundaries and coverage gaps before REML. |
 | Describe the baseline and permitted changes | [`contracts`](../src/pricing_pipeline/modeling/monitoring/contracts.py) | `ModelFitContract`, `MonitoringVariant` and result records. |
 | Verify and bind the saved baseline | [`baseline`](../src/pricing_pipeline/modeling/monitoring/baseline.py) | A verified fitted model bound to the checked dataframe. |
 | Reconstruct and fit the comparison | [`fitting`](../src/pricing_pipeline/modeling/monitoring/fitting.py) | `materialize_monitoring_model` applies the selected frozen/reestimated policy. |
