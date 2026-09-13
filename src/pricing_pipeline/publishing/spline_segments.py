@@ -1,4 +1,8 @@
-"""Validate the normalized polynomial segments exported by SuperGLM."""
+"""Validate the polynomial segments used for exact spline relativities.
+
+Parse interval bounds, check segment coefficients and identify constant
+tails. ``rating_tables`` uses these checks before database publication.
+"""
 
 from __future__ import annotations
 

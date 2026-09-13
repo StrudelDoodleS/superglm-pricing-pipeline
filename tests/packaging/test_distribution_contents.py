@@ -82,6 +82,8 @@ MIGRATION_FILES = (
     "V044__unified_final_model_relativity.sql",
     "V045__score_per_unit_factors.sql",
     "V046__full_fit_diagnostics.sql",
+    "V047__model_recipes.sql",
+    "V048__recipe_revision_views.sql",
 )
 BASE_REQUIREMENTS = (
     "joblib",
@@ -95,6 +97,7 @@ BASE_REQUIREMENTS = (
     "scikit-learn",
     "sqlalchemy",
     "superglm>=0.30",
+    "tomli-w>=1.2.0",
 )
 OPTIONAL_REQUIREMENTS = {
     "sqlserver": ("pyodbc",),
@@ -234,6 +237,7 @@ def _expected_resource_names() -> set[str]:
         f"{SCAFFOLD_PREFIX}__init__.py",
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
         f"{SCAFFOLD_PREFIX}pricing-builder.agent.md",
+        f"{SCAFFOLD_PREFIX}pricing-developer.agent.md",
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
@@ -241,7 +245,7 @@ def _expected_resource_names() -> set[str]:
 
 
 def _assert_resource_inventory(names: set[str]) -> None:
-    assert len(MIGRATION_FILES) == 46
+    assert len(MIGRATION_FILES) == 48
     assert {
         name for name in names if name.startswith(RESOURCE_PREFIX)
     } == _expected_resource_names()

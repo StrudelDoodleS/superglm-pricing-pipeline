@@ -1,4 +1,8 @@
-"""Persist model-run, dataset, split, metric, and parent lineage evidence."""
+"""Write the provenance attached to a published model run.
+
+Persist dataset and split links, metrics, fold evidence and parent references
+inside the SQL Server publication transaction.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.recipes import run_recipe_params
 
 
 class ModelRunIdentityError(RuntimeError):
@@ -67,6 +72,7 @@ def record_model_run(
     }
     transaction = engine.begin() if connection is None else nullcontext(connection)
     with transaction as con:
+        params.update(run_recipe_params(con, build))
         if parent_model_run_id is not None:
             parent_matches_package = con.execute(
                 text(
@@ -98,7 +104,7 @@ def record_model_run(
                 INSERT INTO pricing.MODEL_RUN (
                     dag_id, airflow_run_id, mlflow_run_id, manifest_id, export_id,
                     model_id, model_name, model_version, model_kind,
-                    model_equivalence_sha256, rate_package_id, rating_workbook_path,
+                    model_equivalence_sha256, recipe_id, recipe_status, recipe_unavailable_reason, rate_package_id, rating_workbook_path,
                     rating_workbook_sha256, publication_receipt_path,
                     publication_receipt_sha256, candidate_artifact_path,
                     candidate_artifact_sha256, candidate_artifact_format,
@@ -108,7 +114,7 @@ def record_model_run(
                 ) VALUES (
                     :dag_id, :airflow_run_id, :mlflow_run_id, :manifest_id, :export_id,
                     :model_id, :model_name, :model_version, :model_kind,
-                    :model_equivalence_sha256, :rate_package_id, :rating_workbook_path,
+                    :model_equivalence_sha256, :recipe_id, :recipe_status, :recipe_unavailable_reason, :rate_package_id, :rating_workbook_path,
                     :rating_workbook_sha256, :publication_receipt_path,
                     :publication_receipt_sha256, :candidate_artifact_path,
                     :candidate_artifact_sha256, :candidate_artifact_format,

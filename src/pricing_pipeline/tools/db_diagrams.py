@@ -1,3 +1,9 @@
+"""Read database metadata and generate a browsable SQL schema diagram.
+
+Combine tables and foreign keys with configured workflow relationships, then
+write HTML, Mermaid and metadata files. Used by the diagram generation script.
+"""
+
 from __future__ import annotations
 
 import html
@@ -15,6 +21,8 @@ from sqlalchemy.engine import Engine
 
 @dataclass(frozen=True)
 class ColumnInfo:
+    """Database column metadata used to label a table in the schema diagram."""
+
     column_name: str
     data_type: str
     nullable: bool
@@ -24,6 +32,8 @@ class ColumnInfo:
 
 @dataclass(frozen=True)
 class TableInfo:
+    """One database table and its columns, keys and description."""
+
     schema_name: str
     table_name: str
     columns: list[ColumnInfo]
@@ -40,6 +50,8 @@ class TableInfo:
 
 @dataclass(frozen=True)
 class ForeignKeyInfo:
+    """A database foreign-key relationship used to connect diagram tables."""
+
     fk_name: str
     child_schema: str
     child_table: str
@@ -59,6 +71,8 @@ class ForeignKeyInfo:
 
 @dataclass(frozen=True)
 class DiagramLogicalEdge:
+    """A workflow relationship drawn in addition to physical foreign keys."""
+
     edge_name: str
     source_table: str
     target_table: str
@@ -68,6 +82,8 @@ class DiagramLogicalEdge:
 
 @dataclass(frozen=True)
 class DiagramLane:
+    """An ordered group of tables shown together in a workflow diagram."""
+
     title: str
     description: str
     table_groups: list[list[str]]
@@ -78,12 +94,16 @@ class DiagramLane:
 
 @dataclass(frozen=True)
 class SchemaMetadata:
+    """The inspected tables and foreign keys passed to diagram rendering."""
+
     tables: list[TableInfo]
     foreign_keys: list[ForeignKeyInfo]
 
 
 @dataclass(frozen=True)
 class DiagramSection:
+    """A selected set of tables and relationships rendered as one diagram section."""
+
     title: str
     description: str
     table_groups: list[list[str]]

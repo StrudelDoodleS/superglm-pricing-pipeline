@@ -1,4 +1,8 @@
-"""Verified, file-backed handoff for model frames between analyst notebooks."""
+"""Save, inspect and load a dataframe handoff between notebooks.
+
+Each joblib file has a JSON receipt with its shape, column types and hashes.
+Use ``PricingDataset`` when the handoff also needs dataset provenance.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +30,8 @@ class ModelFrameArtifactError(RuntimeError):
 
 @dataclass(frozen=True)
 class ModelFrameArtifact:
+    """Receipt describing a saved dataframe file, its columns, size and integrity hashes."""
+
     path: str
     metadata_path: str
     format: str

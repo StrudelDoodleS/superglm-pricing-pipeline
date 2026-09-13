@@ -60,12 +60,11 @@ An explicit `--config` wins, and explicit command-line options win over the
 file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
 notebooks set it to `False`.
 
-`init` also seeds `.github/agents/pricing-builder.agent.md`. Select **Pricing
-builder** in Copilot for help configuring data, connections and models.
-Rerunning `init` preserves existing config and agent files, including your edits.
+`init` seeds **Pricing builder** and **Pricing developer** under `.github/agents/`.
+Rerunning it adds missing agents and preserves config and agent edits. For package
+maintenance, the developer agent uses the [source navigation guides](docs/MAINTAINERS.md).
 
-The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes `scaffold`
-with the same project and configuration requirements.
+The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same scaffold.
 
 ## Important rules
 
@@ -77,17 +76,15 @@ with the same project and configuration requirements.
 - Save notebooks before building: source cells are evidence, while outputs and
   execution counts are not.
 
-Generated model repositories own their notebooks, data, configuration, and local
-artifacts. This framework repository contains only the reusable Python package,
-schema resources, documentation, and development tooling.
-
 ## Guides
 
 - [Runnable freMTPL frequency demo](tutorials/fremtpl_frequency/demo.ipynb),
   with [setup and terminal instructions](tutorials/README.md).
+- [Grouped model recipes and challenger comparison](tutorials/model_recipes/comparison.ipynb)
 - [Notebook workflow and function reference](docs/notebooks/README.md)
 - [SQL schema, relationships, triggers, views, and migration runbook](docs/sql/README.md)
 - [Script command index](scripts/README.md)
+- [Developer guide: package flows, module owners and argument-to-notebook mapping](docs/MAINTAINERS.md)
 
 For an underwriter comparison of already-scored models, use
 `scripts/build_underwriter_report.py` with
@@ -122,3 +119,6 @@ uv build --force-pep517 --sdist --wheel --out-dir dist
 Only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works
 outside this checkout. Do not commit model-local `.local/` state, notebook
 outputs, credentials, or private work runtime modules.
+
+Export with `candidate.recipe.save(path)`; reload with `ModelRecipe.load(path).build(dataset=dataset)`.
+SQL assigns recipe revisions on save. Deployment is separate; apply V047 and V048 first.

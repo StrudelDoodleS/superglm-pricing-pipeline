@@ -26,7 +26,7 @@ assert (
     == importlib.metadata.version("superglm-pricing-pipeline")
     == "0.2.1"
 )
-assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 46
+assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 48
 assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if item.is_file())) == (
     "mlops.sql",
     "pricing.sql",
@@ -56,9 +56,10 @@ init_result = subprocess.run(
 )
 assert init_result.returncode == 0, init_result.stderr
 assert str((consumer / "pricing_scaffold.toml").resolve()) in init_result.stdout
-assert (consumer / ".github/agents/pricing-builder.agent.md").read_bytes() == (
-    scaffold_root().joinpath("pricing-builder.agent.md").read_bytes()
-)
+for name in ("pricing-builder.agent.md", "pricing-developer.agent.md"):
+    assert (consumer / ".github/agents" / name).read_bytes() == (
+        scaffold_root().joinpath(name).read_bytes()
+    )
 scaffold_result = subprocess.run(
     [
         sys.executable,
@@ -103,3 +104,36 @@ with engine.connect() as connection:
         ).scalar_one()
         == 0
     )
+
+
+# Exercise the installed public recipe API without notebook extras or repository paths.
+import pandas as pd
+from superglm import Numeric, SuperGLM
+
+from pricing_pipeline.notebook import ModelRecipe, PricingDataset, PricingModelSpec
+
+dataset = PricingDataset(
+    pd.DataFrame(
+        {"id": [1, 2, 3], "snapshot": ["2026-09-01"] * 3, "x": [0.0, 1.0, 2.0], "target": [0, 1, 2]}
+    ),
+    name="wheel",
+    source="smoke",
+    key="id",
+    as_of="snapshot",
+)
+spec = PricingModelSpec(
+    name="WHEEL",
+    label="Wheel",
+    model_type="frequency",
+    deployment_slot="TEST",
+    target="target",
+    dataset=dataset,
+    features=("x",),
+)
+recipe = ModelRecipe.from_model(
+    SuperGLM(features={"x": Numeric()}, retain_fit_state=False), spec=spec
+)
+path = recipe.save(consumer / "model.toml")
+loaded_spec, loaded_model = ModelRecipe.load(path).build(dataset=dataset)
+assert ModelRecipe.from_model(loaded_model, spec=loaded_spec).sha256 == recipe.sha256
+assert loaded_spec.dataset is dataset

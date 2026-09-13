@@ -1,13 +1,19 @@
-"""Small, synchronous entry points for pricing-model notebooks.
+"""Public Python entry points for the pricing-model workflow.
 
-The notebook owns model and data decisions.  These helpers own generated SQL
-identifiers, audit records, artifact locations, and publication plumbing.
+Connect, register a model, fit it, save a version, then review or deploy it.
+``PricingDataset`` identifies the data; ``PricingModelSpec`` maps model roles
+to columns; ``ModelRecipe`` saves reusable model configuration as TOML.
+
+Fitting writes audit evidence and local artifacts. Saving publishes a SQL
+rating package. Deployment is a separate explicit operation. Implementation
+owners live in ``data``, ``modeling``, ``publishing`` and ``workbench``.
 """
 
 from __future__ import annotations
 
 import getpass
-from collections.abc import Mapping, Sequence
+import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -33,12 +39,9 @@ from pricing_pipeline.data.transforms import (
     Clip,
     Log,
     Log1p,
-    Transform,
     apply_transforms,
-    normalize_transforms,
     transforms_metadata,
 )
-from pricing_pipeline.data.validation import Splitter, splitter_config
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
 from pricing_pipeline.infra.runtime import runtime_from_env_or_module
@@ -65,14 +68,19 @@ from pricing_pipeline.modeling.manual_adjustment import (
 )
 from pricing_pipeline.modeling.monitoring import (
     ModelFitContract,
+    MonitoringDataCheck,
+    MonitoringDataError,
     MonitoringFitResult,
     MonitoringInvariantEvidence,
     MonitoringVariant,
     PersistedMonitoringRun,
     build_model_fit_contract,
+    check_monitoring_data,
     persist_monitoring_fit,
     run_monitoring_fit,
 )
+from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, UnsupportedRecipeError
+from pricing_pipeline.modeling.recipes.schema import capture_environment
 from pricing_pipeline.modeling.standard_superglm import (
     ModelInputs,
     PrecomputedSplitter,
@@ -81,6 +89,7 @@ from pricing_pipeline.modeling.standard_superglm import (
 )
 from pricing_pipeline.models.config import ModelBuildConfig, ValidationSplitConfig
 from pricing_pipeline.models.kinds import normalise_model_kind
+from pricing_pipeline.models.pricing import PricingModelSpec, _required_text
 from pricing_pipeline.models.spec import ApprovedModelBuild
 from pricing_pipeline.orchestration.publish_completed_build import (
     CompletedModelPublishResult,
@@ -106,6 +115,12 @@ from pricing_pipeline.workbench.submission import save_editor_submission
 
 @dataclass(frozen=True)
 class NotebookContext:
+    """Connection, artifact locations and write permission returned by ``connect``.
+
+    Pass this object to notebook operations as ``pricing``. ``destination``
+    identifies the connected database; local mode also exposes SQLite paths.
+    """
+
     engine: Any
     settings: Settings
     mode: str
@@ -123,202 +138,13 @@ class NotebookContext:
 
 
 @dataclass(frozen=True)
-class PricingModelSpec:
-    name: str
-    label: str
-    target: str
-    model_type: str
-    deployment_slot: str
-    features: Sequence[str]
-    dataset_name: str | None = None
-    source_system: str | None = None
-    pk_columns: Sequence[str] | None = None
-    validation: ValidationSplitConfig | Splitter = field(
-        default_factory=ValidationSplitConfig.kfold
-    )
-    offset_column: str | None = None
-    offset_source_column: str | None = None
-    offset_label: str | None = None
-    sample_weight_column: str | None = None
-    export_weight_column: str | None = None
-    data_as_of_column: str | None = None
-    scoring: tuple[str, ...] = ("deviance", "nll", "gini")
-    fit_mode: str = "fit_reml"
-    dataset: PricingDataset | None = None
-    transforms: Mapping[str, Transform] = field(default_factory=dict)
-    spline_export: str = "exact"
-    groups_column: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.spline_export not in {"exact", "binned"}:
-            raise ValueError("spline_export must be 'exact' or 'binned'")
-        if self.dataset is not None:
-            if not isinstance(self.dataset, PricingDataset):
-                raise TypeError("dataset must be a PricingDataset")
-            for name, expected in (
-                ("dataset_name", self.dataset.name),
-                ("source_system", self.dataset.source),
-                ("pk_columns", self.dataset.key),
-                ("data_as_of_column", self.dataset.as_of),
-            ):
-                supplied = getattr(self, name)
-                if supplied is not None:
-                    if name == "pk_columns":
-                        if isinstance(supplied, str) or not isinstance(supplied, Sequence):
-                            raise TypeError("pk_columns must be an ordered sequence of names")
-                        supplied = tuple(str(value).strip() for value in supplied)
-                    else:
-                        supplied = str(supplied).strip()
-                    if supplied != expected:
-                        raise ValueError(f"{name} conflicts with the dataset")
-                object.__setattr__(self, name, expected)
-        object.__setattr__(self, "transforms", normalize_transforms(self.transforms))
-        for name in ("features", "pk_columns"):
-            values = getattr(self, name)
-            if isinstance(values, str) or not isinstance(values, Sequence):
-                raise TypeError(f"{name} must be an ordered sequence of names")
-        for field_name in (
-            "name",
-            "label",
-            "target",
-            "model_type",
-            "dataset_name",
-            "source_system",
-            "fit_mode",
-        ):
-            object.__setattr__(
-                self,
-                field_name,
-                _required_text(getattr(self, field_name), field_name),
-            )
-        object.__setattr__(
-            self,
-            "deployment_slot",
-            _required_text(self.deployment_slot, "deployment_slot").upper(),
-        )
-        object.__setattr__(
-            self,
-            "features",
-            tuple(_required_text(value, "features") for value in self.features),
-        )
-        object.__setattr__(
-            self,
-            "pk_columns",
-            tuple(_required_text(value, "pk_columns") for value in self.pk_columns),
-        )
-        object.__setattr__(
-            self,
-            "scoring",
-            tuple(_required_text(value, "scoring") for value in self.scoring),
-        )
-        for field_name in (
-            "offset_column",
-            "offset_source_column",
-            "offset_label",
-            "sample_weight_column",
-            "export_weight_column",
-            "data_as_of_column",
-            "groups_column",
-        ):
-            value = getattr(self, field_name)
-            object.__setattr__(
-                self,
-                field_name,
-                None if value is None else _required_text(value, field_name),
-            )
-        if self.offset_column in self.transforms:
-            transform = self.transforms[self.offset_column]
-            for name, expected in (
-                ("offset_source_column", transform.source),
-                ("offset_label", transform.expression),
-            ):
-                supplied = getattr(self, name)
-                if supplied is not None and supplied != expected:
-                    raise ValueError(f"{name} conflicts with the offset transform")
-                object.__setattr__(self, name, expected)
-        offset_fields = (
-            self.offset_column,
-            self.offset_source_column,
-            self.offset_label,
-        )
-        if any(value is not None for value in offset_fields) and not all(
-            value is not None for value in offset_fields
-        ):
-            raise ValueError(
-                "offset_column, offset_source_column, and offset_label must be configured together"
-            )
-        if not self.features:
-            raise ValueError("features must contain at least one column")
-        if len(set(self.features)) != len(self.features):
-            raise ValueError("features must not contain duplicates")
-        if not self.pk_columns:
-            raise ValueError("pk_columns must contain at least one column")
-        if len(set(self.pk_columns)) != len(self.pk_columns):
-            raise ValueError("pk_columns must not contain duplicates")
-        if not self.scoring:
-            raise ValueError("scoring must contain at least one metric")
-        if len(set(self.scoring)) != len(self.scoring):
-            raise ValueError("scoring must not contain duplicates")
-        if isinstance(self.validation, ValidationSplitConfig):
-            if self.groups_column is not None:
-                raise ValueError("groups_column requires a splitter in validation")
-            if self.validation.method not in {
-                "kfold",
-                "train_test_split",
-                "column_kfold",
-                "column_holdout",
-            }:
-                raise ValueError(
-                    f"validation method {self.validation.method!r} is not supported by "
-                    "the notebook workflow; pass a splitter or use a column-based split"
-                )
-            if not self.validation.materialize:
-                object.__setattr__(self, "validation", replace(self.validation, materialize=True))
-        validation_config = self._validation_config()
-
-        roles: dict[str, list[str]] = {}
-        role_values = {
-            "target": (self.target,),
-            "primary key": self.pk_columns,
-            "feature": self.features,
-            "split": (validation_config.column,),
-            "offset": (self.offset_column,),
-            "offset source": (self.offset_source_column,),
-            "sample weight": (self.sample_weight_column,),
-            "export weight": (self.export_weight_column,),
-            "data as of": (self.data_as_of_column,),
-        }
-        for role, columns in role_values.items():
-            for column in columns:
-                if column is not None:
-                    roles.setdefault(column, []).append(role)
-        structural_roles = {
-            "target",
-            "primary key",
-            "feature",
-            "split",
-            "data as of",
-        }
-        overlaps = {
-            column: assigned_roles
-            for column, assigned_roles in roles.items()
-            if len(assigned_roles) > 1 and any(role in structural_roles for role in assigned_roles)
-        }
-        if overlaps:
-            detail = "; ".join(
-                f"{column}={','.join(assigned_roles)}"
-                for column, assigned_roles in sorted(overlaps.items())
-            )
-            raise ValueError(f"model column roles overlap: {detail}")
-
-    def _validation_config(self) -> ValidationSplitConfig:
-        if isinstance(self.validation, ValidationSplitConfig):
-            return self.validation
-        return splitter_config(self.validation, groups_column=self.groups_column)
-
-
-@dataclass(frozen=True)
 class RegisteredModel:
+    """SQL model identity and source directory used by notebook operations.
+
+    ``register_model`` also attaches a spec for fitting. ``load_registered_model``
+    returns a review reference with ``spec=None``.
+    """
+
     model_id: int
     config: ModelBuildConfig
     source_root: Path
@@ -331,19 +157,65 @@ class RegisteredModel:
 
 @dataclass(frozen=True)
 class BuiltCandidate:
+    """A completed fit with metrics and verified references to its local artifacts.
+
+    Returned by ``fit_model`` before the rating package is saved. Pass it to
+    ``save_model_version`` for publication, or export ``recipe`` for reuse.
+    """
+
     model: RegisteredModel
     completed_build: ApprovedModelBuild
+    _retained_recipe_capture: tuple[str, str, RecipeCapture] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def metrics(self) -> dict[str, float]:
         return dict(self.completed_build.metrics)
 
+    @property
+    def recipe(self) -> ModelRecipe:
+        """Read the immutable recipe verified against this build's artifact."""
+        from pricing_pipeline.workbench.artifacts import load_candidate_bundle
 
-def _required_text(value: Any, field_name: str) -> str:
-    cleaned = str(value or "").strip()
-    if not cleaned:
-        raise ValueError(f"{field_name} is required")
-    return cleaned
+        build = self.completed_build
+        if build.candidate_artifact_path is None:
+            raise UnsupportedRecipeError(
+                "recipe unavailable: build has no verified candidate artifact"
+            )
+        artifact = Path(build.candidate_artifact_path)
+        retained = self._retained_recipe_capture
+        if (
+            retained is not None
+            and not artifact.exists()
+            and not any(path.is_symlink() for path in (artifact, *artifact.parents))
+        ):
+            path, digest, capture = retained
+            if (
+                path != build.candidate_artifact_path
+                or digest != build.candidate_artifact_sha256
+                or capture != build.recipe_capture
+            ):
+                raise ValueError("retained recipe evidence does not match completed build")
+        else:
+            bundle = load_candidate_bundle(
+                build.candidate_artifact_path,
+                expected_sha256=build.candidate_artifact_sha256,
+                expected_size_bytes=build.candidate_artifact_size_bytes,
+                expected_format=build.candidate_artifact_format,
+                expected_python_version=build.candidate_python_version,
+                expected_superglm_version=build.candidate_superglm_version,
+                allowed_root=Path(build.candidate_artifact_path).parent,
+            )
+            if bundle.recipe_capture != build.recipe_capture:
+                raise ValueError("candidate artifact recipe does not match completed build")
+            capture = bundle.recipe_capture
+        if capture.status != "CAPTURED":
+            raise UnsupportedRecipeError(
+                capture.unavailable_reason
+                or "recipe unavailable: legacy build has no captured constructor recipe"
+            )
+        return ModelRecipe(capture.document)
 
 
 def _created_by(value: str | None) -> str:
@@ -425,7 +297,13 @@ def connect(
     expected_remote_database: str | None = None,
     allow_remote_writes: bool = False,
 ) -> NotebookContext:
-    """Connect locally or through a governed private runtime without Airflow."""
+    """Open local SQLite storage or connect through a project's SQL runtime.
+
+    Local mode creates or opens audit databases beneath ``local_root``.
+    Remote mode checks the connected database against ``expected_remote_database``;
+    mutating operations also require ``allow_remote_writes=True``.
+    Return a ``NotebookContext`` shared by the remaining notebook operations.
+    """
     selected_mode = str(mode).strip().lower()
     if selected_mode == "local":
         return _connect_local(local_root)
@@ -445,7 +323,11 @@ def register_model(
     source_root: str | Path,
     created_by: str | None = None,
 ) -> RegisteredModel:
-    """Create a model once, then strictly validate its stable SQL identity."""
+    """Create or validate the SQL registry entry and return a fitting reference.
+
+    ``source_root`` is the model directory whose source files become build evidence.
+    An existing registration must match the supplied stable model identity.
+    """
     pricing.require_write("register_model")
     root = Path(source_root).expanduser().resolve()
     if not root.is_dir():
@@ -494,7 +376,11 @@ def load_registered_model(
     model_name: str | None = None,
     model_label: str | None = None,
 ) -> RegisteredModel:
-    """Resolve one existing SQL model by name and/or label for review or deployment."""
+    """Find a registered SQL model by name or label for review and deployment.
+
+    Return a ``RegisteredModel`` with no fitting spec. Use ``register_model``
+    with a ``PricingModelSpec`` when preparing a new fit.
+    """
     name = None if model_name is None else _required_text(model_name, "model_name")
     label = None if model_label is None else _required_text(model_label, "model_label")
     if name is None and label is None:
@@ -562,7 +448,11 @@ def list_model_versions(
     model: RegisteredModel,
     technical: bool = False,
 ) -> pd.DataFrame:
-    """List saved model versions newest-first for review or deployment."""
+    """Return saved model versions newest first, with metrics and lineage.
+
+    Use this list to select a package for ``load_model_version``. Listing does
+    not deserialize fitted-model artifacts.
+    """
     return Workbench(
         engine=pricing.engine,
         settings=pricing.settings,
@@ -623,7 +513,15 @@ def fit_model(
     data_as_of: date | datetime | str | None = None,
     created_by: str | None = None,
 ) -> BuiltCandidate:
-    """Run CV, fit the full model and export review artifacts and audit evidence."""
+    """Run cross-validation and a full fit, then return a ``BuiltCandidate``.
+
+    ``frame`` must contain the prepared dataset, including declared transforms.
+    The configured SuperGLM model is cloned before fitting. This call reserves a
+    model version, records dataset/split evidence and writes local review artifacts.
+
+    Use ``save_model_version`` to publish the rating package. Recipe revisions
+    are assigned on save; this call does not deploy the model.
+    """
     pricing.require_write("fit_model")
     resolved_model_kind = normalise_model_kind(model_kind)
     spec = model.spec
@@ -721,6 +619,22 @@ def fit_model(
                 row_count=len(frame),
             ).folds
         )
+    # Own the final declared choices after input validation and before CV or full fitting.
+    spec = replace(spec)
+    superglm_model = superglm_model.clone_unfitted()
+    try:
+        recipe_capture = RecipeCapture.captured(
+            ModelRecipe.from_model(superglm_model, spec=spec).document
+        )
+    except UnsupportedRecipeError as exc:
+        recipe_capture = RecipeCapture(
+            status="UNSUPPORTED", unavailable_reason=str(exc), environment=capture_environment()
+        )
+        warnings.warn(
+            f"Model recipe unsupported: {exc}. Python fitting remains available without a verified recipe revision.",
+            UserWarning,
+            stacklevel=2,
+        )
     resolved_run_key = _new_notebook_run_key()
     export_id = build_export_id(model.name, resolved_run_key)
     if pricing.mode == "local":
@@ -789,6 +703,7 @@ def fit_model(
         offset_contract=offset_contract,
         input_transforms=transforms_metadata(spec.transforms) or None,
         continuous_kind="ppform" if spec.spline_export == "exact" else "binned",
+        recipe_capture=recipe_capture,
     )
     return BuiltCandidate(model=model, completed_build=completed_build)
 
@@ -797,7 +712,12 @@ def save_model_version(
     pricing: NotebookContext,
     candidate: BuiltCandidate,
 ) -> CompletedModelPublishResult:
-    """Save a fitted model version and its audit lineage to the selected database."""
+    """Publish a fitted candidate's rating package and evidence to the database.
+
+    Verify the artifacts and reuse an equivalent publication when one exists.
+    Return ``CompletedModelPublishResult`` with package identity and recipe
+    revision. Activation requires a separate ``deploy_model_version`` call.
+    """
     pricing.require_write("save_model_version")
     if pricing.mode == "local":
         return publish_sqlite_candidate(
@@ -808,12 +728,32 @@ def save_model_version(
             completed_build=candidate.completed_build,
             created_by=candidate.completed_build.created_by,
         )
-    return publish_completed_model_build(
+    # The remote publisher may remove a redundant incoming artifact directory.
+    # Retain only evidence checked against those bytes before the cleanup occurs.
+    verified_recipe = (
+        candidate.recipe if candidate.completed_build.recipe_status == "CAPTURED" else None
+    )
+    result = publish_completed_model_build(
         pricing.engine,
         settings=pricing.settings,
         model_config=candidate.model.config,
         completed_build=candidate.completed_build,
     )
+    build = candidate.completed_build
+    if (
+        verified_recipe is not None
+        and result.was_existing
+        and result.deduplicated
+        and not Path(build.candidate_artifact_path).exists()
+    ):
+        if result.recipe_status != "CAPTURED" or result.recipe_sha256 != verified_recipe.sha256:
+            raise ValueError("published recipe evidence does not match verified candidate")
+        object.__setattr__(
+            candidate,
+            "_retained_recipe_capture",
+            (build.candidate_artifact_path, build.candidate_artifact_sha256, build.recipe_capture),
+        )
+    return result
 
 
 def load_model_version(
@@ -822,7 +762,11 @@ def load_model_version(
     model: RegisteredModel,
     package_version: int,
 ):
-    """Verify and load one saved model version for editing or deployment review."""
+    """Load a saved package with its verified fitted model and review evidence.
+
+    Return a ``Candidate`` containing SQL lineage, the model bundle and the
+    current deployment snapshot. Missing or changed artifacts stop loading.
+    """
     if pricing.mode == "local":
         raise RuntimeError(
             "Remote mode is required for the editor; local SQLite records "
@@ -872,11 +816,10 @@ def export_level_groupings(
     path: str | Path,
     replace: bool = False,
 ) -> LevelGroupingArtifact:
-    """Export every editor-created collapse as actual ``LevelGrouping`` objects.
+    """Save editor-created categorical groupings for a later training fit.
 
-    This temporary notebook API deliberately hides SuperGLM's private grouping
-    attribute.  It can be replaced by a future public SuperGLM export method
-    without changing the scratch/training notebook contract.
+    The artifact binds those groupings to the model and data-as-at. Extraction
+    of SuperGLM's private grouping state stays in ``level_grouping_artifact``.
     """
     if not isinstance(candidate, Candidate):
         raise TypeError("candidate must come from load_model_version()")
@@ -947,7 +890,11 @@ def publish_edits(
     reason: str,
     created_by: str | None = None,
 ):
-    """Persist and synchronously publish the analyst's editor session."""
+    """Save an editor session and publish its changes as an EDITOR_EDIT child.
+
+    The child retains the selected parent's training lineage. Supply the edit
+    reason for its audit record; deployment remains a separate operation.
+    """
     pricing.require_write("publish_edits")
     if pricing.mode == "local":
         raise RuntimeError(
@@ -1081,6 +1028,9 @@ __all__ = [
     "ManualEditReview",
     "ModelFitContract",
     "ModelFrameArtifact",
+    "ModelRecipe",
+    "MonitoringDataCheck",
+    "MonitoringDataError",
     "MonitoringFitResult",
     "MonitoringInvariantEvidence",
     "MonitoringVariant",
@@ -1094,6 +1044,7 @@ __all__ = [
     "apply_transforms",
     "build_candidate",
     "build_model_fit_contract",
+    "check_monitoring_data",
     "connect",
     "deploy_model_version",
     "deploy_package",

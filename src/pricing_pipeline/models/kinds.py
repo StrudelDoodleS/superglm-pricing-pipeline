@@ -1,3 +1,9 @@
+"""Name and validate the origin of a saved model build.
+
+RAW, ROUTINE_EDIT, EDITOR_EDIT and MANUAL_EDIT distinguish training and edit
+paths. They describe how a model was produced, not whether it is deployed.
+"""
+
 from __future__ import annotations
 
 from enum import StrEnum

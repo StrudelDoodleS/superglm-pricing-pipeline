@@ -1,4 +1,9 @@
-"""Linear workflow for aggregate model-review reports."""
+"""Build an offline HTML report from validated predictions and model evidence.
+
+Normalize inputs, collect optional evidence, calculate aggregate diagnostics,
+then render and write the report. Public functions are re-exported by
+``pricing_pipeline.reporting``.
+"""
 
 from __future__ import annotations
 

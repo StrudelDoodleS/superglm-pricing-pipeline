@@ -127,9 +127,10 @@ def test_local_sqlite_reuses_semantically_identical_model_before_second_staging(
         pricing.engine,
         build=different_split,
     )
-    assert equivalent is not None
-    assert equivalent.model_run_id == first_raw.model_run_id
-    assert equivalent.split_set_id == first_raw.split_set_id
+    assert equivalent is None
+    same_split = find_equivalent_publication(pricing.engine, build=fingerprinted_raw)
+    assert same_split is not None
+    assert same_split.model_run_id == first_raw.model_run_id
 
     different_kind = fingerprinted_raw.model_copy(update={"model_kind": "EDITOR_EDIT"})
     assert (

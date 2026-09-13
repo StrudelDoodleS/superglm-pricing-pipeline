@@ -1,3 +1,9 @@
+"""Apply the packaged SQL Server migration chain in version order.
+
+Split GO batches, substitute configured schema names, verify recorded
+checksums and serialize migration execution with a database lock.
+"""
+
 from __future__ import annotations
 
 import getpass

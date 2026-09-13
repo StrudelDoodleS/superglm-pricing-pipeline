@@ -1,0 +1,195 @@
+# Declared model choices for refitting. SQL assigns revisions when a build is saved.
+# Groups list every declared member, including singleton groups. Specials are free
+# levels outside an ordered smooth and cannot be merged into a group.
+# Constructor defaults are explicit. { none = true } records an unset option.
+# Loading refits declared choices; learned knots, bases and coefficients are absent.
+format_version = 1
+name = "RECIPE_DEMO"
+label = "Recipe demo"
+model_type = "frequency"
+deployment_slot = "PRODUCTION"
+target = "claim_count"
+interactions = []
+scoring = [
+    "deviance",
+    "nll",
+    "gini",
+]
+fit_mode = "fit_reml"
+spline_export = "exact"
+offset_column = "log_exposure"
+export_weight_column = "exposure"
+
+[features.region]
+type = "Categorical"
+base = "A"
+group_domain = [
+    "A",
+    "B",
+    "C",
+]
+unseen = "error"
+
+[[features.region.groups]]
+name = "A"
+levels = [
+    "A",
+]
+
+[[features.region.groups]]
+name = "BC"
+levels = [
+    "B",
+    "C",
+]
+
+[features.region.levels]
+none = true
+
+[features.bonus_malus]
+type = "OrderedCategorical"
+base = "0"
+groups = []
+values = [
+    { level = "0", value = 0.0 },
+    { level = "1", value = 0.25 },
+    { level = "2", value = 0.5 },
+    { level = "3", value = 0.75 },
+    { level = "4", value = 1.0 },
+]
+specials = [
+    "Unknown",
+]
+
+[features.bonus_malus.group_domain]
+none = true
+
+[features.bonus_malus.basis]
+type = "Spline"
+kind = "cr"
+n_knots = 1
+degree = 3
+knot_strategy = "quantile"
+penalty = "ssp"
+select = false
+extrapolation = "clip"
+knot_alpha = 0.2
+m = [
+    2,
+]
+
+[features.bonus_malus.basis.discrete]
+none = true
+
+[features.bonus_malus.basis.n_bins]
+none = true
+
+[features.bonus_malus.basis.knots]
+none = true
+
+[features.bonus_malus.basis.boundary]
+none = true
+
+[features.bonus_malus.basis.lambda_policy]
+none = true
+
+[features.bonus_malus.basis.constraint]
+none = true
+
+[features.x]
+type = "Spline"
+kind = "cr"
+n_knots = 1
+degree = 3
+knot_strategy = "quantile"
+penalty = "ssp"
+select = false
+extrapolation = "clip"
+knot_alpha = 0.2
+m = [
+    2,
+]
+
+[features.x.discrete]
+none = true
+
+[features.x.n_bins]
+none = true
+
+[features.x.knots]
+none = true
+
+[features.x.boundary]
+none = true
+
+[features.x.lambda_policy]
+none = true
+
+[features.x.constraint]
+none = true
+
+[estimator]
+spline_penalty = 0.1
+n_knots = 10
+degree = 3
+categorical_base = "most_exposed"
+active_set = false
+direct_solve = "auto"
+discrete = false
+n_bins = 256
+tol = 1e-06
+max_iter = 100
+convergence = "deviance"
+retain_fit_state = false
+separation = "warn"
+group_pricing = "rank"
+weight_semantics = "prior"
+
+[estimator.family]
+type = "Poisson"
+
+[estimator.link]
+type = "LogLink"
+
+[estimator.penalty]
+type = "GroupLasso"
+lambda1 = 0.0
+
+[estimator.penalty.flavor]
+none = true
+
+[estimator.penalty.features]
+none = true
+
+[estimator.selection_penalty]
+none = true
+
+[estimator.penalty_features]
+none = true
+
+[transforms.log_exposure]
+type = "Log"
+source = "exposure"
+
+[validation]
+n_splits = 3
+random_state = 42
+shuffle = true
+train_values = []
+test_values = []
+type = "kfold"
+
+[validation.test_size]
+none = true
+
+[validation.stratify_column]
+none = true
+
+[validation.column]
+none = true
+
+[groups_column]
+none = true
+
+[sample_weight_column]
+none = true

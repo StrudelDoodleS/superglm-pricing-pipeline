@@ -34,7 +34,6 @@ from pricing_pipeline.infra.offline_sqlite import (
     apply_offline_ddl,
     sqlite_engine_with_offline_schemas,
 )
-from pricing_pipeline.modeling import monitoring as monitoring_module
 from pricing_pipeline.modeling.monitoring import (
     MonitoringError,
     MonitoringVariant,
@@ -43,6 +42,7 @@ from pricing_pipeline.modeling.monitoring import (
     persist_monitoring_fit,
     run_monitoring_fit,
 )
+from pricing_pipeline.modeling.monitoring import contracts as monitoring_contracts
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
     build_superglm_publication_receipt,
@@ -415,12 +415,12 @@ def test_case_distinct_categorical_keys_are_collation_safe_and_deterministic():
 
 
 def test_label_point_key_is_case_safe_for_composite_interaction_labels():
-    upper = monitoring_module._label_point_key({"level": "region=A|channel=Web"})
-    lower = monitoring_module._label_point_key({"level": "region=a|channel=Web"})
+    upper = monitoring_contracts._label_point_key({"level": "region=A|channel=Web"})
+    lower = monitoring_contracts._label_point_key({"level": "region=a|channel=Web"})
 
     assert upper != lower
     assert upper.casefold() != lower.casefold()
-    assert upper == monitoring_module._label_point_key({"level": "region=A|channel=Web"})
+    assert upper == monitoring_contracts._label_point_key({"level": "region=A|channel=Web"})
 
 
 @pytest.mark.parametrize(
@@ -439,7 +439,7 @@ def test_categorical_scalar_identity_fails_closed_for_unsupported_types(
         MonitoringError,
         match=f"unsupported categorical level type: {type_name}",
     ):
-        monitoring_module._categorical_scalar_identity(value)
+        monitoring_contracts._categorical_scalar_identity(value)
 
 
 def test_monitoring_metrics_use_declared_sample_weights(monitoring_case):
@@ -902,6 +902,7 @@ def _seed_monitoring_lineage(
     *,
     model_frame_sha256: str,
     candidate: Candidate | None = None,
+    recipe=None,
     monitor_row_count: int = 360,
     weight_column: str | None = None,
     offset_column: str | None = None,
@@ -989,6 +990,13 @@ def _seed_monitoring_lineage(
             ),
             {"receipt_sha": technical.get("publication_receipt_sha256") or "d" * 64},
         )
+        stored_recipe = None
+        if recipe is not None:
+            from pricing_pipeline.publishing.recipes import resolve_recipe
+
+            stored_recipe = resolve_recipe(
+                connection, model_id=91, recipe=recipe, created_by="pytest"
+            )
         connection.execute(
             text(
                 """
@@ -1002,7 +1010,7 @@ def _seed_monitoring_lineage(
                     candidate_artifact_format, candidate_artifact_size_bytes,
                     candidate_python_version, candidate_superglm_version,
                     model_source_sha256,
-                    run_status, created_by
+                    recipe_id, recipe_status, run_status, created_by
                 ) VALUES (
                     'baseline-run-1', 91, 'v1', 'baseline-export-1',
                     'ROUTINE_EDIT', :equivalence_sha, 'baseline-manifest-1',
@@ -1012,11 +1020,13 @@ def _seed_monitoring_lineage(
                     :artifact_path, :artifact_sha, :artifact_format,
                     :artifact_size, :python_version, :superglm_version,
                     :model_source_sha,
-                    'SUCCESS', 'pytest'
+                    :recipe_id, :recipe_status, 'SUCCESS', 'pytest'
                 )
                 """
             ),
             {
+                "recipe_id": None if stored_recipe is None else stored_recipe.recipe_id,
+                "recipe_status": "LEGACY" if stored_recipe is None else "CAPTURED",
                 "workbook_sha": "f" * 64,
                 "equivalence_sha": technical.get("model_equivalence_sha256") or "c" * 64,
                 "receipt_sha": technical.get("publication_receipt_sha256") or "d" * 64,
@@ -1354,8 +1364,12 @@ def test_fit_contract_preserves_baseline_run_identity(tmp_path, assignment):
         """)
         )
 
+    # Ownership also belongs to the immutable recipe link, whose guard may run first.
+    expected_error = "baseline run.*lineage identity"
+    if assignment == "model_id = 95":
+        expected_error += "|published run recipe links are immutable"
     with (
-        pytest.raises(IntegrityError, match="baseline run.*lineage identity"),
+        pytest.raises(IntegrityError, match=expected_error),
         engine.begin() as connection,
     ):
         connection.execute(
@@ -1374,7 +1388,22 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
     tmp_path,
     monitoring_case,
 ):
+    from pricing_pipeline.modeling.recipes import ModelRecipe
+    from pricing_pipeline.notebook import PricingModelSpec
+
     model, X, y = monitoring_case
+    spec = PricingModelSpec(
+        name="SYNTHETIC_TARGET",
+        label="Synthetic",
+        model_type="frequency",
+        deployment_slot="SYNTHETIC_PROD",
+        target="target",
+        features=tuple(X.columns),
+        dataset_name="baseline",
+        source_system="test",
+        pk_columns=("PolicyID",),
+    )
+    recipe = ModelRecipe.from_model(model, spec=spec)
     candidate = _monitoring_candidate(tmp_path, model, X, y)
     model_frame = X.assign(target=y)
     result = run_monitoring_fit(
@@ -1397,6 +1426,7 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
         engine,
         model_frame_sha256=model_frame_evidence(model_frame)[0],
         candidate=candidate,
+        recipe=recipe,
     )
 
     persisted = persist_monitoring_fit(
@@ -1471,6 +1501,9 @@ def test_monitoring_result_persists_and_is_queryable_in_standalone_sqlite(
             {"monitor_run_id": persisted.monitor_run_id},
         ).scalar_one()
 
+    assert run["baseline_recipe_revision"] == 1
+    assert run["baseline_recipe_sha256"] == recipe.sha256
+    assert run["baseline_recipe_status"] == "CAPTURED"
     assert run["variant_code"] == "STATIC_SCORE"
     assert run["component_role"] == "SEVERITY"
     assert run["invariant_status"] == "VERIFIED"
@@ -1929,7 +1962,9 @@ def test_persisted_monitoring_is_sealed(persisted_monitoring_case):
 
 @pytest.mark.parametrize("recovery", [False, True])
 def test_monitoring_retry_rejects_unsealed_observation(persisted_monitoring_case, recovery):
-    from pricing_pipeline.modeling.monitoring import _recover_concurrent_monitoring_retry
+    from pricing_pipeline.modeling.monitoring.persistence import (
+        _recover_concurrent_monitoring_retry,
+    )
 
     engine, result, kwargs, _ = persisted_monitoring_case
     # Simulate an interrupted legacy/manual writer. Ordinary writes cannot reopen a run.

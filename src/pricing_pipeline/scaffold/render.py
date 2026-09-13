@@ -1,3 +1,9 @@
+"""Render installed notebook templates with validated model options.
+
+Check template names and tokens, substitute Python literals, and return
+notebook JSON text. ``service`` chooses where to write it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,6 +11,7 @@ import re
 from collections.abc import Mapping
 
 from pricing_pipeline.resources import scaffold_notebook_root
+from pricing_pipeline.scaffold.config import ResolvedScaffoldOptions
 
 NOTEBOOK_NAMES = (
     "01_data_ingestion.ipynb",
@@ -19,6 +26,8 @@ _TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 
 
 def _python_literal(value: object) -> str:
+    """Encode a whole Python value, including quotes or None, for a literal token."""
+
     if value is None:
         return "None"
     if isinstance(value, bool):
@@ -37,6 +46,8 @@ def _tokens(value: object) -> set[str]:
 
 
 def _render(value: object, replacements: Mapping[str, str]) -> object:
+    """Replace known tokens recursively in notebook JSON strings without executing code."""
+
     if isinstance(value, str):
         return _TEMPLATE_TOKEN.sub(lambda match: replacements[match.group()], value)
     if isinstance(value, list):
@@ -56,42 +67,44 @@ def _resource_templates() -> dict[str, dict[str, object]]:
     }
 
 
-def render_notebooks(
-    *,
-    package_name: str,
-    model_name: str,
-    model_label: str,
-    target_name: str,
-    model_type: str,
-    deployment_slot: str,
-    database_mode: str,
-    runtime_module: str | None,
-    expected_remote_database: str,
-    manual_edit_source_selector: str,
-    manual_edit_carry_forward: bool,
-) -> dict[str, str]:
-    feature = "feature_1" if target_name != "feature_1" else "feature_2"
-    primary_key = "row_id" if target_name != "row_id" else "record_id"
+def render_notebooks(options: ResolvedScaffoldOptions) -> dict[str, str]:
+    """Map resolved options to template tokens and return notebook JSON by filename.
+
+    For example, ``options.runtime_module`` becomes ``__RUNTIME_MODULE_LITERAL__``,
+    which each template places after ``RUNTIME_MODULE =``. ``string_values``
+    replaces text already inside quotes; ``*_LITERAL__`` tokens insert the whole
+    Python value. ``MODEL_LABEL_MARKDOWN`` supplies the notebook title.
+
+    Templates live in ``resources/scaffold/notebooks``. The service writes this
+    function's result into ``pricing_models/<package_name>``.
+    """
+
+    feature = "feature_1" if options.target_name != "feature_1" else "feature_2"
+    primary_key = "row_id" if options.target_name != "row_id" else "record_id"
     string_values = {
-        "__PACKAGE_NAME__": package_name,
-        "__MODEL_NAME__": model_name,
-        "__MODEL_LABEL__": model_label,
-        "__TARGET_NAME__": target_name,
-        "__MODEL_TYPE__": model_type,
-        "__DEPLOYMENT_SLOT__": deployment_slot,
+        "__PACKAGE_NAME__": options.package_name,
+        "__MODEL_NAME__": options.model_name,
+        "__MODEL_LABEL__": options.model_label,
+        "__TARGET_NAME__": options.target_name,
+        "__MODEL_TYPE__": options.model_type,
+        "__DEPLOYMENT_SLOT__": options.deployment_slot,
         "__FEATURE_NAME__": feature,
         "__PRIMARY_KEY__": primary_key,
-        "__DATASET_NAME__": f"{package_name}_model_frame",
+        "__DATASET_NAME__": f"{options.package_name}_model_frame",
     }
     replacements = {token: json.dumps(value)[1:-1] for token, value in string_values.items()}
     replacements.update(
         {
-            "__MODEL_LABEL_MARKDOWN__": model_label,
-            "__DATABASE_MODE_LITERAL__": _python_literal(database_mode),
-            "__RUNTIME_MODULE_LITERAL__": _python_literal(runtime_module),
-            "__EXPECTED_REMOTE_DATABASE_LITERAL__": _python_literal(expected_remote_database),
-            "__MANUAL_SOURCE_SELECTOR_LITERAL__": _python_literal(manual_edit_source_selector),
-            "__MANUAL_CARRY_FORWARD_LITERAL__": _python_literal(manual_edit_carry_forward),
+            "__MODEL_LABEL_MARKDOWN__": options.model_label,
+            "__DATABASE_MODE_LITERAL__": _python_literal(options.database_mode),
+            "__RUNTIME_MODULE_LITERAL__": _python_literal(options.runtime_module),
+            "__EXPECTED_REMOTE_DATABASE_LITERAL__": _python_literal(
+                options.expected_remote_database
+            ),
+            "__MANUAL_SOURCE_SELECTOR_LITERAL__": _python_literal(
+                options.manual_edit_source_selector
+            ),
+            "__MANUAL_CARRY_FORWARD_LITERAL__": _python_literal(options.manual_edit_carry_forward),
         }
     )
 

@@ -70,6 +70,7 @@ def test_dependency_contract_is_exact():
         "scikit-learn",
         "sqlalchemy",
         "superglm>=0.30",
+        "tomli-w>=1.2.0",
     ]
     assert project["optional-dependencies"] == {
         "sqlserver": ["pyodbc"],

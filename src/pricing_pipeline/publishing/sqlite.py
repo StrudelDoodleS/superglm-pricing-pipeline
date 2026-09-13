@@ -1,7 +1,7 @@
-"""Publish prepared rating tables in one explicit SQLite transaction.
+"""Save prepared rating tables and audit records in one SQLite transaction.
 
-The concrete audit, package, rating-table, and lineage SQL intentionally stays
-together so maintainers can verify the complete local transaction top-to-bottom.
+Own local registration, version reservation, retry checks and package writes.
+The file lock and database transaction serialize local publication decisions.
 """
 
 from __future__ import annotations
@@ -39,6 +39,12 @@ from pricing_pipeline.publishing.publish import (
     publish_candidate,
 )
 from pricing_pipeline.publishing.rating_tables import RatingTables
+from pricing_pipeline.publishing.recipes import (
+    identity_params,
+    identity_predicate,
+    run_recipe_params,
+    validate_recipe_capture,
+)
 from pricing_pipeline.workbench.submission import sha256_file
 
 _VERSION_PATTERN = re.compile(r"^v([0-9]+)$")
@@ -436,6 +442,7 @@ def _existing_local_publication(
                     mr.run_status,
                     mr.dag_id,
                     mr.model_kind,
+                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                     mr.model_equivalence_sha256,
                     mr.rating_workbook_sha256,
                     mr.airflow_run_id,
@@ -454,6 +461,7 @@ def _existing_local_publication(
                 FROM pricing.PRICING_RATE_PACKAGE AS rp
                 LEFT JOIN pricing.MODEL_RUN AS mr
                   ON mr.rate_package_id = rp.rate_package_id
+                LEFT JOIN pricing.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
                 WHERE rp.model_id = :model_id
                   AND rp.source_export_id = :export_id
                 """
@@ -527,6 +535,9 @@ def _model_run_evidence_conflicts(
         "dag_id": prepared.execution_name,
         "airflow_run_id": prepared.execution_id,
         "model_kind": build.model_kind,
+        "recipe_status": build.recipe_status,
+        "recipe_sha256": build.recipe_sha256,
+        "recipe_unavailable_reason": build.recipe_capture.unavailable_reason,
         "model_equivalence_sha256": build.model_equivalence_sha256,
         "mlflow_run_id": build.mlflow_run_id,
         "publication_receipt_path": build.publication_receipt_path,
@@ -645,20 +656,26 @@ def _equivalent_local_publication(
     rows = (
         connection.execute(
             text(
-                """
+                f"""
                 SELECT mr.model_run_id, rp.rate_package_id, rp.source_export_id,
                        rp.package_status, rp.effective_from_date
                 FROM pricing.MODEL_RUN AS mr
                 JOIN pricing.PRICING_RATE_PACKAGE AS rp
                   ON rp.rate_package_id = mr.rate_package_id
+                LEFT JOIN pricing.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
+                LEFT JOIN mlops.MODEL_RUN_SPLIT_SET AS split_link
+                  ON split_link.model_run_id=mr.model_run_id
+                 AND split_link.dataset_role='training' AND split_link.split_role='validation'
                 WHERE mr.model_id = :model_id
                   AND mr.manifest_id = :manifest_id
                   AND mr.model_kind = :model_kind
                   AND mr.model_equivalence_sha256 = :model_equivalence_sha256
                   AND mr.run_status = 'SUCCESS'
+                  {identity_predicate()}
                 """
             ),
             {
+                **identity_params(build),
                 "model_id": build.model_id,
                 "manifest_id": build.manifest_id,
                 "model_kind": build.model_kind,
@@ -1009,6 +1026,7 @@ def _insert_local_lineage(
     prepared: PreparedPublication,
 ) -> int:
     build = prepared.build
+    recipe_params = run_recipe_params(connection, build)
     model_run_id = package["rate_package_id"]
     connection.execute(
         text(
@@ -1016,6 +1034,7 @@ def _insert_local_lineage(
             INSERT INTO pricing.MODEL_RUN (
                 model_run_id, parent_model_run_id, model_id, dag_id, airflow_run_id,
                 mlflow_run_id, model_version, model_kind, model_equivalence_sha256,
+                recipe_id, recipe_status, recipe_unavailable_reason,
                 export_id, manifest_id, split_set_id, rate_package_id, model_name,
                 rating_workbook_path, rating_workbook_sha256,
                 publication_receipt_path, publication_receipt_sha256,
@@ -1026,6 +1045,7 @@ def _insert_local_lineage(
             ) VALUES (
                 :model_run_id, :parent_model_run_id, :model_id, :dag_id, :airflow_run_id,
                 :mlflow_run_id, :model_version, :model_kind, :model_equivalence_sha256,
+                :recipe_id, :recipe_status, :recipe_unavailable_reason,
                 :export_id, :manifest_id, :split_set_id, :rate_package_id, :model_name,
                 :rating_workbook_path, :rating_workbook_sha256,
                 :publication_receipt_path, :publication_receipt_sha256,
@@ -1037,6 +1057,7 @@ def _insert_local_lineage(
             """
         ),
         {
+            **recipe_params,
             "model_run_id": model_run_id,
             "parent_model_run_id": prepared.parent_model_run_id,
             "model_id": build.model_id,
@@ -1131,6 +1152,7 @@ def _publication_result(
     was_existing: bool,
     deduplicated: bool = False,
 ) -> CompletedModelPublishResult:
+    validate_recipe_capture(package_row, prepared.build.recipe_capture)
     model_run_id = package_row["model_run_id"]
     if model_run_id is None:
         raise RuntimeError(
@@ -1158,6 +1180,9 @@ def _publication_result(
         deduplicated=deduplicated,
         model_kind=str(package_row["model_kind"]),
         model_equivalence_sha256=str(package_row["model_equivalence_sha256"]),
+        recipe_revision=package_row["recipe_revision"],
+        recipe_sha256=package_row["recipe_sha256"],
+        recipe_status=package_row["recipe_status"],
     )
 
 

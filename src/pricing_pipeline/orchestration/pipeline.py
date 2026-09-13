@@ -1,3 +1,9 @@
+"""Check a completed export against its workbook and registered model.
+
+Construct a ``PublicationRequest`` and pass it to ``publishing.publish``.
+The caller supplies the completed build; this module does not fit a model.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,6 +32,12 @@ def publish_model_export(
     validated_model_id: int | None = None,
     allowed_artifact_root: str | Path | None = None,
 ) -> CompletedModelPublishResult:
+    """Verify workbook identity and model registration, then publish the export.
+
+    Build a ``PublicationRequest`` for ``publishing.publish.publish_candidate``.
+    The completed-build wrapper verifies candidate/SQL lineage before calling here.
+    """
+
     workbook_path = Path(export.rating_workbook_path)
     if not workbook_path.is_file():
         raise PublishedRunIntegrityError(

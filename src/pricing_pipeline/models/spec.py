@@ -1,5 +1,13 @@
+"""Validate the immutable evidence passed from a completed fit to publication.
+
+``ApprovedModelBuild`` contains artifact references, hashes, metrics and
+lineage. Its name does not mean a model has been deployed. Analyst choices
+belong in ``notebook.PricingModelSpec``.
+"""
+
 from __future__ import annotations
 
+# ruff: noqa: TRY004 - Pydantic validators require ValueError for validation errors.
 import math
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -8,6 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture
 from pricing_pipeline.models.kinds import normalise_model_kind
 
 
@@ -16,9 +25,31 @@ class ApprovedModelBuildError(ValueError):
 
 
 class ApprovedModelBuild(BaseModel):
-    """Immutable notebook output passed unchanged into local or remote publication."""
+    """Validated, immutable build evidence handed to the publication workflow.
+
+    Stores identities, metrics and artifact hashes rather than the fitted model
+    itself. The builder creates this record after fitting; publication verifies
+    its referenced files before saving a package.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    recipe_capture: RecipeCapture = Field(default_factory=RecipeCapture)
+
+    @field_validator("recipe_capture", mode="before")
+    @classmethod
+    def _recipe_capture(cls, value):
+        return RecipeCapture.from_payload(
+            value.to_payload() if isinstance(value, RecipeCapture) else value
+        )
+
+    @property
+    def recipe_status(self) -> str:
+        return self.recipe_capture.status
+
+    @property
+    def recipe_sha256(self) -> str | None:
+        return self.recipe_capture.sha256
 
     model_id: int
     model_name: str

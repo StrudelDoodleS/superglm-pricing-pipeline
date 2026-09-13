@@ -9,7 +9,7 @@ writes, artifacts, publication, and deployment guards.
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
-| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Ignored local grouping artifact only | Build, publish, or deploy |
+| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Local grouping artifact or selected prototype recipe | Build, publish, or deploy |
 | `03_model_training.ipynb` | Source dataset; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
 | `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
 | `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
@@ -254,6 +254,9 @@ directory. If they are split into physical subdirectories, use `baseline/` and
 `monitoring/`; do not call the second lane `deployment`, because its variants
 are diagnostic observations rather than candidate packages.
 
+For the implementation owners and comparison diagram, see
+[From a baseline to monitoring evidence](../package-flows.md#from-a-baseline-to-monitoring-evidence).
+
 The four supported monitoring presets are deliberately limited:
 
 | Variant | Coefficients | REML lambdas | Data-driven knots | Always fixed |
@@ -269,10 +272,17 @@ supported because most do not have a stable business interpretation.
 
 ## Scaffold configuration
 
+To follow a setting through the implementation, use the
+[argument-to-notebook trace](../scaffold-trace.md). It maps CLI flags and TOML
+keys to option fields, template tokens and generated notebook cells.
+
 `pricing-pipeline init` seeds `.github/agents/pricing-builder.agent.md` alongside
 the config. Select **Pricing builder** in Copilot for help choosing connections,
 features, transforms, offsets and validation, and applying those choices to the
-notebooks. Existing config and agent files are preserved when you rerun `init`.
+notebooks. Init also seeds `.github/agents/pricing-developer.agent.md` for package
+maintenance using the framework repository's module index and workflow guides.
+Existing config and agent files are preserved when you rerun `init`; missing
+agents are added.
 
 At the scaffold root, run `pricing-pipeline init` (or
 `python -m pricing_pipeline init` after installation), then edit the generated
@@ -510,6 +520,7 @@ Import these from `pricing_pipeline.notebook`.
 | `publish_manual_adjustment(...)` | Reapply the canonical policy and publish it | `MANUAL_EDIT` child publication |
 | `deploy_model_version(...)` | Deploy exactly the reviewed model version | Deployment record; stale champion fails |
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
+| `check_monitoring_data(...)` | Check input compatibility and categorical mix changes before the preset loop | Issues, distributions and drift distances; errors can be raised before fitting |
 | `run_monitoring_fit(...)` | Score or refit one controlled monitoring preset from a verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
 
@@ -524,9 +535,15 @@ A monitoring notebook can open the champion once, prepare the new manifest's
 feature frame in the same column order, and run the presets explicitly:
 
 ```python
-from pricing_pipeline.notebook import MonitoringVariant, run_monitoring_fit
+from pricing_pipeline.notebook import (
+    MonitoringVariant, check_monitoring_data, run_monitoring_fit,
+)
 
 baseline = open_deployed_candidate(pricing, model=model)
+check = check_monitoring_data(baseline, X_new, sample_weight=weight_new)
+display(check.issues, check.drift)
+check.raise_for_errors()  # Warnings allow fitting; incompatible inputs stop here.
+
 results = {
     variant: run_monitoring_fit(
         baseline,
@@ -542,6 +559,59 @@ results = {
     for variant in MonitoringVariant
 }
 ```
+
+The check compares against the candidate's reverified training inputs. New raw
+categorical levels, missing feature columns, nulls, invalid numeric values and
+invalid weights block controlled refits. Known levels with no rows or no positive
+weight produce a support warning. Grouped features are checked against their
+original input levels, and ordered categories include their specials.
+
+Refits also require support to estimate each feature:
+
+- Numeric features need at least two distinct values with positive fitting weight.
+- Ordered splines need positive-weight observations for every declared smooth
+  group or level. Losing one member of a surviving group only warns. Losing the
+  entire group blocks the refit, including `FULL_ADAPTIVE`. Specials do not count
+  as observations of the smooth; absent specials retain the support warning.
+- Continuous splines need observations inside the saved domain and variation
+  after applying their extrapolation policy. A shift from `0–100` to `200–300`
+  blocks a controlled refit. A smaller range such as `50–100` warns about lost
+  tails and empty saved knot intervals.
+- Out-of-bound rows raise with `extrapolation="error"` and warn with `"clip"` or
+  `"extend"`. Adaptive fits may move data-driven boundaries, but retain explicit
+  boundaries and knots. Declared knots outside the new adaptive domain block.
+
+The check defaults to `variant="FROZEN_REFIT"`. Pass the variant when checking a
+specific comparison. `variant="STATIC_SCORE"` checks prediction compatibility
+without requiring support for re-estimation. Every `run_monitoring_fit` call
+enforces the checks for its own variant before REML starts.
+
+These checks use positive weight, not row presence, to assess fitting support.
+Out-of-bound errors include zero-weight rows because the model still evaluates
+their feature values. Coverage warnings do not certify a reliable fit: these
+checks do not test joint rank, near-collinearity, or numerical conditioning.
+Inspect fit diagnostics as well. No check moves knots, changes groupings, chooses
+a refit strategy, or establishes a new baseline automatically.
+
+`check.distributions` contains per-level counts and shares for both snapshots.
+`check.drift` measures categorical total variation distance: half the sum of
+absolute share changes, between zero and one. It reports row shares and, when
+weights exist on both sides, fit-weight shares. It does not compare exposure shares
+unless those weights represent exposure. `drift_threshold=0.2` is a configurable
+review trigger, not a significance test or an automatic decision to rebase.
+
+For a standalone fitted SuperGLM, supply `reference_df` and optional
+`reference_sample_weight`. Missing reference data explicitly leaves drift
+unassessed. Numeric distribution drift, changed label meanings with unchanged
+marginals, and the cause of a detected change are outside this categorical check.
+Continue using dashboard trends and upstream investigation for those questions.
+
+`check.to_json()` returns aggregate evidence for a runner's logs or an artifact.
+This preflight report is not automatically persisted to SQL or a dashboard.
+`run_monitoring_fit` also enforces compatibility before fitting, so bypassing the
+explicit check cannot silently accept new levels or unsupported refits. Direct `STATIC_SCORE` calls
+retain an existing ungrouped categorical `unseen="base"` prediction policy;
+that fallback does not permit refitting unknown levels.
 
 Persist only after all requested fits have succeeded. Pass the new snapshot's
 `manifest_id`, `baseline.model_run_id`, and
@@ -711,11 +781,14 @@ The lookup key is:
 
 ```text
 model_id + manifest_id + model_kind + model_equivalence_sha256
++ recipe_status + recipe_sha256 + validation split identity
 ```
 
 An equivalent successful build reuses the existing run/package and returns
 `deduplicated=True`; it does not create staging rows. A different manifest or
-model kind remains distinct. A different requested effective date raises
+model kind remains distinct. Different recipes or fold assignments retain separate
+build evidence. Unsupported recipes retain exact-export retries and skip cross-export
+equivalence because their declared identity is unavailable. A different requested effective date raises
 instead of silently discarding release intent.
 
 ## Artifact locations
@@ -724,3 +797,73 @@ Generated notebooks keep ignored local handoffs below the model directory.
 New build folders use compact run keys and short digest components to remain
 usable in Windows Explorer. Full identities remain inside receipts, bundles,
 and SQL.
+
+## Export and reload model recipes
+
+Keep Python authoring for the first build. The training notebook's explicit
+`RECIPE_PATH = None` selects that branch; a path selects recipe loading. A file's
+existence never changes the selected model. Export a selected completed build:
+
+```python
+raw_candidate.recipe.save(MODEL_DIR / "raw_model.toml")
+# If a routine fit applied groupings, export that candidate separately.
+routine_candidate.recipe.save(MODEL_DIR / "routine_model.toml")
+```
+
+A prototype can be exported before framework training. Supply its flat spec so
+that target, transforms, offset, weights and validation are explicit:
+
+```python
+from pricing_pipeline.notebook import ModelRecipe
+
+ModelRecipe.from_model(prototype, spec=MODEL).save(MODEL_DIR / "model.toml")
+recipe = ModelRecipe.load(MODEL_DIR / "challenger.toml")
+MODEL, glm = recipe.build(dataset=dataset)
+df = apply_transforms(dataset.df, MODEL.transforms)
+model = register_model(pricing, MODEL, source_root=MODEL_DIR)
+candidate = fit_model(pricing, model=model, frame=df, superglm_model=glm)
+saved = save_model_version(pricing, candidate)
+```
+
+`load` and `build` reconstruct an unfitted model without SQL access. `save` writes
+only TOML and requires `replace=True` to replace a file. Constructor defaults are
+explicit; `{ none = true }` records an unset option because TOML has no null.
+Feature and transform table order determines construction order. Add a challenger
+with one new `[features.name]` table. Transform-derived offset source/label fields
+are omitted: changing the transform source updates that offset contract on load.
+Explicit offset contracts without a transform remain in the file. Older documents
+with explicit order arrays still load; remove those arrays to use table order.
+Group entries retain every member, including singleton
+groups; typed domains and ordered numeric positions remain separate from grouping
+labels. Specials remain free levels outside the ordered smooth. When a special
+uses a different typed domain label, `special_domain` preserves that reporting
+label alongside its raw matching declaration.
+
+The actual configuration is captured at the validated fit boundary, before CV or
+full fitting. Python overrides affect that snapshot; later changes to Python
+objects or TOML cannot change a completed build's recipe. The saved result exposes
+`recipe_revision`, `recipe_sha256` and `recipe_status`. SQL assigns revisions in
+the publication transaction. Same recipe with new data keeps its revision; a
+previous recipe reused later keeps its original revision. Model and package
+versions keep their existing meanings. Saving never deploys.
+
+Recipe mode skips `.local/routine_groupings.joblib`. Apply any further grouping
+explicitly in Python and fit again. Post-fit editor/manual packages inherit the
+training recipe and retain their separate edit/parent evidence. A training recipe
+alone does not reproduce those coefficient edits. Ordinary recipe loading refits
+declared choices; frozen learned knots, bases, lambdas or coefficients still use
+baseline artifacts and monitoring variants.
+
+Supported recipes include Numeric, Polynomial, Categorical, OrderedCategorical,
+one-dimensional spline variants and the existing categorical interactions, plus
+Log, Log1p and Clip transforms. ValidationSplitConfig, sklearn KFold, GroupKFold
+and TimeSeriesSplit have explicit codecs. Other Python objects can still fit
+through the existing API with `UNSUPPORTED` recipe status and a reason; they
+cannot be exported or claim a recipe revision. Historical artifacts remain
+`LEGACY`. No new interaction or LSS export support is added.
+
+Apply SQL migrations V047 and V048 before saving with this version. Local SQLite
+stores upgrade on opening. The [comparison notebook](../../tutorials/model_recipes/comparison.ipynb)
+exercises grouped/special-level parity and a saved challenger. `init` continues to
+preserve existing customized builder agents; update those files intentionally
+from the packaged `pricing-builder.agent.md` when adopting this workflow.

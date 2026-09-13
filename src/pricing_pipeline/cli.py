@@ -1,3 +1,9 @@
+"""Parse ``pricing-pipeline init`` and ``scaffold`` commands.
+
+Dispatch project setup to ``scaffold.commands`` and report command errors.
+Model fitting and publication are exposed through ``notebook.py``.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -35,6 +41,13 @@ def _load_handler(spec: str) -> Callable[[argparse.Namespace], tuple[str, ...]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define CLI flags and the Namespace attributes passed to command handlers.
+
+    For example, ``--runtime-module`` becomes ``namespace.runtime_module``.
+    ``scaffold.commands._raw_scaffold_options`` merges it with TOML defaults;
+    ``scaffold.render.render_notebooks`` maps the resolved value to a template token.
+    """
+
     parser = _ArgumentParser(
         prog="pricing-pipeline",
         description=(
@@ -44,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command")
     init = subcommands.add_parser(
         "init",
-        help="create pricing_scaffold.toml and a GitHub Copilot pricing builder agent",
+        help="create pricing_scaffold.toml and GitHub Copilot builder/developer agents",
     )
     init.add_argument("--root", type=Path, default=Path("."))
     scaffold = subcommands.add_parser(
@@ -73,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Parse arguments, invoke the selected command handler and print its results.
+
+    ``_HANDLERS`` links the scaffold subcommand to ``commands.run_scaffold``.
+    Return an exit code; notebook generation does not execute the generated cells.
+    """
+
     parser = build_parser()
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:

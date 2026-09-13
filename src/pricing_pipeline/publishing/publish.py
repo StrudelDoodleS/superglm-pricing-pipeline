@@ -1,3 +1,10 @@
+"""Validate a publication request and select its database writer.
+
+Check artifact evidence and prepare normalized rating tables before dispatch
+to ``sqlite`` or ``sqlserver``. Return the saved package identity without
+deploying it.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -15,11 +22,13 @@ from pricing_pipeline.workbench.submission import sha256_file
 
 
 class ModelRegistryError(RuntimeError):
-    pass
+    """A registration or publication identity conflicts with the requested model."""
 
 
 @dataclass(frozen=True)
 class PricingModelRecord:
+    """The stable identity and status of one registered SQL model."""
+
     model_id: int
     model_name: str
     model_label: str | None
@@ -30,6 +39,8 @@ class PricingModelRecord:
 
 @dataclass(frozen=True)
 class PublishResult:
+    """Export and package identifiers for the older publication result contract."""
+
     mlflow_run_id: str
     export_id: str
     rate_package_id: int
@@ -43,7 +54,11 @@ class PublishResult:
 
 @dataclass(frozen=True)
 class CompletedModelPublishResult:
-    """Durable package and model-run identity returned to notebook callers."""
+    """The saved package, model run and recipe revision returned after publication.
+
+    ``was_existing`` identifies reuse; ``deduplicated`` reports equivalence reuse.
+    Package publication status does not indicate which package is deployed.
+    """
 
     model_id: int
     model_name: str
@@ -63,10 +78,15 @@ class CompletedModelPublishResult:
     deduplicated: bool = False
     model_kind: str = "RAW"
     model_equivalence_sha256: str | None = None
+    recipe_revision: int | None = None
+    recipe_sha256: str | None = None
+    recipe_status: str = "LEGACY"
 
 
 @dataclass(frozen=True)
 class DraftVerification:
+    """Fitted model, bundle and receipt used to verify a draft package before save."""
+
     model: Any
     bundle: CandidateBundle
     receipt: SuperGLMPublicationReceipt
@@ -74,6 +94,8 @@ class DraftVerification:
 
 @dataclass(frozen=True)
 class PublicationRequest:
+    """A completed build plus execution and parent references needed to save it."""
+
     build: ApprovedModelBuild
     model_config: ModelBuildConfig
     execution_name: str
@@ -88,6 +110,8 @@ class PublicationRequest:
 
 @dataclass(frozen=True)
 class PreparedPublication:
+    """A checked publication request passed to the concrete database writer."""
+
     build: ApprovedModelBuild
     model_config: ModelBuildConfig
     execution_name: str

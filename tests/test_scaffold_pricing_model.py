@@ -11,7 +11,11 @@ from pathlib import Path
 import pytest
 
 from pricing_pipeline import cli
-from pricing_pipeline.scaffold.config import ScaffoldOptions, load_scaffold_config
+from pricing_pipeline.scaffold.config import (
+    ScaffoldOptions,
+    load_scaffold_config,
+    resolve_scaffold_options,
+)
 from pricing_pipeline.scaffold.render import NOTEBOOK_NAMES as _NOTEBOOK_NAMES
 from pricing_pipeline.scaffold.service import scaffold_pricing_model
 
@@ -126,12 +130,16 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
         pytest.fail("the installed scaffold renderer is missing")
 
     rendered = render_notebooks(
-        package_name="claim_frequency",
-        model_name="CLAIM_FREQUENCY",
-        model_label="Claim frequency",
-        target_name="claim_count",
-        model_type="superglm_poisson",
-        **settings,
+        resolve_scaffold_options(
+            ScaffoldOptions(
+                package_name="claim_frequency",
+                model_name="CLAIM_FREQUENCY",
+                model_label="Claim frequency",
+                target_name="claim_count",
+                model_type="superglm_poisson",
+                **settings,
+            )
+        )
     )
 
     for name, source in rendered.items():
@@ -154,17 +162,21 @@ def test_scaffold_renderer_preserves_token_shaped_user_values():
     from pricing_pipeline.scaffold.render import render_notebooks
 
     rendered = render_notebooks(
-        package_name="claim_frequency",
-        model_name="CLAIM_FREQUENCY",
-        model_label="__CUSTOM_LABEL__",
-        target_name="claim_count",
-        model_type="superglm_poisson",
-        deployment_slot="CLAIM_FREQUENCY_UAT",
-        database_mode="local",
-        runtime_module=None,
-        expected_remote_database="",
-        manual_edit_source_selector="deployed",
-        manual_edit_carry_forward=True,
+        resolve_scaffold_options(
+            ScaffoldOptions(
+                package_name="claim_frequency",
+                model_name="CLAIM_FREQUENCY",
+                model_label="__CUSTOM_LABEL__",
+                target_name="claim_count",
+                model_type="superglm_poisson",
+                deployment_slot="CLAIM_FREQUENCY_UAT",
+                database_mode="local",
+                runtime_module=None,
+                expected_remote_database="",
+                manual_edit_source_selector="deployed",
+                manual_edit_carry_forward=True,
+            )
+        )
     )
 
     assert "__CUSTOM_LABEL__" in rendered["01_data_ingestion.ipynb"]
@@ -174,17 +186,21 @@ def test_scaffold_renderer_preserves_non_ascii_escaping():
     from pricing_pipeline.scaffold.render import render_notebooks
 
     rendered = render_notebooks(
-        package_name="claim_frequency",
-        model_name="CLAIM_FREQUENCY",
-        model_label="Müller",
-        target_name="claim_count",
-        model_type="superglm_poisson",
-        deployment_slot="CLAIM_FREQUENCY_UAT",
-        database_mode="local",
-        runtime_module=None,
-        expected_remote_database="",
-        manual_edit_source_selector="deployed",
-        manual_edit_carry_forward=True,
+        resolve_scaffold_options(
+            ScaffoldOptions(
+                package_name="claim_frequency",
+                model_name="CLAIM_FREQUENCY",
+                model_label="Müller",
+                target_name="claim_count",
+                model_type="superglm_poisson",
+                deployment_slot="CLAIM_FREQUENCY_UAT",
+                database_mode="local",
+                runtime_module=None,
+                expected_remote_database="",
+                manual_edit_source_selector="deployed",
+                manual_edit_carry_forward=True,
+            )
+        )
     )
 
     notebook = json.loads(rendered["03_model_training.ipynb"])
@@ -257,7 +273,7 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert 'as_of="data_as_of"' in ingestion
     assert "dataset=dataset" in training
     assert "features=tuple(RAW_FEATURES)" in training
-    assert "df = apply_transforms(df, transforms)" in training
+    assert "df = apply_transforms(dataset.df, MODEL.transforms)" in training
     assert "transforms=transforms" in training
     assert 'model_kind="RAW"' in training
     assert 'model_kind="ROUTINE_EDIT"' in training

@@ -1,5 +1,21 @@
 # Maintainer map
 
+Start with [How the package fits together](package-flows.md) to follow objects
+between operations. For a CLI option, use the [argument-to-notebook trace](scaffold-trace.md).
+The [module index](module-index.md) links every Python file to its purpose.
+The [developer usability audit](dev-ux-audit.md) records remaining structural issues.
+
+Select **Pricing developer** in Copilot to follow these maps while working on
+the package. Its instructions are in
+[`.github/agents/pricing-developer.agent.md`](../.github/agents/pricing-developer.agent.md).
+It reads the relevant guide and follows the owner, caller and tests for the task.
+
+The canonical agent is shipped in
+[`resources/scaffold/pricing-developer.agent.md`](../src/pricing_pipeline/resources/scaffold/pricing-developer.agent.md).
+Keep the repository copy in sync when editing it. `pricing-pipeline init` seeds
+it alongside Pricing builder and preserves customized copies. The developer
+guides require the framework source checkout; they are not copied into analyst projects.
+
 The package has four jobs:
 
 ```text
@@ -14,7 +30,7 @@ workspace scaffold -> scheduled execution
 | Library API | `pricing_pipeline.notebook` | `data/`, `modeling/`, `publishing/`, `workbench/` | [Notebook API](notebooks/README.md) |
 | Database lifecycle | packaged migrations and guarded scripts | `infra/`, `resources/migrations/`, `resources/offline_sqlite/` | [SQL schema](sql/README.md) |
 | Workspace scaffold | `pricing-pipeline init`, `pricing-pipeline scaffold` | `cli.py`, `scaffold/`, `resources/scaffold/` | [Notebook workflow](notebooks/README.md) |
-| Scheduled execution | future `pricing-pipeline weekly` | must compose the public library API | [Architecture](architecture/maintainability-consolidation.md) |
+| Scheduled execution | No installed scheduler command | external runners can call the library API | [Current call flows](package-flows.md) |
 | Reporting | documented reporting API | `reporting/` | [Notebook API](notebooks/README.md) |
 | Scratch experiments | optional, never governed or published | `modeling/scratch_*` | [Notebook API](notebooks/README.md) |
 
@@ -55,7 +71,8 @@ Scaffold:
 ```
 
 The final reporting owners are `reporting.inputs` for input contracts and
-normalization, `reporting.evidence` for neutral evidence, `reporting.movement`
+normalization, `reporting.evidence_types` for adapter records,
+`reporting.evidence` for collection and normalization, `reporting.movement`
 for movement calculations, `reporting.diagnostics` for diagnostic assembly,
 and `reporting.report` for both supported workflows. The HTML and style modules
 render only and are intentionally excluded from functional-flow simplification.
@@ -69,13 +86,14 @@ render only and are intentionally excluded from functional-flow simplification.
 | candidate -> immutable published package | `publishing/publish.py`, `publishing/sqlserver.py`, `publishing/sqlite.py` |
 | published package -> editor/manual child | `workbench/`, `publishing/editor.py`, `modeling/manual_adjustment.py` |
 | published package -> deployment | `publishing/deployment.py` |
-| deployment -> monitoring evidence | `modeling/monitoring.py` |
+| deployment -> monitoring evidence | `modeling/monitoring/workflow.py`, `modeling/monitoring/persistence.py` |
 | schema version -> migrated/seeded/reset database | `infra/`, packaged SQL resources |
 
 ## Publication module map
 
-The supported boundary is `pricing_pipeline.notebook`; the nine publishing
-modules are internal owners with no compatibility facades:
+The supported boundary is `pricing_pipeline.notebook`; the publishing
+modules own the implementation. `editor.py` also re-exports its existing public
+records and helpers; their definitions live with the stages below:
 
 | Module | Purpose |
 |---|---|
@@ -86,8 +104,15 @@ modules are internal owners with no compatibility facades:
 | `lineage.py` | durable model-run, dataset, split, metric, fold, and parent evidence |
 | `sqlserver.py` | SQL Server registration, version reservation, locking, package transaction, and persisted parity verification |
 | `sqlite.py` | local registration, version reservation, locking, package transaction, and local audit lineage |
-| `editor.py` | signed editor/manual loading, trusted replay, edited artifact export, and publication request construction |
+| `editor.py` | publication workflow, artifact attempt cleanup and request construction |
+| `editor_contracts.py` | parent, export and publication records; submission identity helpers |
+| `editor_parent.py` | verify and load parent data, artifacts and champion evidence |
+| `editor_replay.py` | replay edits and verify fitted-model state and manual policies |
+| `editor_export.py` | write the child build and comparison metrics |
+| `editor_retry.py` | verify existing or equivalent publications against stored lineage |
 | `deployment.py` | explicit deployment transition and stale-champion protection |
+| `recipes.py` | automatic recipe revisions, model locking, and verification of reused recipe content |
+| `spline_segments.py` | polynomial coefficients, interval bounds, and tail validation for exact spline export |
 
 Every RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT publication follows one
 linear sequence:
@@ -115,7 +140,7 @@ uv run python -m pytest -q tests/test_scaffold_pricing_model.py tests/cli/test_i
 Monitoring:
 
 ```bash
-uv run python -m pytest -q tests/test_model_monitoring.py tests/test_monitoring_simulation.py
+uv run python -m pytest -q tests/test_model_monitoring.py tests/test_monitoring_simulation.py tests/test_monitoring_data_checks.py tests/test_monitoring_support_checks.py
 ```
 
 Publishing:

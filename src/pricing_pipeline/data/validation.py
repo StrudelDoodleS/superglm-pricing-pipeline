@@ -1,4 +1,9 @@
-"""Describe analyst-supplied splitters without storing Python objects in SQL."""
+"""Describe analyst-supplied validation splitters for audit records.
+
+``Splitter`` defines the required ``split`` interface. ``splitter_config``
+records the class and constructor settings; the fitting workflow separately
+materializes the actual train/test positions.
+"""
 
 import inspect
 import json
@@ -12,6 +17,8 @@ from pricing_pipeline.models.config import ValidationSplitConfig
 
 
 class Splitter(Protocol):
+    """The split(X, y, groups) interface accepted for analyst-defined validation."""
+
     def split(
         self, X: pd.DataFrame, y: pd.Series | None = None, groups: pd.Series | None = None
     ) -> Iterable[tuple[Any, Any]]: ...

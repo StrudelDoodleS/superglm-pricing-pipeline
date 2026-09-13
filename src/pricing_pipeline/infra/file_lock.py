@@ -1,12 +1,18 @@
-"""Small cross-platform advisory file lock for trusted-host workflows."""
+"""Serialize local file operations with an exclusive advisory lock.
+
+Use ``exclusive_file_lock`` around publication or artifact updates that share
+a sentinel file. Windows locks one byte; Unix uses flock. Callers must use
+the same lock path to coordinate their writes.
+"""
 
 from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 
 def _is_windows() -> bool:
@@ -49,7 +55,11 @@ def _release(handle: BinaryIO) -> None:
 
 @contextmanager
 def exclusive_file_lock(path: str | Path) -> Iterator[BinaryIO]:
-    """Hold an exclusive advisory lock on one sentinel file."""
+    """Hold a lock on a sentinel file for the duration of a ``with`` block.
+
+    Yield the open binary handle. Release the lock and close the handle when
+    the block exits, including when its body raises an exception.
+    """
     lock_path = Path(path).expanduser().resolve()
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)

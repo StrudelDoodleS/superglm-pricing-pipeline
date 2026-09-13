@@ -1,3 +1,9 @@
+"""Create the model directory and write rendered notebook files.
+
+Check output collisions and symlinks, handle the older deployment notebook
+name, and apply the requested overwrite policy.
+"""
+
 from __future__ import annotations
 
 import errno
@@ -16,6 +22,8 @@ _DEPLOYMENT_NOTEBOOK = "06_model_deployment.ipynb"
 
 @dataclass(frozen=True)
 class ScaffoldResult:
+    """The generated package name and paths written by this scaffold call."""
+
     package_name: str
     created_files: tuple[Path, ...]
 
@@ -102,22 +110,18 @@ def _write_scaffold_output(path: Path, source: str) -> None:
 
 
 def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> ScaffoldResult:
+    """Forward validated notebook values to the renderer, then write its output.
+
+    Pass the same resolved options record to ``render_notebooks``. Its token
+    map reads the fields directly. ``root`` and ``force`` control file creation
+    here; they are not notebook template values. Existing notebooks are skipped
+    unless forced.
+    """
+
     pricing_models_dir = options.root / "pricing_models"
     package_dir = pricing_models_dir / options.package_name
     _reject_managed_ancestor_symlinks(pricing_models_dir, package_dir)
-    notebooks = render_notebooks(
-        package_name=options.package_name,
-        model_name=options.model_name,
-        model_label=options.model_label,
-        target_name=options.target_name,
-        model_type=options.model_type,
-        deployment_slot=options.deployment_slot,
-        database_mode=options.database_mode,
-        runtime_module=options.runtime_module,
-        expected_remote_database=options.expected_remote_database,
-        manual_edit_source_selector=options.manual_edit_source_selector,
-        manual_edit_carry_forward=options.manual_edit_carry_forward,
-    )
+    notebooks = render_notebooks(options)
     content = {
         package_dir / "__init__.py": f'"""Pricing notebook package for {options.model_name}."""\n',
         **{package_dir / filename: source for filename, source in notebooks.items()},
@@ -138,4 +142,10 @@ def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> Scaffol
 
 
 def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
+    """Generate notebooks from Python options without loading project TOML.
+
+    Validate the supplied ``ScaffoldOptions`` and call the same service used by
+    the CLI. CLI/TOML precedence is implemented in ``commands.run_scaffold``.
+    """
+
     return scaffold_resolved_pricing_model(config.resolve_scaffold_options(options))

@@ -1,3 +1,9 @@
+"""Implement CLI init and scaffold requests using resolved project options.
+
+Initialize the config and agent files, combine command options with
+TOML defaults, then call the scaffold filesystem service.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -10,7 +16,7 @@ from pricing_pipeline.resources import scaffold_root, scaffold_template
 from pricing_pipeline.scaffold import config, service
 
 _CONFIG_NAME = "pricing_scaffold.toml"
-_AGENT_NAME = "pricing-builder.agent.md"
+_AGENT_NAMES = ("pricing-builder.agent.md", "pricing-developer.agent.md")
 _SCAFFOLD_COMMAND = (
     "pricing-pipeline scaffold --model-name CLAIM_FREQUENCY --target-name claim_count"
 )
@@ -25,7 +31,10 @@ def _init_messages(config_path: Path) -> tuple[str, ...]:
         str(config_path),
         f"Edit {config_path}, then run:",
         _SCAFFOLD_COMMAND,
-        f"Or select Pricing builder in Copilot: {config_path.parent / '.github/agents' / _AGENT_NAME}",
+        (
+            "Copilot agents: Pricing builder and Pricing developer in "
+            f"{config_path.parent / '.github/agents'}"
+        ),
     )
 
 
@@ -77,33 +86,39 @@ def _init_config(root: Path) -> tuple[str, ...]:
     return _init_messages(config_path)
 
 
-def _validate_agent_path(root: Path) -> Path:
+def _validate_agent_path(root: Path, name: str) -> Path:
     for directory in (root / ".github", root / ".github/agents"):
         if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
             raise UserCommandError(f"agent parent must be a non-symlink directory: {directory}")
-    path = root / ".github/agents" / _AGENT_NAME
+    path = root / ".github/agents" / name
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise UserCommandError(f"existing agent must be a regular non-symlink file: {path}")
     return path
 
 
 def run_init(namespace: argparse.Namespace) -> tuple[str, ...]:
+    """Seed project config and builder/developer agents from installed resources.
+
+    Preserve existing files. Notebook creation happens later in ``run_scaffold``.
+    """
+
     root = _root(namespace.root)
     _require_project_root(root)
-    agent_path = _validate_agent_path(root)
+    agent_paths = [_validate_agent_path(root, name) for name in _AGENT_NAMES]
     messages = _init_config(root)
-    try:
-        agent_path.parent.mkdir(parents=True, exist_ok=True)
-        _validate_agent_path(root)
-        # Exclusive creation preserves an agent the analyst has already edited.
-        template = scaffold_root().joinpath(_AGENT_NAME).read_bytes()
+    for agent_path in agent_paths:
         try:
-            with agent_path.open("xb") as handle:
-                handle.write(template)
-        except FileExistsError:
-            _validate_agent_path(root)
-    except OSError as exc:
-        raise UserCommandError(f"could not create builder agent {agent_path}: {exc}") from exc
+            agent_path.parent.mkdir(parents=True, exist_ok=True)
+            _validate_agent_path(root, agent_path.name)
+            # Exclusive creation preserves an agent the user has already edited.
+            template = scaffold_root().joinpath(agent_path.name).read_bytes()
+            try:
+                with agent_path.open("xb") as handle:
+                    handle.write(template)
+            except FileExistsError:
+                _validate_agent_path(root, agent_path.name)
+        except OSError as exc:
+            raise UserCommandError(f"could not create agent {agent_path}: {exc}") from exc
     return messages
 
 
@@ -126,6 +141,14 @@ def _raw_scaffold_options(
     root: Path,
     scaffold_config: config.ScaffoldConfig,
 ) -> config.ScaffoldOptions:
+    """Merge parsed CLI arguments with loaded TOML defaults.
+
+    An explicit CLI value wins; ``None`` means use the corresponding config value.
+    For example, ``namespace.runtime_module`` overrides
+    ``scaffold_config.runtime_module``. The result still needs
+    ``config.resolve_scaffold_options`` before rendering.
+    """
+
     return config.ScaffoldOptions(
         model_name=namespace.model_name,
         target_name=namespace.target_name,
@@ -164,6 +187,14 @@ def _raw_scaffold_options(
 
 
 def run_scaffold(namespace: argparse.Namespace) -> tuple[str, ...]:
+    """Connect CLI input to notebook creation.
+
+    Load TOML, merge CLI overrides into ``ScaffoldOptions``, validate them into
+    ``ResolvedScaffoldOptions``, then call
+    ``service.scaffold_resolved_pricing_model`` to render and write the notebooks.
+    Return the created paths for ``cli.main`` to print.
+    """
+
     root = _root(namespace.root)
     _require_project_root(root)
     scaffold_config = _load_installed_config(namespace, root)

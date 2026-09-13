@@ -1,3 +1,10 @@
+"""Verify a completed build's artifacts and SQL lineage before remote save.
+
+Call ``pipeline.publish_model_export`` and remove a redundant attempt's files
+when publication reuses an existing build. The notebook API preserves verified
+recipe access across that cleanup.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,6 +31,8 @@ from pricing_pipeline.workbench.artifacts import load_candidate_bundle
 
 @dataclass(frozen=True)
 class CandidateSQLLineage:
+    """SQL manifest and split metadata used to verify a candidate artifact before publication."""
+
     manifest_id: str
     row_count: int
     pk_columns: tuple[str, ...]
@@ -39,6 +48,13 @@ def publish_completed_model_build(
     model_config: ModelBuildConfig,
     completed_build: ApprovedModelBuild,
 ) -> CompletedModelPublishResult:
+    """Check build evidence against SQL, publish it and clean up redundant files.
+
+    The remote branch of ``notebook.save_model_version`` calls this function.
+    ``publish_model_export`` owns the subsequent workbook/registration check and
+    publication request.
+    """
+
     engine = configure_engine(engine, settings.schema_names)
     if not isinstance(completed_build, ApprovedModelBuild):
         raise TypeError("completed_build must be an ApprovedModelBuild")
@@ -194,6 +210,10 @@ def _verify_candidate_artifact(
     except Exception as exc:
         raise ApprovedModelBuildError(f"candidate artifact verification failed: {exc}") from exc
 
+    if bundle.recipe_capture != build.recipe_capture:
+        raise ApprovedModelBuildError(
+            "candidate artifact recipe does not match completed-build evidence"
+        )
     expected_lineage = {
         "model_name": build.model_name,
         "model_version": build.model_version,

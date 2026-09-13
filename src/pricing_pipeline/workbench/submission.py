@@ -1,3 +1,9 @@
+"""Save an editor session and its evidence for replay during publication.
+
+Write the edited model and JSON submission, hash the referenced files, and
+verify them when reloading. ``publishing.editor`` consumes the submission.
+"""
+
 from __future__ import annotations
 
 import errno
@@ -31,6 +37,8 @@ class EditorSubmissionError(RuntimeError):
 
 @dataclass
 class EditorSubmission:
+    """Recorded edit intent and hashed file references consumed during publication."""
+
     format: str
     submission_id: str
     model_name: str
@@ -234,6 +242,12 @@ def save_editor_submission(
     model_kind: str = ModelKind.EDITOR_EDIT.value,
     edit_metadata: Mapping[str, Any] | None = None,
 ) -> EditorSubmission:
+    """Write an editor session, edited model and hashed submission record.
+
+    Return the submission path and metadata used by ``publish_editor_submission``
+    to reload the parent and verify the proposed changes.
+    """
+
     cleaned_reason = str(reason).strip()
     if not cleaned_reason:
         raise ValueError("A non-empty reason is required to submit editor changes")
@@ -358,6 +372,11 @@ def load_verified_submission(
     *,
     allowed_root: str | Path,
 ) -> EditorSubmission:
+    """Check submission paths and file hashes before returning edit metadata.
+
+    Called by the edit publisher before it loads and replays the session.
+    """
+
     submission_path = Path(path).expanduser().resolve()
     root = Path(allowed_root).expanduser().resolve()
     if not submission_path.is_relative_to(root):

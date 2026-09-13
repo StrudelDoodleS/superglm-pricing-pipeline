@@ -1,3 +1,9 @@
+"""Describe and replay business adjustments to selected model relativities.
+
+Rules retain typed levels, multiplicative factors and a reason. Applying a
+policy produces a review object; ``publishing.editor`` saves the child package.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -331,6 +337,8 @@ class ManualAdjustmentPolicy:
 
 @dataclass(frozen=True)
 class ManualEditReview:
+    """The selected parent, replayed policy, edited model and impact summary awaiting publication."""
+
     candidate: Candidate
     policy: ManualAdjustmentPolicy
     editor_session: EditorSession

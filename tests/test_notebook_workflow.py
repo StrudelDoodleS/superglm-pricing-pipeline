@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from superglm import Categorical, Numeric, SuperGLM
 
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.models.config import ModelBuildConfig, ValidationSplitConfig
@@ -513,7 +514,8 @@ def test_build_candidate_delegates_model_state_to_standard_runner(
             "region": ["N", "S"],
         }
     )
-    model_with_fitted_state = SimpleNamespace(_result=object())
+    model_with_fitted_state = SuperGLM(features={"age": Numeric(), "region": Categorical()})
+    model_with_fitted_state._result = object()
     captured = {}
 
     monkeypatch.setattr(
@@ -546,7 +548,8 @@ def test_build_candidate_delegates_model_state_to_standard_runner(
         data_as_of="2026-06-30",
     )
 
-    assert captured["superglm_model"] is model_with_fitted_state
+    assert captured["superglm_model"] is not model_with_fitted_state
+    assert captured["superglm_model"]._result is None
     assert captured["output_dir"] == tmp_path / "workbench" / "runs" / "260828192922-4f4c24e3"
     assert candidate.completed_build.model_version == "v7"
 
@@ -661,7 +664,7 @@ def test_build_candidate_keeps_offset_source_and_weights_independent(monkeypatch
 
     monkeypatch.setattr(api, "run_standard_superglm_build", run_build)
 
-    superglm_model = object()
+    superglm_model = SuperGLM(features={"age": Numeric(), "region": Categorical()})
     candidate = api.fit_model(
         context,
         model=model,
@@ -702,7 +705,8 @@ def test_build_candidate_keeps_offset_source_and_weights_independent(monkeypatch
     assert manifest_spec.data_as_of_column == "snapshot_date"
     assert captured["effective_from"] is None
     assert captured["model_config"] is model.config
-    assert captured["superglm_model"] is superglm_model
+    assert captured["superglm_model"] is not superglm_model
+    assert tuple(captured["superglm_model"].features) == ("age", "region")
     assert "model_name" not in captured
     assert "model_type" not in captured
     assert "target_name" not in captured
@@ -774,7 +778,7 @@ def test_build_candidate_aligns_composite_primary_key_inputs(
 
     monkeypatch.setattr(api, "run_standard_superglm_build", run_build)
 
-    superglm_model = object()
+    superglm_model = SuperGLM(features={"age": Numeric(), "region": Categorical()})
     api.fit_model(
         context,
         model=model,
@@ -783,7 +787,8 @@ def test_build_candidate_aligns_composite_primary_key_inputs(
     )
 
     assert captured["frame"] is frame
-    assert captured["superglm_model"] is superglm_model
+    assert captured["superglm_model"] is not superglm_model
+    assert tuple(captured["superglm_model"].features) == ("age", "region")
     assert captured["inputs"].row_ids.equals(frame[["policy_id", "risk_id"]])
     expected_identity = pd.MultiIndex.from_frame(
         frame[["policy_id", "risk_id"]],

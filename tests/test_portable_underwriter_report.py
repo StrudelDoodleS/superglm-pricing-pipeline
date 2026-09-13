@@ -212,6 +212,9 @@ def test_checked_in_portable_artifact_matches_canonical_sources():
     assert source_names == [
         "reporting._underwriter_styles",
         "reporting.inputs",
+        "reporting.evidence_types",
+        "reporting.evidence_values",
+        "reporting.interaction_evidence",
         "reporting.evidence",
         "reporting.movement",
         "reporting._underwriter_html",

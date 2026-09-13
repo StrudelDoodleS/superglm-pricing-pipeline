@@ -13,12 +13,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PORTABLE_PATH = ROOT / "scripts/portable_underwriter_report.py"
 PORTABILITY_REWRITES = (("except TypeError, ValueError:", "except (TypeError, ValueError):"),)
+# Dependencies must precede their consumers: the embedded loader executes in order.
 SOURCE_MODULES = (
     (
         "reporting._underwriter_styles",
         ROOT / "src/pricing_pipeline/reporting/_underwriter_styles.py",
     ),
     ("reporting.inputs", ROOT / "src/pricing_pipeline/reporting/inputs.py"),
+    ("reporting.evidence_types", ROOT / "src/pricing_pipeline/reporting/evidence_types.py"),
+    ("reporting.evidence_values", ROOT / "src/pricing_pipeline/reporting/evidence_values.py"),
+    (
+        "reporting.interaction_evidence",
+        ROOT / "src/pricing_pipeline/reporting/interaction_evidence.py",
+    ),
     ("reporting.evidence", ROOT / "src/pricing_pipeline/reporting/evidence.py"),
     (
         "reporting.movement",

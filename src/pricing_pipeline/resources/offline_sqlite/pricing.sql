@@ -143,6 +143,25 @@ Use: Internal allocation record. Do not infer publication or deployment from a r
     UNIQUE (model_id, model_version)
 );
 
+CREATE TABLE IF NOT EXISTS pricing.MODEL_RECIPE (
+/*
+Purpose: Store the declared modelling choices shared by builds of one registered model.
+One row: One immutable canonical recipe and automatically allocated model-scoped revision.
+Use: MODEL_RUN links successful builds. Dataset dates, bindings and execution settings remain build evidence.
+*/
+    recipe_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id INTEGER NOT NULL REFERENCES PRICING_MODEL(model_id),
+    recipe_revision INTEGER NOT NULL CHECK (recipe_revision > 0),
+    recipe_sha256 TEXT NOT NULL CHECK (length(recipe_sha256)=64 AND recipe_sha256 NOT GLOB '*[^0-9a-f]*'),
+    recipe_format_version INTEGER NOT NULL CHECK (recipe_format_version = 1),
+    recipe_json TEXT NOT NULL CHECK (json_valid(recipe_json) AND json_type(recipe_json)='object'),
+    created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NOT NULL,
+    UNIQUE (model_id, recipe_revision),
+    UNIQUE (model_id, recipe_sha256),
+    UNIQUE (model_id, recipe_id)
+);
+
 CREATE TABLE IF NOT EXISTS pricing.MODEL_RUN (
 /*
 Purpose: Record a model build or an edited revision and its audit evidence.
@@ -159,6 +178,9 @@ Use: model_kind distinguishes RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT. P
     model_kind TEXT NOT NULL DEFAULT 'RAW'
         CHECK (model_kind IN ('RAW', 'ROUTINE_EDIT', 'EDITOR_EDIT', 'MANUAL_EDIT')),
     model_equivalence_sha256 TEXT,
+    recipe_id INTEGER,
+    recipe_status TEXT NOT NULL DEFAULT 'LEGACY',
+    recipe_unavailable_reason TEXT,
     export_id TEXT NOT NULL,
     manifest_id TEXT NOT NULL,
     split_set_id TEXT,
@@ -181,7 +203,8 @@ Use: model_kind distinguishes RAW, ROUTINE_EDIT, EDITOR_EDIT, and MANUAL_EDIT. P
     started_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     completed_ts TEXT,
     created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    created_by TEXT NOT NULL
+    created_by TEXT NOT NULL,
+    FOREIGN KEY (model_id, recipe_id) REFERENCES MODEL_RECIPE(model_id, recipe_id)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS pricing.UX_MODEL_RUN_RATE_PACKAGE
@@ -988,3 +1011,42 @@ NULL bounds describe constant tails. These rows are not constant interval relati
     CHECK ((lower_bound IS NOT NULL AND upper_bound IS NOT NULL) OR (b = 0 AND c = 0 AND d = 0)),
     CHECK (lower_bound IS NOT NULL OR upper_bound IS NOT NULL)
 );
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RECIPE_UPDATE
+BEFORE UPDATE ON MODEL_RECIPE BEGIN
+    SELECT RAISE(ABORT, 'model recipes are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RECIPE_DELETE
+BEFORE DELETE ON MODEL_RECIPE BEGIN
+    SELECT RAISE(ABORT, 'model recipes are immutable');
+END;
+DROP TRIGGER IF EXISTS pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE;
+CREATE TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE
+BEFORE UPDATE OF model_id, recipe_id, recipe_status, recipe_unavailable_reason ON MODEL_RUN
+WHEN (OLD.model_id IS NOT NEW.model_id OR OLD.recipe_id IS NOT NEW.recipe_id OR OLD.recipe_status IS NOT NEW.recipe_status
+      OR OLD.recipe_unavailable_reason IS NOT NEW.recipe_unavailable_reason)
+BEGIN
+    SELECT RAISE(ABORT, 'published run recipe links are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_RECIPE_INSERT
+BEFORE INSERT ON MODEL_RUN
+WHEN NEW.recipe_status NOT IN ('CAPTURED', 'LEGACY', 'UNSUPPORTED')
+ OR (NEW.recipe_status='CAPTURED' AND (NEW.recipe_id IS NULL OR NEW.recipe_unavailable_reason IS NOT NULL))
+ OR (NEW.recipe_status='LEGACY' AND (NEW.recipe_id IS NOT NULL OR NEW.recipe_unavailable_reason IS NOT NULL))
+ OR (NEW.recipe_status='UNSUPPORTED' AND (NEW.recipe_id IS NOT NULL OR NEW.recipe_unavailable_reason IS NULL OR trim(NEW.recipe_unavailable_reason)=''))
+ OR (NEW.recipe_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM MODEL_RECIPE AS r WHERE r.model_id=NEW.model_id AND r.recipe_id=NEW.recipe_id))
+BEGIN
+    SELECT RAISE(ABORT, 'invalid same-model recipe link or recipe status');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_RECIPE_UPDATE
+BEFORE UPDATE ON MODEL_RUN
+WHEN NEW.recipe_status NOT IN ('CAPTURED', 'LEGACY', 'UNSUPPORTED')
+ OR (NEW.recipe_status='CAPTURED' AND (NEW.recipe_id IS NULL OR NEW.recipe_unavailable_reason IS NOT NULL))
+ OR (NEW.recipe_status='LEGACY' AND (NEW.recipe_id IS NOT NULL OR NEW.recipe_unavailable_reason IS NOT NULL))
+ OR (NEW.recipe_status='UNSUPPORTED' AND (NEW.recipe_id IS NOT NULL OR NEW.recipe_unavailable_reason IS NULL OR trim(NEW.recipe_unavailable_reason)=''))
+ OR (NEW.recipe_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM MODEL_RECIPE AS r WHERE r.model_id=NEW.model_id AND r.recipe_id=NEW.recipe_id))
+BEGIN
+    SELECT RAISE(ABORT, 'invalid same-model recipe link or recipe status');
+END;

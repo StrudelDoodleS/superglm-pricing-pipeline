@@ -1,3 +1,9 @@
+"""List saved packages and load one with its verified model artifacts.
+
+``Workbench`` is bound to a registered model. It returns ``Candidate`` records
+that include SQL lineage and the deployment snapshot used for later review.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -11,11 +17,14 @@ from sqlalchemy import text
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.models.config import ModelBuildConfig
+from pricing_pipeline.publishing.recipes import validate_recipe_capture
 from pricing_pipeline.workbench.artifacts import CandidateBundle, load_candidate_bundle
 
 _FRIENDLY_COLUMNS = [
     "Package",
     "Kind",
+    "Recipe",
+    "Recipe status",
     "Fitted",
     "Data through",
     "Manifest",
@@ -30,6 +39,9 @@ _TECHNICAL_COLUMNS = [
     "model_name",
     "model_version",
     "model_kind",
+    "recipe_revision",
+    "recipe_sha256",
+    "recipe_status",
     "model_equivalence_sha256",
     "export_id",
     "package_version",
@@ -82,6 +94,13 @@ class CandidateLineageError(RuntimeError):
 
 @dataclass
 class Candidate:
+    """A saved SQL package loaded for review, editing or deployment.
+
+    ``bundle`` holds the verified fitted model and inputs; ``technical`` holds
+    SQL lineage and the reviewed deployment snapshot. A freshly fitted,
+    unsaved result is the separate ``notebook.BuiltCandidate`` type.
+    """
+
     workbench: Workbench
     model_name: str
     package_version: int
@@ -91,8 +110,37 @@ class Candidate:
     bundle: CandidateBundle
     technical: dict[str, Any]
 
+    @property
+    def recipe_revision(self) -> int | None:
+        return self.technical.get("recipe_revision")
+
+    @property
+    def recipe_status(self) -> str:
+        return self.technical.get("recipe_status", "LEGACY")
+
+    @property
+    def recipe_sha256(self) -> str | None:
+        return self.technical.get("recipe_sha256")
+
+    @property
+    def recipe(self):
+        from pricing_pipeline.modeling.recipes import ModelRecipe, UnsupportedRecipeError
+
+        capture = self.bundle.recipe_capture
+        if capture.status != "CAPTURED":
+            raise UnsupportedRecipeError(
+                capture.unavailable_reason or "recipe unavailable: legacy build"
+            )
+        return ModelRecipe(capture.document)
+
 
 class Workbench:
+    """Read saved versions for one registered model and verify their artifacts.
+
+    Notebook callers use ``list_model_versions`` and ``load_model_version``.
+    This object owns their registry queries and package-to-artifact checks.
+    """
+
     def __init__(
         self,
         *,
@@ -137,6 +185,12 @@ class Workbench:
         return pd.DataFrame(friendly, columns=_FRIENDLY_COLUMNS)
 
     def open(self, model_name: str, *, package_version: int) -> Candidate:
+        """Resolve a saved package and return a Candidate with verified model files.
+
+        Read SQL lineage, load its bundle and capture the current deployment IDs
+        needed when the analyst later requests deployment.
+        """
+
         model_name = self._required_model_name(model_name)
         version = int(package_version)
         deployment_slot = self.model_config.deployment_slot
@@ -171,6 +225,11 @@ class Workbench:
             expected_superglm_version=row["candidate_superglm_version"],
             allowed_root=Path(self.settings.workbench_artifact_root),
         )
+        if bundle.recipe_capture.status != row.get(
+            "recipe_status", "LEGACY"
+        ) or bundle.recipe_capture.sha256 != row.get("recipe_sha256"):
+            raise CandidateLineageError("candidate bundle recipe does not match SQL lineage")
+        validate_recipe_capture(row, bundle.recipe_capture)
         if bundle.manifest_id != row.get("manifest_id"):
             raise CandidateLineageError("candidate bundle manifest_id does not match SQL lineage")
         if bundle.split_set_id != row.get("split_set_id"):
@@ -228,6 +287,7 @@ class Workbench:
                 pm.model_name,
                 mr.model_version,
                 mr.model_kind,
+                mr.recipe_status, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                 mr.model_equivalence_sha256,
                 mr.export_id,
                 rp.package_version,
@@ -274,6 +334,7 @@ class Workbench:
               ON parent_rp.rate_package_id = rp.parent_rate_package_id
             LEFT JOIN {schemas.pricing}.MODEL_RUN AS mr
               ON mr.rate_package_id = rp.rate_package_id
+            LEFT JOIN {schemas.pricing}.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
             LEFT JOIN {schemas.pricing}.MODEL_RUN AS parent_mr
               ON parent_mr.rate_package_id = rp.parent_rate_package_id
             LEFT JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
@@ -341,6 +402,8 @@ class Workbench:
         return {
             "Package": int(row["package_version"]),
             "Kind": row.get("model_kind"),
+            "Recipe": row.get("recipe_revision"),
+            "Recipe status": row.get("recipe_status", "LEGACY"),
             "Fitted": row.get("completed_ts"),
             "Data through": row.get("data_as_of_date"),
             "Manifest": row.get("manifest_id"),

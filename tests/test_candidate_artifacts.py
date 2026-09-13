@@ -248,7 +248,7 @@ def test_candidate_bundle_round_trip_verifies_hash_and_lineage(tmp_path):
     metadata = save_candidate_bundle(bundle, tmp_path / "candidate_bundle.joblib")
     loaded = _load(Path(metadata.path), metadata, allowed_root=tmp_path)
 
-    assert metadata.format == "superglm-candidate-joblib-v2"
+    assert metadata.format == "superglm-candidate-joblib-v3"
     assert loaded.model_name == "HOME_FREQ"
     assert loaded.model_version == "v1"
     assert loaded.export_id == "export-1"

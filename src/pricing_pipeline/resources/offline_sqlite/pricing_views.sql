@@ -174,6 +174,7 @@ SELECT
     relativity.target_name,
     relativity.model_type,
     model_run.model_kind,
+    recipe.recipe_revision, recipe.recipe_sha256, COALESCE(model_run.recipe_status, 'LEGACY') AS recipe_status,
     model_run.model_equivalence_sha256,
     relativity.model_run_id,
     relativity.parent_model_run_id,
@@ -253,6 +254,7 @@ LEFT JOIN PRICING_TERM AS term
   ON term.term_id = relativity.term_id AND term.rate_package_id = relativity.rate_package_id
 LEFT JOIN MODEL_RUN AS model_run
   ON model_run.model_run_id = relativity.model_run_id
+LEFT JOIN MODEL_RECIPE AS recipe ON recipe.model_id=model_run.model_id AND recipe.recipe_id=model_run.recipe_id
 LEFT JOIN DATASET_MANIFEST AS manifest
   ON manifest.manifest_id = model_run.manifest_id;
 
@@ -325,6 +327,7 @@ SELECT
     monitor_run.run_signature_sha256,
     contract.fit_contract_id,
     contract.baseline_model_run_id,
+    recipe.recipe_revision AS baseline_recipe_revision, recipe.recipe_sha256 AS baseline_recipe_sha256, baseline_run.recipe_status AS baseline_recipe_status,
     contract.contract_sha256,
     contract.structure_sha256,
     contract.superglm_version,
@@ -351,6 +354,8 @@ JOIN MODEL_MONITOR_VARIANT AS variant
   ON variant.variant_code = monitor_run.variant_code
 JOIN MODEL_FIT_CONTRACT AS contract
   ON contract.fit_contract_id = monitor_run.fit_contract_id
+LEFT JOIN MODEL_RUN AS baseline_run ON baseline_run.model_run_id=contract.baseline_model_run_id
+LEFT JOIN MODEL_RECIPE AS recipe ON recipe.model_id=baseline_run.model_id AND recipe.recipe_id=baseline_run.recipe_id
 JOIN PRICING_MODEL_DEPLOYMENT AS deployment
   ON deployment.deployment_id = monitor_run.baseline_deployment_id
 JOIN PRICING_MODEL AS model
@@ -501,6 +506,12 @@ Purpose: Compare validation performance across recorded model runs.
 One row: One model run represented in the fold-validation view, with run-level and fold summaries.
 Use: Pooled and full-fit metrics live in mlops.MODEL_RUN_METRIC. SQLite cannot join attached databases in a persistent view, so those columns are NULL here. Query mlops directly for their values. Runs without fold evidence are absent.
 */
+WITH recipe_validation AS (
+    SELECT validation.*, recipe.recipe_revision, recipe.recipe_sha256, model_run.recipe_status
+    FROM V_MODEL_VALIDATION_SPLIT AS validation
+    JOIN MODEL_RUN AS model_run ON model_run.model_run_id=validation.model_run_id
+    LEFT JOIN MODEL_RECIPE AS recipe ON recipe.model_id=model_run.model_id AND recipe.recipe_id=model_run.recipe_id
+)
 SELECT
     model_run_id,
     parent_model_run_id,
@@ -528,6 +539,7 @@ SELECT
     splitter_class,
     splitter_params_json,
     configured_fold_count,
+    MAX(recipe_revision) AS recipe_revision, MAX(recipe_sha256) AS recipe_sha256, MAX(recipe_status) AS recipe_status,
     COUNT(*) AS recorded_split_count,
     SUM(n_test) AS total_validation_rows,
     AVG(deviance) AS mean_deviance,
@@ -560,7 +572,7 @@ SELECT
     CAST(NULL AS REAL) AS fit_reml_enabled,
     CAST(NULL AS REAL) AS fit_reml_converged,
     CAST(NULL AS REAL) AS fit_reml_n_iter
-FROM V_MODEL_VALIDATION_SPLIT
+FROM recipe_validation
 GROUP BY
     model_run_id,
     parent_model_run_id,

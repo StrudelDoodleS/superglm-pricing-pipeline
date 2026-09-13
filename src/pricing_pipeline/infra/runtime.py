@@ -1,3 +1,9 @@
+"""Adapt environment settings or a project's ``get_engine`` module.
+
+``PipelineRuntime`` combines the engine provider with schema and artifact
+settings. Database authentication stays in the selected provider.
+"""
+
 from __future__ import annotations
 
 import importlib
@@ -23,6 +29,8 @@ from pricing_pipeline.infra.schema import SchemaNames, validate_schema_name
 
 @dataclass(frozen=True)
 class PipelineRuntime:
+    """Runtime settings paired with an engine loader and optional database creator."""
+
     settings: Settings
     _engine_loader: Callable[[str | None], Engine]
     _database_ensurer: Callable[[str], None] | None = None

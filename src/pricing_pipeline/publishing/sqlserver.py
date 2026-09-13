@@ -1,14 +1,15 @@
-"""Publish prepared rating tables in one explicit SQL Server transaction.
+"""Save prepared rating tables and audit records in one SQL Server transaction.
 
-Concrete package SQL remains here; lineage writes live in ``lineage.py`` and run in
-the same transaction so maintainers can audit order without a repository abstraction.
+Own registration, version reservation, staging, locking and package writes.
+``lineage`` writes evidence in the same transaction; prediction parity is
+checked before the draft package is marked published.
 """
 
 from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,13 @@ from pricing_pipeline.publishing.publish import (
     PricingModelRecord,
 )
 from pricing_pipeline.publishing.rating_tables import RatingTables
+from pricing_pipeline.publishing.recipes import (
+    identity_params,
+    identity_predicate,
+    lock_model,
+    recipe_result,
+    validate_recipe_capture,
+)
 from pricing_pipeline.workbench.artifacts import CandidateBundle
 from pricing_pipeline.workbench.submission import EditorSubmissionError, sha256_file
 
@@ -358,6 +366,9 @@ def _retry_evidence_conflicts(
         "run_model_version": export.model_version,
         "parent_model_run_id": prepared.parent_model_run_id,
         "model_kind": export.model_kind,
+        "recipe_status": export.recipe_status,
+        "recipe_sha256": export.recipe_sha256,
+        "recipe_unavailable_reason": export.recipe_capture.unavailable_reason,
         "model_equivalence_sha256": export.model_equivalence_sha256,
         "dag_id": prepared.execution_name,
         "airflow_run_id": prepared.execution_id,
@@ -528,6 +539,7 @@ def _completed_package(
                     mr.manifest_id,
                     split_link.split_set_id,
                     mr.model_kind,
+                    mr.recipe_status, mr.recipe_unavailable_reason, recipe.recipe_revision, recipe.recipe_sha256, recipe.recipe_json, recipe.recipe_format_version,
                     mr.model_equivalence_sha256,
                     mr.rating_workbook_path,
                     mr.rating_workbook_sha256,
@@ -548,6 +560,7 @@ def _completed_package(
                   ON pm.model_id = rp.model_id
                 JOIN pricing.MODEL_RUN AS mr WITH (UPDLOCK, HOLDLOCK)
                   ON mr.rate_package_id = rp.rate_package_id
+                LEFT JOIN pricing.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
                 LEFT JOIN mlops.MODEL_RUN_SPLIT_SET AS split_link
                   ON split_link.model_run_id = mr.model_run_id
                  AND split_link.manifest_id = mr.manifest_id
@@ -574,6 +587,9 @@ def _completed_package(
         ("model_name", build.model_name),
         ("manifest_id", build.manifest_id),
         ("model_kind", build.model_kind),
+        ("recipe_status", build.recipe_status),
+        ("recipe_sha256", build.recipe_sha256),
+        ("split_set_id", build.split_set_id),
         ("model_equivalence_sha256", build.model_equivalence_sha256),
         ("run_status", "SUCCESS"),
     ):
@@ -583,6 +599,7 @@ def _completed_package(
         raise RuntimeError(
             "published package has incompatible durable lineage: " + ", ".join(mismatches)
         )
+    validate_recipe_capture(row, build.recipe_capture)
     if not deduplicated:
         evidence_params = {"model_run_id": int(row["model_run_id"])}
         dataset_rows = [
@@ -746,6 +763,9 @@ def _completed_package(
         was_existing=was_existing,
         deduplicated=deduplicated,
         model_kind=str(row["model_kind"]),
+        recipe_revision=row["recipe_revision"],
+        recipe_sha256=row["recipe_sha256"],
+        recipe_status=row["recipe_status"],
         model_equivalence_sha256=str(row["model_equivalence_sha256"]),
     )
 
@@ -811,7 +831,7 @@ def _resolve_existing_or_equivalent(
     equivalent = (
         connection.execute(
             text(
-                """
+                f"""
                 SELECT
                     rp.rate_package_id,
                     rp.package_status,
@@ -824,6 +844,7 @@ def _resolve_existing_or_equivalent(
                   ON rp.rate_package_id = mr.rate_package_id
                 JOIN pricing.PRICING_MODEL AS pm
                   ON pm.model_id = mr.model_id
+                LEFT JOIN pricing.MODEL_RECIPE AS recipe ON recipe.model_id=mr.model_id AND recipe.recipe_id=mr.recipe_id
                 LEFT JOIN mlops.MODEL_RUN_SPLIT_SET AS split_link
                   ON split_link.model_run_id = mr.model_run_id
                  AND split_link.dataset_role = 'training'
@@ -833,10 +854,12 @@ def _resolve_existing_or_equivalent(
                   AND mr.model_kind = :model_kind
                   AND mr.model_equivalence_sha256 = :model_equivalence_sha256
                   AND mr.run_status = 'SUCCESS'
+                  {identity_predicate()}
                 ORDER BY rp.package_version
                 """
             ),
             {
+                **identity_params(build),
                 "model_id": build.model_id,
                 "manifest_id": build.manifest_id,
                 "model_kind": build.model_kind,
@@ -856,6 +879,14 @@ def _resolve_existing_or_equivalent(
             )
         raise RuntimeError("equivalent rating fingerprint resolves multiple successful model runs")
     equivalent = equivalent[0]
+    split_count = connection.execute(
+        text(
+            "SELECT COUNT(*) FROM mlops.MODEL_RUN_SPLIT_SET WHERE model_run_id=:run AND dataset_role='training' AND split_role='validation'"
+        ),
+        {"run": equivalent["model_run_id"]},
+    ).scalar_one()
+    if int(split_count) > 1:
+        raise RuntimeError("equivalent model run resolves multiple training/validation split links")
     if str(equivalent["package_status"]).upper() != "PUBLISHED":
         raise RuntimeError("equivalent model package is not PUBLISHED")
     if str(equivalent["model_name"]) != build.model_name:
@@ -1664,6 +1695,7 @@ def publish_sqlserver(
     tables: RatingTables,
 ) -> CompletedModelPublishResult:
     with engine.begin() as connection:
+        lock_model(connection, prepared.build.model_id)
         _lock_export(connection, prepared.build.export_id)
         existing = _resolve_existing_or_equivalent(connection, prepared, tables)
         if existing is not None:
@@ -1676,7 +1708,10 @@ def publish_sqlserver(
         _verify_draft(connection, package, prepared.verification)
         _mark_published(connection, package.rate_package_id)
         _delete_staging_children(connection, export_id=prepared.build.export_id)
-        return _publication_result(package, model_run_id, prepared)
+        return replace(
+            _publication_result(package, model_run_id, prepared),
+            **recipe_result(connection, model_run_id),
+        )
 
 
 __all__ = [

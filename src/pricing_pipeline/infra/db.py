@@ -1,3 +1,9 @@
+"""Build SQL Server engines and attach the pipeline's schema configuration.
+
+Supports environment-based connection settings and database creation.
+``runtime`` also accepts an engine supplied by a project's private module.
+"""
+
 from __future__ import annotations
 
 import struct

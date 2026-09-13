@@ -8,6 +8,9 @@ import pytest
 
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.models.spec import ApprovedModelBuild
+from pricing_pipeline.publishing.editor_contracts import ChampionSnapshot, ParentCandidate
+from pricing_pipeline.publishing.metadata import OffsetExportContract
+from pricing_pipeline.workbench.submission import sha256_file
 
 EDITOR_CONFIG = SimpleNamespace(
     model_name="HOME_FREQ",
@@ -101,7 +104,7 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
     build = _editor_build(
         tmp_path,
         workbook_path=workbook_path,
-        rating_workbook_sha256=editor.sha256_file(workbook_path),
+        rating_workbook_sha256=sha256_file(workbook_path),
     )
     exported = SimpleNamespace(
         completed_build=build,
@@ -215,7 +218,7 @@ def test_editor_publisher_creates_child_and_derived_run(monkeypatch, tmp_path):
     assert request.verification.receipt is exported.publication_receipt
     assert build.manifest_id == submission.manifest_id
     assert build.split_set_id == submission.split_set_id
-    assert build.rating_workbook_sha256 == editor.sha256_file(workbook_path)
+    assert build.rating_workbook_sha256 == sha256_file(workbook_path)
     assert build.candidate_artifact_sha256 == "d" * 64
     assert allowed_roots == [("parent", tmp_path), ("edited", tmp_path)]
 
@@ -300,7 +303,7 @@ def test_manual_equivalence_requires_matching_immutable_policy_lineage(
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_retry as editor
     from pricing_pipeline.publishing.publish import CompletedModelPublishResult
 
     requested_policy = ManualAdjustmentPolicy(
@@ -463,7 +466,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_retry as editor
     from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
@@ -501,7 +504,7 @@ def test_existing_editor_publication_verifies_committed_candidate_bytes(
         "parent_model_run_id": 907,
         "run_status": "SUCCESS",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor.sha256_file(workbook),
+        "rating_workbook_sha256": sha256_file(workbook),
         "candidate_artifact_path": artifact.path,
         "candidate_artifact_sha256": artifact.sha256,
         "candidate_artifact_format": artifact.format,
@@ -627,7 +630,7 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_retry as editor
 
     policy = ManualAdjustmentPolicy(
         name="market adjustment",
@@ -693,7 +696,7 @@ def test_existing_manual_publication_rejects_changed_signed_submission_before_ar
         "run_status": "SUCCESS",
         "model_kind": "MANUAL_EDIT",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor.sha256_file(workbook),
+        "rating_workbook_sha256": sha256_file(workbook),
         "candidate_artifact_path": str(tmp_path / "candidate.joblib"),
         "candidate_artifact_sha256": "d" * 64,
         "candidate_artifact_format": "superglm-candidate-joblib-v2",
@@ -771,7 +774,8 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
     field_name,
     different_value,
 ):
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.modeling.recipes import RecipeCapture
+    from pricing_pipeline.publishing import editor_retry as editor
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     expected = {
@@ -786,7 +790,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
         "export_id": "editor__submission_1",
     }
     sql_lineage = {**expected, **identity}
-    bundle_lineage = {**expected, **identity}
+    bundle_lineage = {**expected, **identity, "recipe_capture": RecipeCapture()}
     if lineage_owner == "sql":
         sql_lineage[field_name] = different_value
     else:
@@ -804,7 +808,7 @@ def test_existing_editor_publication_rejects_mismatched_lineage(
         "parent_model_run_id": 907,
         "run_status": "SUCCESS",
         "rating_workbook_path": str(workbook),
-        "rating_workbook_sha256": editor.sha256_file(workbook),
+        "rating_workbook_sha256": sha256_file(workbook),
         "candidate_artifact_path": str(tmp_path / "candidate.joblib"),
         "candidate_artifact_sha256": "d" * 64,
         "candidate_artifact_format": "superglm-candidate-joblib-v2",
@@ -937,7 +941,7 @@ def test_failed_editor_publication_removes_only_its_unique_attempt(monkeypatch, 
         build = _editor_build(
             tmp_path,
             workbook_path=published_dir / "rating_tables.xlsx",
-            rating_workbook_sha256=editor.sha256_file(workbook_path),
+            rating_workbook_sha256=sha256_file(workbook_path),
             created_by=created_by,
             publication_receipt_path=str(published_dir / "publication_receipt.json"),
             candidate_artifact_path=str(published_dir / "candidate_bundle.joblib"),
@@ -1028,7 +1032,7 @@ def test_editor_publication_rejects_workbook_mutated_during_staging(
         build = _editor_build(
             tmp_path,
             workbook_path=final_dir / "rating_tables.xlsx",
-            rating_workbook_sha256=editor.sha256_file(workbook),
+            rating_workbook_sha256=sha256_file(workbook),
             created_by=kwargs["created_by"],
         )
         workbook.write_bytes(b"mutated before publication")
@@ -1058,7 +1062,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_export as editor
     from pricing_pipeline.publishing.metadata import (
         OffsetExportContract,
     )
@@ -1113,7 +1117,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
             target_name="claim_count",
         ),
         bundle=bundle,
-        champion=editor.ChampionSnapshot(
+        champion=ChampionSnapshot(
             deployment_slot="HOME_FREQ_UAT",
             rate_package_id=None,
             bundle=None,
@@ -1186,7 +1190,7 @@ def test_editor_export_writes_staging_bytes_but_persists_final_attempt_paths(
 
     build = exported.completed_build
     assert Path(build.rating_workbook_path) == final_dir / "rating_tables.xlsx"
-    assert build.rating_workbook_sha256 == editor.sha256_file(write_dir / "rating_tables.xlsx")
+    assert build.rating_workbook_sha256 == sha256_file(write_dir / "rating_tables.xlsx")
     assert Path(build.publication_receipt_path) == final_dir / "publication_receipt.json"
     assert Path(build.candidate_artifact_path) == final_dir / "candidate_bundle.joblib"
     assert build.created_by == "publisher@example.test"
@@ -1271,7 +1275,7 @@ def test_parent_candidate_rejects_submission_deployment_slot_mismatch_before_sql
     monkeypatch,
     tmp_path,
 ):
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_parent as editor
 
     submission = SimpleNamespace(
         model_name="HOME_FREQ",
@@ -1306,7 +1310,8 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
     submission_relative_path,
     effective_from_date,
 ):
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.modeling.recipes import RecipeCapture
+    from pricing_pipeline.publishing import editor_parent as editor
 
     configured_root = tmp_path / "configured-workbench"
     candidate_path = configured_root / "models/HOME_FREQ/runs/deep/candidate.joblib"
@@ -1381,6 +1386,7 @@ def test_parent_candidate_uses_exact_configured_root_and_unambiguous_split_link(
             return Begin(self.connection)
 
     bundle = SimpleNamespace(
+        recipe_capture=RecipeCapture(),
         model_name="HOME_FREQ",
         model_version="v4",
         export_id="parent-export",
@@ -1482,7 +1488,7 @@ def test_editor_session_root_cannot_be_widened_by_submission_path(
     tmp_path,
     submission_relative_path,
 ):
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
     from pricing_pipeline.workbench.submission import EditorSubmissionError
 
     configured_root = tmp_path / "configured-workbench"
@@ -1507,7 +1513,7 @@ def test_editor_session_replays_against_verified_parent_model(
 ):
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
     from pricing_pipeline.workbench.submission import sha256_file
 
     configured_root = tmp_path / "configured-workbench"
@@ -1558,7 +1564,7 @@ def test_v2_submission_loads_final_model_without_replaying_session(monkeypatch, 
     import pandas as pd
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     class Model:
         def __init__(self, features, beta):
@@ -1629,7 +1635,7 @@ def test_manual_submission_rejects_missing_or_malformed_policy_before_model_load
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     policy = ManualAdjustmentPolicy(
         name="market adjustment",
@@ -1724,7 +1730,7 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
         ManualAdjustmentPolicy,
         ManualAdjustmentRule,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     x = (
         np.zeros(60)
@@ -1814,7 +1820,7 @@ def test_manual_submission_must_match_policy_replayed_on_trusted_parent(
             sample_weight=None,
             offset=None,
             cv_report={},
-            offset_contract=editor.OffsetExportContract(handling="NONE"),
+            offset_contract=OffsetExportContract(handling="NONE"),
             fit_sample_weight_name=None,
             export_weight_name=None,
         )
@@ -1870,7 +1876,7 @@ def test_manual_replay_compares_complete_normalized_fitted_runtime_state(mutate_
         ManualAdjustmentRule,
         replay_manual_adjustment_policy,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     x = np.tile([-1.0, 0.0, 1.0], 30)
     segment = np.repeat(["A", "B", "C"], 30)
@@ -1892,7 +1898,7 @@ def test_manual_replay_compares_complete_normalized_fitted_runtime_state(mutate_
         sample_weight=None,
         offset=None,
         cv_report={},
-        offset_contract=editor.OffsetExportContract(handling="NONE"),
+        offset_contract=OffsetExportContract(handling="NONE"),
         fit_sample_weight_name=None,
         export_weight_name=None,
     )
@@ -1972,7 +1978,7 @@ def test_manual_publisher_replay_preserves_numeric_zero_level_targeting():
         ManualAdjustmentRule,
         replay_manual_adjustment_policy,
     )
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     frame = pd.DataFrame({"segment": np.repeat([0, 1, 2], 20)})
     target = np.tile([1.0, 2.0, 3.0], 20)
@@ -1987,7 +1993,7 @@ def test_manual_publisher_replay_preserves_numeric_zero_level_targeting():
         sample_weight=None,
         offset=None,
         cv_report={},
-        offset_contract=editor.OffsetExportContract(handling="NONE"),
+        offset_contract=OffsetExportContract(handling="NONE"),
         fit_sample_weight_name=None,
         export_weight_name=None,
     )
@@ -2029,7 +2035,7 @@ def test_v2_submission_rejects_changed_feature_names(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     parent_model = SimpleNamespace(features={"region": object(), "x": object()})
     edited_model = SimpleNamespace(
@@ -2081,7 +2087,7 @@ def test_v2_submission_rejects_unusable_final_model(
 ):
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_replay as editor
 
     model = SimpleNamespace(
         features={"x": object()},
@@ -2124,7 +2130,8 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
     from superglm import Categorical, Spline, SuperGLM
     from superglm.editor import EditorSession
 
-    from pricing_pipeline.publishing import editor, rating_tables
+    from pricing_pipeline.publishing import editor_export as editor
+    from pricing_pipeline.publishing import rating_tables
     from pricing_pipeline.workbench.artifacts import CandidateBundle
     from pricing_pipeline.workbench.submission import save_editor_submission
 
@@ -2138,7 +2145,26 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
         selection_penalty=0.0,
         retain_fit_state=retain_fit_state,
     ).fit(frame, y)
+    from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture
+    from pricing_pipeline.notebook import PricingModelSpec
+
+    training_spec = PricingModelSpec(
+        name="HOME_FREQ",
+        label="Home",
+        model_type="superglm_poisson",
+        deployment_slot="HOME_FREQ_UAT",
+        target="claim_count",
+        features=tuple(frame.columns),
+        dataset_name="home",
+        source_system="test",
+        pk_columns=("policy_id",),
+        fit_mode="fit",
+    )
+    training_capture = RecipeCapture.captured(
+        ModelRecipe.from_model(parent_model, spec=training_spec).document
+    )
     bundle = CandidateBundle(
+        recipe_capture=training_capture,
         fitted_model=parent_model,
         X=frame,
         y=y,
@@ -2180,7 +2206,7 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
         claimed_identity="analyst@example.test",
     )
 
-    parent = editor.ParentCandidate(
+    parent = ParentCandidate(
         model_id=17,
         model_name="HOME_FREQ",
         model_version="v1",
@@ -2194,7 +2220,7 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
             target_name="claim_count",
         ),
         bundle=bundle,
-        champion=editor.ChampionSnapshot(
+        champion=ChampionSnapshot(
             deployment_slot="HOME_FREQ_UAT",
             rate_package_id=None,
             bundle=None,
@@ -2245,6 +2271,9 @@ def test_collapsed_editor_model_publishes(tmp_path, continuous_kind, retain_fit_
     assert relativities["B"] == pytest.approx(relativities["C"])
 
     child_bundle = joblib.load(write_dir / "candidate_bundle.joblib")["bundle"]
+    assert child_bundle.recipe_capture == training_capture
+    assert exported.completed_build.recipe_capture == training_capture
+    assert not training_capture.document.features["region"]["groups"]
     for fitted in (loaded, child_bundle.fitted_model):
         assert fitted._retain_fit_state is retain_fit_state
         assert fitted._config.retain_fit_state is retain_fit_state
@@ -2314,7 +2343,7 @@ def test_champion_comparison_scores_parent_rows_even_when_training_rows_differ(t
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor import _load_champion_bundle
+    from pricing_pipeline.publishing.editor_parent import _load_champion_bundle
     from pricing_pipeline.workbench.artifacts import CandidateBundle, save_candidate_bundle
 
     parent = CandidateBundle(
@@ -2436,7 +2465,7 @@ def test_champion_comparison_rejects_incompatible_offset_contract(
 ):
     import pandas as pd
 
-    from pricing_pipeline.publishing import editor
+    from pricing_pipeline.publishing import editor_parent as editor
 
     parent = SimpleNamespace(
         X=pd.DataFrame({"x": [1.0]}),
@@ -2529,7 +2558,7 @@ def test_champion_snapshot_distinguishes_absent_and_unavailable_champion(
     import numpy as np
     import pandas as pd
 
-    from pricing_pipeline.publishing.editor import _load_champion_bundle
+    from pricing_pipeline.publishing.editor_parent import _load_champion_bundle
     from pricing_pipeline.workbench.artifacts import CandidateBundle
 
     class Rows:

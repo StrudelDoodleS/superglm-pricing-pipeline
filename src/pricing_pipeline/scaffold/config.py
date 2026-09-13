@@ -1,3 +1,9 @@
+"""Parse scaffold TOML and validate the options used to generate notebooks.
+
+Keep raw ``ScaffoldOptions`` separate from ``ResolvedScaffoldOptions`` so
+rendering and file creation receive checked values.
+"""
+
 from __future__ import annotations
 
 import keyword
@@ -23,6 +29,8 @@ _CONFIG_KEYS = frozenset(
 
 @dataclass(frozen=True)
 class ScaffoldOptions:
+    """Raw model-generation options supplied by CLI or Python callers."""
+
     model_name: str
     target_name: str
     model_label: str | None = None
@@ -40,6 +48,8 @@ class ScaffoldOptions:
 
 @dataclass(frozen=True)
 class ResolvedScaffoldOptions:
+    """Validated options ready for notebook rendering and file creation."""
+
     model_name: str
     target_name: str
     model_label: str
@@ -57,6 +67,8 @@ class ResolvedScaffoldOptions:
 
 @dataclass(frozen=True)
 class ScaffoldConfig:
+    """TOML defaults for notebook connections and manual-adjustment behavior."""
+
     database_mode: str = "local"
     runtime_module: str | None = None
     expected_remote_database: str = ""
@@ -131,6 +143,13 @@ def _manual_edit_carry_forward(value: object) -> bool:
 
 
 def resolve_scaffold_options(options: ScaffoldOptions) -> ResolvedScaffoldOptions:
+    """Validate merged options and fill derived notebook defaults.
+
+    Derive package name, display label and deployment slot from ``model_name``
+    when omitted. Return ``ResolvedScaffoldOptions`` for the filesystem service,
+    which forwards notebook values to ``render_notebooks``.
+    """
+
     model_name = _model_name(options.model_name)
     package_name = _package_name(
         options.package_name or re.sub(r"_+", "_", model_name.lower()).strip("_")
@@ -170,7 +189,11 @@ def resolve_scaffold_options(options: ScaffoldOptions) -> ResolvedScaffoldOption
 
 
 def load_scaffold_config(path: str | Path) -> ScaffoldConfig:
-    """Load strict, non-secret notebook connection defaults from TOML."""
+    """Read notebook and manual-edit defaults from the selected TOML file.
+
+    ``commands._raw_scaffold_options`` combines these values with CLI arguments.
+    The file configures generation; generated notebooks retain literal values.
+    """
     config_path = Path(path).expanduser().resolve()
     if not config_path.is_file():
         raise ValueError(f"scaffold config does not exist: {config_path}")

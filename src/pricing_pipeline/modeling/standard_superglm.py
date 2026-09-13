@@ -1,3 +1,10 @@
+"""Run validation and full fitting, then write a completed build's evidence.
+
+Persist the dataset manifest and split references, fit SuperGLM, and export
+the workbook, receipt and candidate bundle. Return ``ApprovedModelBuild`` for
+a later publication step. Notebook callers enter through ``fit_model``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -19,6 +26,7 @@ from pricing_pipeline.data.manifest import (
     create_model_frame_manifest_with_split,
 )
 from pricing_pipeline.data.row_identity import compute_row_order_sha256
+from pricing_pipeline.modeling.recipes.schema import RecipeCapture
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.kinds import normalise_model_kind
 from pricing_pipeline.models.spec import ApprovedModelBuild
@@ -40,6 +48,8 @@ _SAFE_ATTEMPT_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 @dataclass(frozen=True)
 class ModelInputs:
+    """Aligned features, response, weights, offset and row keys supplied to fitting."""
+
     X: pd.DataFrame
     y: pd.Series | pd.DataFrame | np.ndarray
     sample_weight: pd.Series | np.ndarray | None = None
@@ -54,6 +64,8 @@ class ModelInputs:
 
 @dataclass(frozen=True)
 class FoldMetric:
+    """One named validation metric for one fold."""
+
     fold_no: int
     metric_name: str
     metric_value: float
@@ -61,6 +73,8 @@ class FoldMetric:
 
 @dataclass(frozen=True)
 class CVEvidence:
+    """Materialized fold positions, the CV report and aggregate/per-fold metrics."""
+
     fold_indices: tuple[tuple[np.ndarray, np.ndarray], ...]
     report: dict[str, Any]
     metrics: dict[str, float]
@@ -91,7 +105,20 @@ def run_standard_superglm_build(
     input_transforms: dict[str, dict[str, Any]] | None = None,
     continuous_kind: str = "ppform",
     cross_validate_fn: Callable[..., Any] = cross_validate,
+    recipe_capture: RecipeCapture | None = None,
 ) -> ApprovedModelBuild:
+    """Fit the configured estimator and return verifiable publication evidence.
+
+    Validate row alignment, persist manifest/split evidence, run CV and the full
+    fit, then write the rating workbook, receipt and fitted-model bundle.
+    Notebook callers normally use ``fit_model`` to construct these inputs.
+    """
+
+    recipe_capture = (
+        RecipeCapture()
+        if recipe_capture is None
+        else RecipeCapture.from_payload(recipe_capture.to_payload())
+    )
     resolved_model_kind = normalise_model_kind(model_kind)
     _validate_input_lengths(inputs)
     _validate_canonical_row_ids(
@@ -199,6 +226,7 @@ def run_standard_superglm_build(
         cv_report["scoring"] = _scoring_labels(scoring)
         cv_report["superglm_version"] = receipt.superglm_version
         bundle = CandidateBundle(
+            recipe_capture=recipe_capture,
             fitted_model=fitted,
             input_transforms=input_transforms,
             X=inputs.X.copy(),
@@ -243,6 +271,7 @@ def run_standard_superglm_build(
         )
         fit_metrics = _full_fit_metrics(telemetry)
         completed_build = ApprovedModelBuild(
+            recipe_capture=recipe_capture,
             model_id=model_id,
             model_name=model_config.model_name,
             rating_workbook_path=str(workbook_path),
@@ -536,6 +565,8 @@ def run_cross_validation(
 
 
 class PrecomputedSplitter:
+    """Replay validated train/test row positions through the splitter interface used by CV."""
+
     def __init__(
         self,
         folds: Iterable[tuple[Any, Any]],

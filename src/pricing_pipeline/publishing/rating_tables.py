@@ -1,3 +1,10 @@
+"""Export and parse the workbook used to publish model relativities.
+
+Combine workbook rows with receipt metadata into normalized rating tables.
+Calculate content and rating-equivalence hashes for validation and retry
+checks. Database writes belong to ``sqlite`` and ``sqlserver``.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -63,6 +70,8 @@ _EQUIVALENCE_JSON_COLUMNS = {
 
 @dataclass(frozen=True)
 class StagingExport:
+    """Workbook location and model/export metadata needed to prepare rating tables."""
+
     workbook_path: Path
     export_id: str
     model_name: str
@@ -75,6 +84,13 @@ class StagingExport:
 
 @dataclass(frozen=True)
 class RatingTables:
+    """Normalized workbook output and its content/equivalence hashes.
+
+    ``rate_cells`` stores term values and ``cell_levels`` identifies the levels
+    or intervals those values apply to. Writers consume these frames together
+    with export and term metadata.
+    """
+
     export_frame: pd.DataFrame
     rate_cells: pd.DataFrame
     cell_levels: pd.DataFrame
