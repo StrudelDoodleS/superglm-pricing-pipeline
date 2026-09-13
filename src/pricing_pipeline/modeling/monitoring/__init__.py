@@ -23,6 +23,11 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringVariantPolicy,
     PersistedMonitoringRun,
 )
+from pricing_pipeline.modeling.monitoring.data_checks import (
+    MonitoringDataCheck,
+    MonitoringDataError,
+    check_monitoring_data,
+)
 from pricing_pipeline.modeling.monitoring.fitting import (
     build_model_fit_contract,
     materialize_monitoring_model,
@@ -43,6 +48,8 @@ __all__ = [
     "RESULT_EVIDENCE_SCHEMA",
     "RESULT_EVIDENCE_SCHEMA_VERSION",
     "ModelFitContract",
+    "MonitoringDataCheck",
+    "MonitoringDataError",
     "MonitoringError",
     "MonitoringFitResult",
     "MonitoringInvariantEvidence",
@@ -53,6 +60,7 @@ __all__ = [
     "MonitoringVariantPolicy",
     "PersistedMonitoringRun",
     "build_model_fit_contract",
+    "check_monitoring_data",
     "materialize_monitoring_model",
     "persist_monitoring_fit",
     "run_monitoring_fit",

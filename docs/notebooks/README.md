@@ -520,6 +520,7 @@ Import these from `pricing_pipeline.notebook`.
 | `publish_manual_adjustment(...)` | Reapply the canonical policy and publish it | `MANUAL_EDIT` child publication |
 | `deploy_model_version(...)` | Deploy exactly the reviewed model version | Deployment record; stale champion fails |
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
+| `check_monitoring_data(...)` | Check input compatibility and categorical mix changes before the preset loop | Issues, distributions and drift distances; errors can be raised before fitting |
 | `run_monitoring_fit(...)` | Score or refit one controlled monitoring preset from a verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
 
@@ -534,9 +535,15 @@ A monitoring notebook can open the champion once, prepare the new manifest's
 feature frame in the same column order, and run the presets explicitly:
 
 ```python
-from pricing_pipeline.notebook import MonitoringVariant, run_monitoring_fit
+from pricing_pipeline.notebook import (
+    MonitoringVariant, check_monitoring_data, run_monitoring_fit,
+)
 
 baseline = open_deployed_candidate(pricing, model=model)
+check = check_monitoring_data(baseline, X_new, sample_weight=weight_new)
+display(check.issues, check.drift)
+check.raise_for_errors()  # Warnings allow fitting; incompatible inputs stop here.
+
 results = {
     variant: run_monitoring_fit(
         baseline,
@@ -552,6 +559,32 @@ results = {
     for variant in MonitoringVariant
 }
 ```
+
+The check compares against the candidate's reverified training inputs. New raw
+categorical levels, missing feature columns, nulls, invalid numeric values and
+invalid weights block controlled refits. Known levels with no rows or no positive
+weight remain allowed but produce a support warning. Grouped features are checked
+against their original input levels, and ordered categories include their specials.
+
+`check.distributions` contains per-level counts and shares for both snapshots.
+`check.drift` measures categorical total variation distance: half the sum of
+absolute share changes, between zero and one. It reports row shares and, when
+weights exist on both sides, fit-weight shares. It does not compare exposure shares
+unless those weights represent exposure. `drift_threshold=0.2` is a configurable
+review trigger, not a significance test or an automatic decision to rebase.
+
+For a standalone fitted SuperGLM, supply `reference_df` and optional
+`reference_sample_weight`. Missing reference data explicitly leaves drift
+unassessed. Numeric distribution drift, changed label meanings with unchanged
+marginals, and the cause of a detected change are outside this categorical check.
+Continue using dashboard trends and upstream investigation for those questions.
+
+`check.to_json()` returns aggregate evidence for a runner's logs or an artifact.
+This preflight report is not automatically persisted to SQL or a dashboard.
+`run_monitoring_fit` also enforces compatibility before fitting, so bypassing the
+explicit check cannot silently accept new levels. Direct `STATIC_SCORE` calls
+retain an existing ungrouped categorical `unseen="base"` prediction policy;
+that fallback does not permit refitting unknown levels.
 
 Persist only after all requested fits have succeeded. Pass the new snapshot's
 `manifest_id`, `baseline.model_run_id`, and

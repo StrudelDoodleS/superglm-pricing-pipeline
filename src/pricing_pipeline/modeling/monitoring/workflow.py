@@ -22,6 +22,7 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringFitResult,
     MonitoringVariant,
 )
+from pricing_pipeline.modeling.monitoring.data_checks import _require_compatible_monitoring_data
 from pricing_pipeline.modeling.monitoring.evidence import (
     _monitoring_fit_configuration_json,
     _monitoring_result_evidence_sha256,
@@ -145,6 +146,12 @@ def run_monitoring_fit(
         max_reml_iter=max_reml_iter,
         reml_tol=reml_tol,
         runtime_validation=runtime_validation,
+    )
+    _require_compatible_monitoring_data(
+        baseline,
+        X,
+        sample_weight,
+        static_score=resolved_variant is MonitoringVariant.STATIC_SCORE,
     )
     contract = build_model_fit_contract(
         baseline,

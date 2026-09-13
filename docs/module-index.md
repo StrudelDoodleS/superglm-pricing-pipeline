@@ -73,6 +73,7 @@ they are not a list of additional public APIs.
 | [modeling/monitoring/__init__.py](../src/pricing_pipeline/modeling/monitoring/__init__.py) | Controlled monitoring refits and their saved audit evidence. |
 | [modeling/monitoring/baseline.py](../src/pricing_pipeline/modeling/monitoring/baseline.py) | Verify the saved baseline and bind a monitoring dataframe to its declared roles. |
 | [modeling/monitoring/contracts.py](../src/pricing_pipeline/modeling/monitoring/contracts.py) | Records, variant policies and canonical values used by monitoring. |
+| [modeling/monitoring/data_checks.py](../src/pricing_pipeline/modeling/monitoring/data_checks.py) | Check monitoring inputs and compare categorical mixes before any model refit. |
 | [modeling/monitoring/evidence.py](../src/pricing_pipeline/modeling/monitoring/evidence.py) | Extract monitoring terms, smoothing parameters, relativities and loss metrics. |
 | [modeling/monitoring/fitting.py](../src/pricing_pipeline/modeling/monitoring/fitting.py) | Capture baseline structure and reconstruct the model allowed by a monitoring variant. |
 | [modeling/monitoring/invariants.py](../src/pricing_pipeline/modeling/monitoring/invariants.py) | Verify the structural restrictions and canonical evidence of a monitoring fit. |

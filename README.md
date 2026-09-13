@@ -60,16 +60,9 @@ An explicit `--config` wins, and explicit command-line options win over the
 file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
 notebooks set it to `False`.
 
-`init` also seeds two Copilot agents under `.github/agents/`:
-
-- **Pricing builder** configures data, connections and models.
-- **Pricing developer** follows the module index and workflow guides to find
-  the code and tests for a package change.
-
-The developer agent is also available directly in this source checkout. Its
-navigation guides live in this framework repository, not in generated analyst
-projects. Rerunning `init` adds missing agents and preserves existing config
-and agent files, including your edits.
+`init` seeds **Pricing builder** and **Pricing developer** under `.github/agents/`.
+Rerunning it adds missing agents and preserves config and agent edits. For package
+maintenance, the developer agent uses the [source navigation guides](docs/MAINTAINERS.md).
 
 The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same scaffold.
 

@@ -132,13 +132,23 @@ This workflow is implemented through notebook helpers; `workbench` is not a sepa
 Start with [`workflow.run_monitoring_fit`](../src/pricing_pipeline/modeling/monitoring/workflow.py).
 It calls the stages in order; it does not write monitoring rows itself.
 
+Run [`check_monitoring_data`](../src/pricing_pipeline/modeling/monitoring/data_checks.py)
+once before the preset loop. Inspect its issues and drift table, then call
+`raise_for_errors()`. Compatibility errors stop the loop; absent levels and large
+categorical mix changes request review while allowing fitting. The reference
+comes from the candidate's reverified saved training inputs. Aggregate reports
+can be logged with `to_json()`; they are separate from SQL monitoring observations.
+
 These are separate comparisons against the same saved baseline. Each selected
 variant starts from that baseline, not from the preceding comparison's refit.
 
 ```mermaid
 flowchart TD
-    B["Deployed baseline model"] --> V["Verify baseline and bind dated data"]
-    D["New dated dataset"] --> V
+    B["Deployed baseline model"] --> C["check_monitoring_data: compatibility and categorical drift"]
+    D["New dated dataset"] --> C
+    C --> Q["Incompatible inputs: stop and report"]
+    C --> W["Compatible inputs: retain any review warnings"]
+    W --> V["Verify baseline and bind dated data for each selected preset"]
     V --> S["STATIC_SCORE: score unchanged model"]
     V --> F["FROZEN_REFIT: refit coefficients"]
     V --> L["REESTIMATE_LAMBDA: refit coefficients and smoothing"]
@@ -179,6 +189,7 @@ bases and refits with a group-selection penalty rather than relaxing the contrac
 
 | Stage | Owner | Handoff |
 |---|---|---|
+| Check snapshot compatibility and categorical drift | [`data_checks`](../src/pricing_pipeline/modeling/monitoring/data_checks.py) | `MonitoringDataCheck` with issues, per-level distributions and distances. |
 | Describe the baseline and permitted changes | [`contracts`](../src/pricing_pipeline/modeling/monitoring/contracts.py) | `ModelFitContract`, `MonitoringVariant` and result records. |
 | Verify and bind the saved baseline | [`baseline`](../src/pricing_pipeline/modeling/monitoring/baseline.py) | A verified fitted model bound to the checked dataframe. |
 | Reconstruct and fit the comparison | [`fitting`](../src/pricing_pipeline/modeling/monitoring/fitting.py) | `materialize_monitoring_model` applies the selected frozen/reestimated policy. |
@@ -189,6 +200,11 @@ bases and refits with a group-selection penalty rather than relaxing the contrac
 Existing imports from `pricing_pipeline.modeling.monitoring` still work.
 Monitoring observations do not allocate deployable packages. The persistence
 transaction and its retry handling remain together in one module.
+
+Distribution drift is evidence to investigate, not proof that upstream SQL changed.
+Matching labels and matching marginal distributions cannot certify unchanged
+feature semantics. The [preflight example](notebooks/README.md)
+shows the report before fitting; numeric distribution trends remain a dashboard concern.
 
 ## From predictions to an offline report
 

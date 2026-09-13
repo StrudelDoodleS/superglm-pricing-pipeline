@@ -68,11 +68,14 @@ from pricing_pipeline.modeling.manual_adjustment import (
 )
 from pricing_pipeline.modeling.monitoring import (
     ModelFitContract,
+    MonitoringDataCheck,
+    MonitoringDataError,
     MonitoringFitResult,
     MonitoringInvariantEvidence,
     MonitoringVariant,
     PersistedMonitoringRun,
     build_model_fit_contract,
+    check_monitoring_data,
     persist_monitoring_fit,
     run_monitoring_fit,
 )
@@ -1025,6 +1028,8 @@ __all__ = [
     "ManualEditReview",
     "ModelFitContract",
     "ModelFrameArtifact",
+    "MonitoringDataCheck",
+    "MonitoringDataError",
     "MonitoringFitResult",
     "MonitoringInvariantEvidence",
     "MonitoringVariant",
@@ -1038,6 +1043,7 @@ __all__ = [
     "apply_transforms",
     "build_candidate",
     "build_model_fit_contract",
+    "check_monitoring_data",
     "connect",
     "deploy_model_version",
     "deploy_package",

@@ -140,7 +140,7 @@ uv run python -m pytest -q tests/test_scaffold_pricing_model.py tests/cli/test_i
 Monitoring:
 
 ```bash
-uv run python -m pytest -q tests/test_model_monitoring.py tests/test_monitoring_simulation.py
+uv run python -m pytest -q tests/test_model_monitoring.py tests/test_monitoring_simulation.py tests/test_monitoring_data_checks.py
 ```
 
 Publishing:
