@@ -32,7 +32,7 @@ flowchart TD
 | Validate | [`config.resolve_scaffold_options`](../src/pricing_pipeline/scaffold/config.py) | Check the dotted module name and produce resolved options. |
 | Forward to rendering | [`service.scaffold_resolved_pricing_model`](../src/pricing_pipeline/scaffold/service.py) | Pass the same `ResolvedScaffoldOptions` object into `render_notebooks(options)`. |
 | Substitute | [`render.render_notebooks`](../src/pricing_pipeline/scaffold/render.py) | `_python_literal` encodes the value and the token map selects its placeholder. |
-| Read the cell | [`03_model_training.ipynb`](../src/pricing_pipeline/resources/scaffold/notebooks/03_model_training.ipynb) | The settings cell contains `RUNTIME_MODULE = __RUNTIME_MODULE_LITERAL__`. All six templates have this setting. |
+| Read the cell | [`03_model_training.ipynb`](../src/pricing_pipeline/resources/scaffold/notebooks/03_model_training.ipynb) | The settings cell contains `RUNTIME_MODULE = __RUNTIME_MODULE_LITERAL__`. Notebook 02 fits locally and has no connection settings. |
 | Write the file | [`service.scaffold_resolved_pricing_model`](../src/pricing_pipeline/scaffold/service.py) | Write the rendered JSON under `pricing_models/<package_name>`. |
 | Execute later | [`notebook.connect`](../src/pricing_pipeline/notebook.py), [`infra.runtime`](../src/pricing_pipeline/infra/runtime.py) | In remote mode, import the module and obtain its engine. |
 
@@ -43,15 +43,15 @@ specified otherwise. Template filenames below use their numeric prefixes.
 
 | CLI flag | TOML fallback | Field | Template token | Generated use |
 |---|---|---|---|---|
-| `--model-name` | Required CLI value | `model_name` | `__MODEL_NAME__` | `MODEL_NAME` in 02/04/05/06; spec `name` in 03; policy name in 05. |
-| `--target-name` | Required CLI value | `target_name` | `__TARGET_NAME__` | Data column in 01/02; `SCRATCH_TARGET` in 02; spec `target` in 03. |
+| `--model-name` | Required CLI value | `model_name` | `__MODEL_NAME__` | `MODEL_NAME` in 04/05/06; spec `name` in 02/03; policy name in 05. |
+| `--target-name` | Required CLI value | `target_name` | `__TARGET_NAME__` | Data column in 01; spec `target` in 02/03. |
 | `--model-label` | Derived from model name | `model_label` | `__MODEL_LABEL__`, `__MODEL_LABEL_MARKDOWN__` | Spec/lookup label and notebook titles. |
-| `--model-type` | CLI default `superglm_poisson` | `model_type` | `__MODEL_TYPE__` | Spec `model_type` in 03. |
-| `--deployment-slot` | `<model_name>_UAT` | `deployment_slot` | `__DEPLOYMENT_SLOT__` | Spec in 03; selection settings in 02/04/05/06. |
+| `--model-type` | CLI default `superglm_poisson` | `model_type` | `__MODEL_TYPE__` | Spec `model_type` in 02/03. |
+| `--deployment-slot` | `<model_name>_UAT` | `deployment_slot` | `__DEPLOYMENT_SLOT__` | Spec in 02/03; selection settings in 04/05/06. |
 | `--package-name` | Lowercase model name with repeated underscores collapsed | `package_name` | `__PACKAGE_NAME__` | `MODEL_DIR` in every notebook and the output directory. |
-| `--database-mode` | `notebook_defaults.database_mode` | `database_mode` | `__DATABASE_MODE_LITERAL__` | `DATABASE_MODE` in every notebook. |
-| `--runtime-module` | `notebook_defaults.runtime_module` | `runtime_module` | `__RUNTIME_MODULE_LITERAL__` | `RUNTIME_MODULE` in every notebook. |
-| `--expected-remote-database` | `notebook_defaults.expected_remote_database` | `expected_remote_database` | `__EXPECTED_REMOTE_DATABASE_LITERAL__` | `EXPECTED_REMOTE_DATABASE` in every notebook. |
+| `--database-mode` | `notebook_defaults.database_mode` | `database_mode` | `__DATABASE_MODE_LITERAL__` | `DATABASE_MODE` in 01 and 03–06. |
+| `--runtime-module` | `notebook_defaults.runtime_module` | `runtime_module` | `__RUNTIME_MODULE_LITERAL__` | `RUNTIME_MODULE` in 01 and 03–06. |
+| `--expected-remote-database` | `notebook_defaults.expected_remote_database` | `expected_remote_database` | `__EXPECTED_REMOTE_DATABASE_LITERAL__` | `EXPECTED_REMOTE_DATABASE` in 01 and 03–06. |
 | `--manual-edit-source` | `manual_edit_defaults.source_selector` | `manual_edit_source_selector` | `__MANUAL_SOURCE_SELECTOR_LITERAL__` | `SOURCE_SELECTOR` in 05. |
 | `--manual-edit-carry-forward` / `--no-manual-edit-carry-forward` | `manual_edit_defaults.carry_forward` | `manual_edit_carry_forward` | `__MANUAL_CARRY_FORWARD_LITERAL__` | `CARRY_FORWARD` in 05. |
 | `--root` | Current directory | `root` | None | Select the project and output directory in commands/service. |

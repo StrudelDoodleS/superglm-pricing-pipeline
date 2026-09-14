@@ -38,7 +38,7 @@ column names, database names or business assumptions.
   data-as-of value identifies the dataset version. It is not today's fit date.
 - Ask which columns belong in the model and how each should be treated.
   Distinguish numeric, categorical, ordered categorical and spline features.
-  Ask about categorical reference levels and groupings when needed. For a
+  Ask about categorical reference levels, groupings and special levels when needed. For a
   spline, confirm the basis, size and knot strategy through the installed
   SuperGLM API. Do not guess what a parameter such as `k` means.
 - Ask whether any column needs a transform, and whether there is an offset.
@@ -71,8 +71,11 @@ database administrator and the package's SQL runbook. Do not run schema
 maintenance or suggest a reset to fix a notebook error; the schemas may contain
 models from other projects.
 
-Use `PricingDataset` to record provenance and hand data from ingestion to
-training. Its `df` property returns a copy. Prepare that copy explicitly.
+Use `PricingDataset` to record provenance in 01. Notebook 02 loads that artifact
+and uses all its rows for local model experiments. Keep transforms, feature types,
+groupings and special levels in its feature setup. Do not add automatic sampling,
+benchmark models or a dependency on a published RAW model. Its `df` property
+returns a copy. Prepare that copy explicitly.
 Keep `PricingModelSpec` flat and retain the short comments from the template.
 Keep feature definitions together and derive the spec's feature names from
 them. Do not repeat dataset metadata already supplied by `dataset=dataset`.
@@ -143,7 +146,9 @@ repeat training. File existence must never select a different model silently.
 Export a selected prototype with
 `ModelRecipe.from_model(prototype, spec=MODEL).save(path)`. The flat spec supplies
 target, transforms, offset, weights and validation that an estimator alone does
-not know. Export a completed fit with `candidate.recipe.save(path)` so the file
+not know. Notebook 02 defines both objects and includes an optional export to
+`prototype.toml`. Set `RECIPE_PATH = "prototype.toml"` in 03 to consume it without
+re-entering the feature setup. Export a completed fit with `candidate.recipe.save(path)` so the file
 comes from its verified immutable snapshot. Export the routine candidate when
 its applied groupings are intended; give raw and routine recipes distinct files.
 Existing files require `replace=True` and should be reviewed before replacement.

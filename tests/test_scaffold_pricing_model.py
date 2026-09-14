@@ -143,6 +143,10 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
     )
 
     for name, source in rendered.items():
+        if name == "02_model_exploration.ipynb":
+            assert "connect(" not in source
+            assert "RUNTIME_MODULE" not in source
+            continue
         notebook = json.loads(source)
         choices = next(cell for cell in notebook["cells"] if cell["cell_type"] == "code")
         namespace = {}
@@ -287,7 +291,7 @@ def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(
         assert "sys.path.insert" not in setup
 
 
-def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
+def test_scaffold_separates_training_and_exploration(tmp_path):
     package_dir = _scaffold(tmp_path)
     ingestion = _code(package_dir / "01_data_ingestion.ipynb")
     exploration_path = package_dir / "02_model_exploration.ipynb"
@@ -347,84 +351,126 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     assert "fit_model(" not in exploration
     assert "save_model_version(" not in exploration
     assert "deploy_model_version(" not in exploration
-    assert "scratch_raw_df = pd.DataFrame(" in exploration
-    assert "scratch_df = scratch_raw_df.copy()" in exploration
-    assert "SCRATCH_FEATURES = {" in exploration
-    assert 'SCRATCH_FAMILY = "poisson"' in exploration
-    assert "scratch_model = SuperGLM(" in exploration
-    assert ").fit(scratch_X, scratch_y)" in exploration
-    assert "scratch_model.predict(" in exploration
-    assert "Blank ingestion area" in exploration
-    assert "Blank feature area" in exploration
-    assert "Blank modelling area" in exploration
-    assert "unconstrained_superglm_features(" in exploration
-    assert "unconstrained_model = SuperGLM(" in exploration
-    assert ").fit_reml(" in exploration
-    assert "superglm_edf_table(unconstrained_model)" in exploration
-    assert "fit_boosted_blend(" in exploration
-    assert "reference_superglm=unconstrained_model" in exploration
-    assert "boosted_blend.metrics" in exploration
-    assert "EditorSession.from_model(" in exploration
-    assert "list_model_versions(" in exploration
-    assert 'versions["Kind"].eq("RAW")' in exploration
-    assert "load_model_version(" in exploration
-    assert "export_level_groupings(" in exploration
-    assert "Copy accepted choices into notebook 03." in exploration_text
-    assert "Copy accepted choices into notebook 02." not in exploration_text
+    assert "PricingDataset.load(DATASET_PATH)" in exploration
+    assert "df = apply_transforms(dataset.df, transforms)" in exploration
+    assert "features = {" in exploration
+    assert "MODEL = PricingModelSpec(" in exploration
+    assert "model = SuperGLM(" in exploration
+    assert "model.fit_reml(" in exploration
+    assert "model.predict(" in exploration
+    assert "scratch_" not in exploration.lower()
+    assert "sample_rows" not in exploration.lower()
+    assert "fit_boosted_blend" not in exploration
+    assert "load_registered_model(" not in exploration
+    assert "export_level_groupings(" not in exploration
+    assert "OrderedCategorical(" in exploration
+    assert "specials=" in exploration
+    assert "grouping=collapse_levels(" in exploration
+    assert 'RECIPE_PATH = "prototype.toml"' in exploration_text
 
 
-def test_scaffold_scratch_sandbox_fits_and_predicts_in_memory(tmp_path):
+@pytest.mark.parametrize("configured", [False, True], ids=["all-rows", "transforms-and-groups"])
+def test_exploration_uses_saved_data_and_hands_recipe_to_training(
+    tmp_path, monkeypatch, configured
+):
     import numpy as np
     import pandas as pd
-    from sklearn.metrics import mean_tweedie_deviance
-    from superglm import Categorical, Numeric, Spline, SuperGLM, Tweedie
+    from superglm import Categorical, OrderedCategorical, Spline, collapse_levels
 
-    from pricing_pipeline.modeling.scratch_benchmark import (
-        superglm_edf_table,
-        unconstrained_superglm_features,
-    )
+    from pricing_pipeline import notebook as api
 
-    package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "02_model_exploration.ipynb")
-    cells = [
-        "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
-    ]
-    namespace = {
-        "np": np,
-        "pd": pd,
-        "Categorical": Categorical,
-        "Numeric": Numeric,
-        "Spline": Spline,
-        "SuperGLM": SuperGLM,
-        "Tweedie": Tweedie,
-        "mean_tweedie_deviance": mean_tweedie_deviance,
-        "superglm_edf_table": superglm_edf_table,
-        "unconstrained_superglm_features": unconstrained_superglm_features,
-        "SCRATCH_SAMPLE_ROWS": 5_000,
-        "SCRATCH_RANDOM_SEED": 42,
-        "display": lambda *_args, **_kwargs: None,
-    }
-    markers = (
-        "scratch_raw_df = pd.DataFrame(",
-        "scratch_df = scratch_raw_df.copy()",
-        "SCRATCH_TARGET =",
-        "scratch_model = SuperGLM(",
-        "scratch_predictions = scratch_model.predict(",
-        "unconstrained_features = unconstrained_superglm_features(",
+    target = "burn_cost" if configured else "target"
+    package_dir = _scaffold(tmp_path, target_name=target)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'exploration-test'\n")
+    monkeypatch.chdir(package_dir)
+    n = 210 if configured else 5_107
+    rng = np.random.default_rng(24)
+    df = pd.DataFrame(
+        {
+            "row_id": np.arange(n),
+            "feature_1": rng.uniform(0, 5, n),
+            "segment": np.resize(["A", "B", "C"], n),
+            "ordered_feature": np.resize(["1", "2", "3", "4", "5", "Unknown"], n),
+            "exposure": rng.uniform(0.5, 1.5, n),
+            "model_weight": rng.uniform(0.5, 1.5, n),
+            "data_as_of": ["2026-08-15"] * n,
+        }
     )
-    for marker in markers:
-        source = next(cell for cell in cells if marker in cell)
-        exec(  # noqa: S102 - execute the generated notebook cells as their contract test
-            compile(source, f"02_model_exploration.ipynb:{marker}", "exec"),
-            namespace,
+    df[target] = rng.poisson(df.exposure * np.exp(0.3 + 0.1 * df.feature_1))
+    if configured:
+        df[target] *= rng.gamma(shape=2.0, scale=0.5, size=n)
+    dataset = api.PricingDataset(
+        df, name="source_data", source="test", key="row_id", as_of="data_as_of"
+    )
+    dataset_path = package_dir / ".local" / "dataset.joblib"
+    dataset.save(dataset_path)
+    saved_bytes = dataset_path.read_bytes()
+    namespace = {"display": lambda *_args, **_kwargs: None}
+    real_connect = api.connect
+    monkeypatch.setattr(api, "connect", lambda **_kwargs: pytest.fail("exploration opened SQL"))
+    export_source = None
+    for i, cell in enumerate(_notebook(package_dir / "02_model_exploration.ipynb")["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        source = "".join(cell["source"])
+        if configured:
+            source = source.replace('family="poisson"', "family=Tweedie(p=1.6)")
+            source = source.replace(
+                '# "clipped_feature": Clip("feature_1", lower=0, upper=100),',
+                '"clipped_feature": Clip("feature_1", lower=0, upper=100),',
+            ).replace('# "log_exposure": Log("exposure"),', '"log_exposure": Log("exposure"),')
+            source = source.replace(
+                '# offset_column="log_exposure",', 'offset_column="log_exposure",'
+            )
+            source = source.replace(
+                '# sample_weight_column="model_weight",', 'sample_weight_column="model_weight",'
+            )
+        if "ModelRecipe.from_model(" in source:
+            export_source = source
+        exec(compile(source, f"02:cell-{i}", "exec"), namespace)  # noqa: S102
+        if configured and "features = {" in source:
+            namespace["features"] = {
+                "clipped_feature": Spline("cr", k=3, knot_strategy="quantile"),
+                "segment": Categorical(
+                    base="A", grouping=collapse_levels(df.segment, groups={"BC": ["B", "C"]})
+                ),
+                "ordered_feature": OrderedCategorical(
+                    order=["1", "2", "3", "4", "5"],
+                    specials=["Unknown"],
+                    base="1",
+                    basis=Spline("cr", k=3, knot_strategy="quantile"),
+                ),
+            }
+    assert len(namespace["predictions"]) == n
+    assert np.isfinite(namespace["predictions"]).all()
+    assert dataset_path.read_bytes() == saved_bytes
+    assert not (package_dir / "prototype.toml").exists()
+    assert export_source is not None
+    exec(compile(export_source.replace("# ", ""), "02:export", "exec"), namespace)  # noqa: S102
+    recipe = api.ModelRecipe.load(package_dir / "prototype.toml")
+    assert (
+        recipe.sha256
+        == api.ModelRecipe.from_model(namespace["model"], spec=namespace["MODEL"]).sha256
+    )
+    monkeypatch.setattr(api, "connect", real_connect)
+    trained = {"display": lambda *_args, **_kwargs: None}
+    for i, cell in enumerate(_notebook(package_dir / "03_model_training.ipynb")["cells"]):
+        if cell["cell_type"] != "code":
+            continue
+        source = "".join(cell["source"]).replace(
+            "RECIPE_PATH = None", 'RECIPE_PATH = "prototype.toml"'
         )
-
-    predictions = np.asarray(namespace["scratch_predictions"])
-    assert len(predictions) == 500
-    assert np.isfinite(predictions).all()
-    unconstrained_predictions = np.asarray(namespace["unconstrained_predictions"])
-    assert len(unconstrained_predictions) == 500
-    assert np.isfinite(unconstrained_predictions).all()
+        exec(compile(source, f"03:cell-{i}", "exec"), trained)  # noqa: S102
+    assert trained["raw_candidate"].recipe.sha256 == recipe.sha256
+    assert trained["raw_published"].package_status == "LOCAL_AUDIT"
+    assert trained["df"].equals(namespace["df"])
+    if configured:
+        data = recipe.document.to_dict()
+        assert data["features"]["ordered_feature"]["specials"] == ["Unknown"]
+        assert any(group["levels"] == ["B", "C"] for group in data["features"]["segment"]["groups"])
+        assert data["offset_column"] == "log_exposure"
+        assert data["sample_weight_column"] == "model_weight"
+        assert set(data["transforms"]) == {"clipped_feature", "log_exposure"}
 
 
 @pytest.mark.parametrize("use_transform", [False, True], ids=["source-features", "clip-recipe"])
@@ -816,7 +862,7 @@ def test_scaffold_accepts_explicit_model_identity(tmp_path):
     assert 'DEPLOYMENT_SLOT = "WORK_FREQ_PROD"' in source
 
 
-def test_scaffold_renders_safe_connection_defaults_into_every_notebook(tmp_path):
+def test_scaffold_renders_safe_connection_defaults_where_sql_is_used(tmp_path):
     package_dir = _scaffold(
         tmp_path,
         database_mode="remote",
@@ -826,6 +872,10 @@ def test_scaffold_renders_safe_connection_defaults_into_every_notebook(tmp_path)
 
     for name in EXPECTED_NOTEBOOKS:
         source = _code(package_dir / name)
+        if name == "02_model_exploration.ipynb":
+            assert "RUNTIME_MODULE" not in source
+            assert "connect(" not in source
+            continue
         assert 'DATABASE_MODE = "remote"' in source
         assert 'RUNTIME_MODULE = "work_runtime.database"' in source
         assert 'EXPECTED_REMOTE_DATABASE = "PricingAudit"' in source
