@@ -532,6 +532,11 @@ def test_migration_recorder_insert_is_idempotent_when_row_appears_after_precheck
 
     con = FakeConnection()
     monkeypatch.setattr("pricing_pipeline.infra.migrations.getpass.getuser", lambda: "tester")
+    # This test isolates the tracking-row race; batch execution has separate coverage.
+    monkeypatch.setattr(
+        "pricing_pipeline.infra.migrations._execute_migration_batch",
+        lambda connection, batch: connection.execute(batch),
+    )
 
     assert apply_migrations_in_transaction(
         con,

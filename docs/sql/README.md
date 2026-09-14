@@ -527,6 +527,13 @@ The command:
 
 Do not edit an already-applied migration. Add the next `VNNN__description.sql`.
 
+The runner applies all pending migrations in one transaction. If a batch fails,
+its exception identifies the migration file and batch number. The transaction
+rolls back, including history entries for earlier migrations in that attempt.
+An absent history entry therefore does not identify which migration failed.
+The runner consumes every batch result before recording success so later
+statements and database errors are not skipped by the driver.
+
 After applying, check:
 
 ```sql
