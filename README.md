@@ -44,7 +44,7 @@ The scaffold creates six notebooks under `pricing_models/claim_frequency/`:
 | Notebook | Purpose |
 |---|---|
 | `01_data_ingestion.ipynb` | Build the governed model frame and record its Data-as-at date. |
-| `02_model_exploration.ipynb` | Explore features, benchmarks, and groupings without publishing or deploying. |
+| `02_model_exploration.ipynb` | Fit locally, define features and export a configuration for 03. |
 | `03_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
 | `04_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
 | `05_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |

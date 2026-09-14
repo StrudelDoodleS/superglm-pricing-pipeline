@@ -9,53 +9,24 @@ writes, artifacts, publication, and deployment guards.
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
-| `02_model_exploration.ipynb` | Any exploratory source; published `RAW` for grouping work | Local grouping artifact or selected prototype recipe | Build, publish, or deploy |
-| `03_model_training.ipynb` | Source dataset; optional grouping artifact | Manifest, split evidence, run, metrics, candidate, package | Deploy |
+| `02_model_exploration.ipynb` | Saved dataset from 01 | Selected model configuration as TOML | Publish or deploy |
+| `03_model_training.ipynb` | Saved dataset; selected recipe or Python configuration | Manifest, split evidence, run, metrics, candidate, package | Deploy |
 | `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
 | `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
 | `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
 
-Accepted source queries and cleaning move to notebook 01. Accepted model transforms
-and model choices move to notebook 03. Exploration cells are excluded from
-model-source identity. The generated example uses generic synthetic data until
-you replace it with your source query.
+Notebook 01 saves the prepared dataset. Notebook 02 loads all its rows, applies
+your transforms, and fits a local SuperGLM with your feature definitions,
+groupings and special levels. It does not require a database connection or a
+previously published model.
 
-## Optional scratch benchmarks
-
-Notebook 02 includes two deliberately disposable benchmarks:
-
-- `unconstrained_superglm_features(...)` keeps raw categorical levels and uses
-  unconstrained, data-driven splines with REML-estimated lambdas. It applies no
-  grouping or monotonic/shape decision. `superglm_edf_table(...)` shows the
-  effective degrees of freedom used by each smooth; ordered-categorical special
-  levels are reported separately.
-- `fit_boosted_blend(...)` fits CatBoost, LightGBM, and XGBoost out of fold,
-  learns non-negative weights summing to one from held-out unit deviance,
-  then refits the three learners on all scratch rows. With exposure, it fits an
-  offset-equivalent rate and `predict_expected(...)` returns the aggregate
-  response. The tree fit keeps credibility weight separate: its effective
-  rate-scale weight is `sample_weight * exposure ** (2 - tweedie_power)`
-  (`sample_weight * exposure` for Poisson).
-
-The notebook passes its fitted unconstrained GAM as `reference_superglm`. For a
-compound Tweedie target, the helper reads the power from that fitted model and
-fixes the exact value in CatBoost, LightGBM, XGBoost, and the OOF blend deviance.
-Per-tree objective or variance-power overrides are rejected, so a hyperparameter
-search cannot silently change the distribution contract. Code without a fitted
-reference may instead pass one explicit `tweedie_power`.
-
-Set the GAM once in the modelling cell, for example
-`SCRATCH_FAMILY = Tweedie(p=1.6)`. The blend cell needs no second power setting.
-
-Install the optional tree libraries once, then restart the notebook kernel:
-
-```bash
-uv sync --extra scratch
-```
-
-These helpers return only in-memory Python objects. They have no SQL,
-publication, or deployment path; an accepted feature decision must still move
-into notebook 03 and the governed candidate workflow.
+When ready, export `prototype.toml` from 02 and set
+`RECIPE_PATH = "prototype.toml"` in 03. The recipe carries the model choices;
+03 reloads the dataset and performs fitting and validation before saving a
+version. Its Python configuration remains available with `RECIPE_PATH = None`.
+Source queries and accepted enrichment steps belong in 01 so both notebooks
+use the same saved data. Exploration source cells are excluded from model-source
+identity; the exported recipe is captured when 03 fits the model.
 
 ## Underwriter HTML review
 
@@ -447,12 +418,11 @@ Optional offsets use a recipe such as `"log_exposure": Log("exposure")` and
 recipe. Sample weight and rating-table export weight remain independent.
 The generated model enables none of these optional roles by default.
 
-Notebook 03 sets `retain_fit_state=False` on both `SuperGLM` constructors.
+Notebooks 02 and 03 set `retain_fit_state=False` on their `SuperGLM` constructors.
 The freMTPL demo uses the same setting. Prediction, summaries and term standard
 errors remain available; the fitted model releases its training caches.
 The candidate bundle still carries the data supplied explicitly to the editor.
-Scratch models in notebook 02 retain SuperGLM's default `True`. Set `True` in
-the training constructor if you need `design_summary()` or post-fit shape repair.
+Set `True` in the constructor if you need `design_summary()` or post-fit shape repair.
 When calling reporting or diagnostic functions directly, pass the fitted
 weights and offset explicitly rather than relying on retained arrays.
 
@@ -753,13 +723,17 @@ runtime hash metadata. Changing data or data-as-at creates a new manifest.
 Changing validation configuration or exact split indices creates a new split
 set under the same manifest.
 
-## Raw and routine grouping flow
+## Existing routine grouping artifacts
+
+New models can define groupings directly in 02 and carry them to 03 in the
+recipe. Earlier projects may instead use the separate artifact workflow below.
+Notebook 03 still supports those artifacts when `RECIPE_PATH = None`.
 
 Until SuperGLM provides a public grouping export API, the workbench owns one
 isolated compatibility bridge to its private grouping object:
 
 1. Publish the untouched `RAW` candidate in notebook 03.
-2. Open that published RAW candidate in notebook 02.
+2. Open that published RAW candidate with `load_model_version(...)`.
 3. Use `EditorSession` to collapse any levels across any categorical features.
 4. Call `export_level_groupings(candidate, editor_session=..., path=...)`.
 5. Notebook 03 calls `load_level_groupings(...)` and
@@ -771,7 +745,7 @@ hand-edited grouping config. Loading checks SuperGLM/Python versions, model,
 source package, manifest, frame hash, data-as-at, feature names, levels, and the
 group partition. Missing or no-op groupings skip the routine-edit build.
 Grouping artifacts are deliberately tied to the exact SuperGLM version; after
-an upgrade, reopen the RAW candidate in notebook 02 and export them again.
+an upgrade, reopen the RAW candidate and export them again.
 
 Grouping is Python model behaviour. SQL receives completed relativities and
 evidence; it does not execute grouping rules.
