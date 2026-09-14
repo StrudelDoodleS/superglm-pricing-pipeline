@@ -64,6 +64,22 @@ def migration_checksum(sql_text: str) -> str:
     return hashlib.sha256(sql_text.encode("utf-8")).hexdigest()
 
 
+def _execute_migration_batch(con, batch: str) -> None:
+    """Finish every DBAPI result before advancing or recording a migration.
+
+    SQL Server can defer later statements and errors until nextset(). Use the
+    existing transaction's cursor; SQLAlchemy may close a non-row result before
+    its remaining result sets have been consumed.
+    """
+    cursor = con.connection.cursor()
+    try:
+        cursor.execute(batch)
+        while cursor.nextset():
+            pass
+    finally:
+        cursor.close()
+
+
 def _ensure_schema_migration_table(con) -> None:
     con.execute(
         text(
@@ -223,8 +239,13 @@ def apply_migrations_in_transaction(
                 )
             continue
 
-        for batch in split_sql_server_batches(sql_text):
-            con.execute(text(batch))
+        batches = split_sql_server_batches(sql_text)
+        for index, batch in enumerate(batches, start=1):
+            try:
+                _execute_migration_batch(con, batch)
+            except Exception as exc:
+                exc.add_note(f"Migration {path.name}, batch {index} of {len(batches)} failed.")
+                raise
         con.execute(
             text(
                 """

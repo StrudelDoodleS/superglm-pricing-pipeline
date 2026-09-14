@@ -313,6 +313,10 @@ def test_execute_uses_single_transaction_for_drop_and_migrations(
 
     engine = FakeEngine()
     monkeypatch.setattr("pricing_pipeline.infra.migrations.getpass.getuser", lambda: "tester")
+    monkeypatch.setattr(
+        "pricing_pipeline.infra.migrations._execute_migration_batch",
+        lambda connection, batch: connection.execute(batch),
+    )
 
     result = reset_and_reseed_schema(
         engine,
