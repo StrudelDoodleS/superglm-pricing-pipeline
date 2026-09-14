@@ -316,6 +316,10 @@ auto-discovered file is absent; run `pricing-pipeline init`, edit the generated
 file, then run `pricing-pipeline scaffold`. Unknown sections or keys fail fast.
 `ALLOW_REMOTE_WRITES` cannot be set in TOML.
 
+Each model directory includes `sql/README.md` with an example of loading a
+source query from `sql/` in the ingestion notebook. Rerunning the scaffold adds
+the folder to existing models and preserves your query files.
+
 `source_selector = "deployed"` makes notebook 05 open the package currently
 deployed in the model's configured slot. An exact `PACKAGE_VERSION` in the
 notebook overrides it. `carry_forward` is recorded in the canonical policy;
@@ -370,9 +374,11 @@ dataset.save(DATASET_PATH, replace=REPLACE_DATASET)
 ```
 
 `DATASET_PATH` points to `.local/dataset.joblib` under the model directory.
-Set `DATA_AS_OF` to the date through which the source is complete. The saved
-artifact carries the dataset name, source, key columns, and date binding, so
-training does not repeat them.
+Set `as_of` to the name of the source column containing the dataset's snapshot
+date. That column must contain one date with no nulls; no separate date setting
+is needed. If the source has no snapshot column, add one using its known reporting
+cutoff before creating `PricingDataset`. The saved artifact carries the dataset
+name, source, key columns, and date binding, so training does not repeat them.
 
 Notebook 03 loads the dataset and declares transforms once. The generated
 mapping starts empty; examples are opt-in:

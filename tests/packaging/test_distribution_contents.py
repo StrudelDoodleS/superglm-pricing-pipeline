@@ -238,6 +238,7 @@ def _expected_resource_names() -> set[str]:
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
         f"{SCAFFOLD_PREFIX}pricing-builder.agent.md",
         f"{SCAFFOLD_PREFIX}pricing-developer.agent.md",
+        f"{SCAFFOLD_PREFIX}sql/README.md",
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},

@@ -220,11 +220,15 @@ def test_installed_scaffold_reuses_the_exact_six_notebook_workflow(tmp_path: Pat
     )
 
     package = root / "pricing_models" / "claim_frequency"
-    expected = (package / "__init__.py", *(package / name for name in EXPECTED_NOTEBOOKS))
-    assert tuple(sorted(path.name for path in package.iterdir())) == tuple(
-        sorted(path.name for path in expected)
+    expected = (
+        package / "__init__.py",
+        *(package / name for name in EXPECTED_NOTEBOOKS),
+        package / "sql" / "README.md",
     )
-    for notebook in expected[1:]:
+    assert tuple(sorted(path.name for path in package.iterdir())) == tuple(
+        sorted(["__init__.py", *EXPECTED_NOTEBOOKS, "sql"])
+    )
+    for notebook in package.glob("*.ipynb"):
         _assert_notebook_is_clean_and_compiles(notebook)
     assert capsys.readouterr().out.splitlines() == [str(path.resolve()) for path in expected]
 
