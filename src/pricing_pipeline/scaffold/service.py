@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from pricing_pipeline.resources import scaffold_root
 from pricing_pipeline.scaffold import config
 from pricing_pipeline.scaffold.config import ResolvedScaffoldOptions, ScaffoldOptions
 from pricing_pipeline.scaffold.render import render_notebooks
@@ -82,13 +83,15 @@ def _reject_invalid_output_types(content: Mapping[Path, str]) -> None:
             )
 
 
-def _reject_managed_ancestor_symlinks(pricing_models_dir: Path, package_dir: Path) -> None:
-    for path in (pricing_models_dir, package_dir):
+def _validate_managed_directories(*paths: Path) -> None:
+    for path in paths:
         if path.is_symlink():
             raise ValueError(
                 f"cannot write scaffold output: managed path {path.name} is a symbolic link. "
                 "Replace the link with a directory, then rerun the scaffold."
             )
+        if path.exists() and not path.is_dir():
+            raise ValueError(f"cannot write scaffold output: managed path {path} must be a directory")
 
 
 def _write_scaffold_output(path: Path, source: str) -> None:
@@ -120,11 +123,15 @@ def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> Scaffol
 
     pricing_models_dir = options.root / "pricing_models"
     package_dir = pricing_models_dir / options.package_name
-    _reject_managed_ancestor_symlinks(pricing_models_dir, package_dir)
+    sql_dir = package_dir / "sql"
+    _validate_managed_directories(pricing_models_dir, package_dir, sql_dir)
     notebooks = render_notebooks(options)
     content = {
         package_dir / "__init__.py": f'"""Pricing notebook package for {options.model_name}."""\n',
         **{package_dir / filename: source for filename, source in notebooks.items()},
+        sql_dir / "README.md": scaffold_root().joinpath("sql", "README.md").read_text(
+            encoding="utf-8"
+        ),
     }
     _reject_output_symlinks(content)
     _reject_invalid_output_types(content)

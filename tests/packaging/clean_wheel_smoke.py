@@ -80,6 +80,9 @@ scaffold_result = subprocess.run(
 )
 assert scaffold_result.returncode == 0, scaffold_result.stderr
 package = consumer / "pricing_models" / "clean_wheel_model"
+assert (package / "sql" / "README.md").read_bytes() == (
+    scaffold_root().joinpath("sql", "README.md").read_bytes()
+)
 assert tuple(sorted(path.name for path in package.glob("*.ipynb"))) == (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",

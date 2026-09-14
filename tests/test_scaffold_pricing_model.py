@@ -224,13 +224,50 @@ def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
     expected = (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "sql" / "README.md",
     )
     assert result.created_files == expected
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
     assert not (package_dir / "model.toml").exists()
     assert not (tmp_path / "dags" / "pricing_my_model.py").exists()
-    for notebook_path in expected[1:]:
+    for notebook_path in package_dir.glob("*.ipynb"):
         _notebook(notebook_path)
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_scaffold_adds_sql_folder_to_existing_model_and_preserves_queries(tmp_path, force):
+    package_dir = tmp_path / "pricing_models" / "my_model"
+    sql_dir = package_dir / "sql"
+    sql_dir.mkdir(parents=True)
+    query = sql_dir / "training_data.sql"
+    query.write_text("SELECT * FROM source_data;\n", encoding="utf-8")
+
+    _scaffold(tmp_path, force=force)
+
+    assert (sql_dir / "README.md").is_file()
+    assert query.read_text(encoding="utf-8") == "SELECT * FROM source_data;\n"
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_scaffold_rejects_invalid_sql_directory_before_writing(tmp_path, kind):
+    package_dir = tmp_path / "pricing_models" / "my_model"
+    package_dir.mkdir(parents=True)
+    sql_dir = package_dir / "sql"
+    if kind == "file":
+        sql_dir.write_text("keep this", encoding="utf-8")
+    else:
+        external = tmp_path / "external"
+        external.mkdir()
+        sql_dir.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="sql"):
+        _scaffold(tmp_path)
+
+    assert not (package_dir / "__init__.py").exists()
+    if kind == "file":
+        assert sql_dir.read_text(encoding="utf-8") == "keep this"
+    else:
+        assert list(external.iterdir()) == []
 
 
 def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(tmp_path):
@@ -265,9 +302,7 @@ def test_scaffold_separates_all_governed_steps_and_scratch(tmp_path):
     deployment = _code(package_dir / "06_model_deployment.ipynb")
 
     assert "dataset.save(" in ingestion
-    assert 'DATA_AS_OF = ""' in ingestion
-    assert '"data_as_of": [DATA_AS_OF]' in ingestion
-    assert "if not DATA_AS_OF.strip()" in ingestion
+    assert "DATA_AS_OF" not in ingestion
     assert "fit_model(" not in ingestion
     assert "PricingDataset.load(" in training
     assert 'as_of="data_as_of"' in ingestion
@@ -424,8 +459,6 @@ def test_scaffold_ingestion_and_training_publish_with_dataset_provenance(
                 exec(  # noqa: S102 - analysts rerun this cell when editing model choices
                     compile(source, f"{name}:cell-{index}:rerun", "exec"), namespace
                 )
-            if "DATA_AS_OF" in namespace and not namespace["DATA_AS_OF"]:
-                namespace["DATA_AS_OF"] = "2026-09-01"
         namespaces.append(namespace)
 
     ingested, trained = namespaces
@@ -585,6 +618,7 @@ def test_scaffold_force_overwrites_all_workflow_files(tmp_path):
     assert result.created_files == (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "sql" / "README.md",
     )
     assert training_path.read_text(encoding="utf-8") != "stale"
 
