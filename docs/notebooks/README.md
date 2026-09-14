@@ -291,7 +291,7 @@ At the scaffold root, run `pricing-pipeline init` (or
 ```toml
 [notebook_defaults]
 database_mode = "remote"
-runtime_module = "work_runtime.database"
+runtime_module = "project_runtime.database"
 expected_remote_database = "PricingAudit"
 
 [manual_edit_defaults]
@@ -327,7 +327,7 @@ Generated notebooks expose four obvious settings:
 
 ```python
 DATABASE_MODE = "local"  # or "remote"
-RUNTIME_MODULE = None  # e.g. "work_runtime.database"
+RUNTIME_MODULE = None  # e.g. "project_runtime.database"
 EXPECTED_REMOTE_DATABASE = ""
 ALLOW_REMOTE_WRITES = False
 ```
@@ -468,7 +468,8 @@ Ordered categoricals remain level lookups. Smooth interactions and LSS models
 are outside this publication change.
 
 `pricing.PREDICT_RATE_PACKAGE` evaluates spline segments at the supplied
-feature values. Apply the current migrations before publishing to SQL Server.
+feature values. The database administrator must apply the current migrations
+before publication to SQL Server.
 `pricing.V_FINAL_MODEL_RELATIVITY` offers one Power BI view for all effects,
 including spline coefficients, input transforms and model/data dates.
 Its `representation` column distinguishes lookup values, numeric coefficients,
@@ -862,7 +863,8 @@ through the existing API with `UNSUPPORTED` recipe status and a reason; they
 cannot be exported or claim a recipe revision. Historical artifacts remain
 `LEGACY`. No new interaction or LSS export support is added.
 
-Apply SQL migrations V047 and V048 before saving with this version. Local SQLite
+The database administrator must apply SQL migrations V047 and V048 before
+models are saved with this version. Local SQLite
 stores upgrade on opening. The [comparison notebook](../../tutorials/model_recipes/comparison.ipynb)
 exercises grouped/special-level parity and a saved challenger. `init` continues to
 preserve existing customized builder agents; update those files intentionally

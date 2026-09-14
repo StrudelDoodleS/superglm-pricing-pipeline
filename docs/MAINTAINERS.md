@@ -41,6 +41,9 @@ workspace scaffold -> scheduled execution
   filesystem service writes it. Do not mix those responsibilities.
 - SQL migrations are immutable after release. Add a migration; never edit a
   deployed one.
+- Keep schema apply and reset in the administrator scripts. Shared SQL schemas
+  can contain several projects; do not add these operations to the analyst CLI
+  or run them automatically from notebooks.
 - Scheduled work calls existing operations. It does not reimplement fitting,
   lineage, publication, or persistence.
 - Reporting and scratch helpers do not control governed model lifecycle state.

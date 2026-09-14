@@ -28,5 +28,5 @@ else
 fi
 
 echo
-echo "Edit .env for local runtime paths and create src/work_runtime/database.py, then start MLflow with:"
+echo "Edit .env for local runtime paths and create src/project_runtime/database.py, then start MLflow with:"
 echo "  uv run python scripts/start_mlflow_local.py"

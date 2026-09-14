@@ -4,7 +4,7 @@
 
 [notebook_defaults]
 database_mode = "remote"
-runtime_module = "work_runtime.database"
+runtime_module = "project_runtime.database"
 expected_remote_database = "PricingAudit"
 
 [manual_edit_defaults]
