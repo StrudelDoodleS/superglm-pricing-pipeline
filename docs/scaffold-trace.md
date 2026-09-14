@@ -6,11 +6,11 @@ the notebook's cells contain the values the analyst will execute.
 
 ## Follow one value
 
-For `--runtime-module work_runtime.database`, follow this path:
+For `--runtime-module project_runtime.database`, follow this path:
 
 ```mermaid
 flowchart TD
-    A["CLI: --runtime-module work_runtime.database"] --> B["Namespace.runtime_module"]
+    A["CLI: --runtime-module project_runtime.database"] --> B["Namespace.runtime_module"]
     T["TOML: notebook_defaults.runtime_module"] --> C["commands._raw_scaffold_options"]
     B --> C
     C --> D["ScaffoldOptions.runtime_module"]
@@ -19,7 +19,7 @@ flowchart TD
     F --> G["service.scaffold_resolved_pricing_model"]
     G --> H["render_notebooks: __RUNTIME_MODULE_LITERAL__"]
     H --> I["Template: RUNTIME_MODULE = token"]
-    I --> J["Generated cell: RUNTIME_MODULE = 'work_runtime.database'"]
+    I --> J["Generated cell: RUNTIME_MODULE = 'project_runtime.database'"]
     J --> K["When executed: connect(runtime_module=RUNTIME_MODULE)"]
     K --> L["runtime_from_module: import module and call get_engine"]
 ```

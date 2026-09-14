@@ -954,7 +954,7 @@ carry_forward = false
 def test_scaffold_config_is_strict_and_example_is_valid(tmp_path):
     example = load_scaffold_config("pricing_scaffold.example.toml")
     assert example.database_mode == "remote"
-    assert example.runtime_module == "work_runtime.database"
+    assert example.runtime_module == "project_runtime.database"
     assert example.expected_remote_database == "PricingAudit"
     assert example.manual_edit_source_selector == "deployed"
     assert example.manual_edit_carry_forward is True

@@ -1,6 +1,11 @@
 # Script command index
 
-Script paths stay flat because notebooks, shell launchers, tests, and work
+Run these scripts from the package source repository. Installing
+`superglm-pricing-pipeline` in a model project does not create a `scripts/`
+directory there. The installed `pricing-pipeline` CLI provides
+`init` and `scaffold`.
+
+Script paths stay flat because notebooks, shell launchers, tests, and
 runbooks call them directly. This index groups them by job without breaking
 those stable entry points.
 
@@ -16,6 +21,10 @@ The scaffold workflow is `pricing-pipeline init` (or
 is only an equivalent source-checkout wrapper for that final command.
 
 ## SQL schema and inspection
+
+Schema apply and reset are administrator operations. They are deliberately
+excluded from the analyst CLI because the configured schemas may be shared
+by multiple projects. Follow the [SQL runbook](../docs/sql/README.md).
 
 | Script | Purpose |
 |---|---|
@@ -93,7 +102,7 @@ uv run python scripts/build_underwriter_report_demo.py
 It uses every fetched public row by default, retaining a 75/25 train/holdout
 split, and writes `state/report_smoke/model_review.html`. Pass `--rows` only for
 a quicker smoke run. This preview is illustrative; the governed report runner
-above remains the entry point for local work data.
+above remains the entry point for local datasets.
 
 For fitted SuperGLM objects, top-feature ranking is the model's weighted
 variance of each main-effect contribution on the link scale. This answers

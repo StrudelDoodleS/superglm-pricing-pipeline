@@ -4,7 +4,7 @@ The authoritative SQL Server schema is the ordered packaged migration chain in
 `pricing_pipeline.resources.migrations`. Apply every file in order through the
 latest version; do not run a single late migration against an unknown baseline.
 
-Configured schema names may differ at work. This guide uses the defaults:
+Schema names are configurable. This guide uses the defaults:
 `pricing`, `pricing_stg`, and `mlops`.
 
 ## Read the schema without knowing the internal names
@@ -497,13 +497,22 @@ available. The final score can still be finite when individual effects cancel.
 The [schema review](schema_review_2026-09-11.md) records fixes, remaining edge
 cases, and the limits of local verification.
 
-## Apply migrations at work
+## Apply migrations
+
+Schema maintenance belongs to the database administrator. Apply and reset are
+deliberately excluded from the analyst CLI. Run the commands in this runbook
+from the package repository root.
+
+Multiple projects can share the configured SQL schemas. A reset affects every
+project using those schemas, regardless of which directory the command runs
+from. Keeping these commands outside the analyst workflow reduces accidental
+use; SQL permissions still determine who can change database objects.
 
 Use this for a database with data you want to retain:
 
 ```bash
 uv run python scripts/apply_schema.py \
-  --runtime-module work_runtime.database \
+  --runtime-module project_runtime.database \
   --expected-database PricingAudit
 ```
 
@@ -533,11 +542,13 @@ WHERE redundancy_status <> 'OK';
 ## Reset only a disposable schema
 
 First run the reset command without `--execute`; it validates the target and
-prints the drop plan without changing anything:
+prints the database, configured schemas, and number of drop batches without
+changing anything. It does not execute the DDL, test DDL permissions, or list
+the individual objects that would be dropped:
 
 ```bash
 uv run python scripts/reset_remote_pricing_schema.py \
-  --runtime-module work_runtime.database \
+  --runtime-module project_runtime.database \
   --expected-database PricingAudit
 ```
 
@@ -545,7 +556,7 @@ Only if that database/schema is disposable:
 
 ```bash
 uv run python scripts/reset_remote_pricing_schema.py \
-  --runtime-module work_runtime.database \
+  --runtime-module project_runtime.database \
   --expected-database PricingAudit \
   --execute \
   --i-understand-this-drops-pricing-objects
@@ -641,7 +652,7 @@ runtime module. They never create or reset a database and leave committed test
 history for inspection. Run with:
 
 ```bash
-PRICING_RECIPE_TEST_RUNTIME=work_runtime.recipe_test_database \
+PRICING_RECIPE_TEST_RUNTIME=project_runtime.recipe_test_database \
 PRICING_RECIPE_TEST_DATABASE=PricingRecipeTest \
   uv run python -m pytest tests/recipes/test_sqlserver_integration.py -ra
 ```

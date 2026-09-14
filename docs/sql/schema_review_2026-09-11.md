@@ -2,7 +2,7 @@
 
 This review covers the packaged migration chain through V042, SQL Server
 publication and deployment code, and the local SQLite implementation. It does
-not inventory a live work database or external SQL and BI consumers.
+not inventory a live SQL Server database or external SQL and BI consumers.
 
 ## Changes made
 
@@ -126,5 +126,5 @@ versions after removing comments and whitespace.
 
 These checks do not prove SQL Server trigger execution, locking, permissions,
 or migration rollback on a live server. Apply and exercise V039 through V042 in a
-disposable SQL Server database before a work-database rollout. Existing evidence
+disposable SQL Server database before deployment. Existing evidence
 is not retrospectively certified by the new guards.

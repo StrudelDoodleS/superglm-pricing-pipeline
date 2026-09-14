@@ -16,7 +16,7 @@ uv run pricing-pipeline scaffold \
 uv add --dev ipykernel
 ```
 
-Use the real internal Git host, team, and repository in the dependency URL.
+Use your Git host, team, and repository in the dependency URL.
 The plain-Python fallback, which only works after installation, is:
 
 ```bash
@@ -30,21 +30,16 @@ python -m pricing_pipeline scaffold \
 `init` and a local scaffold do not require uv. The model repository owns `ipykernel`;
 a private runtime package owns SQL driver and authentication dependencies.
 
+The installed command is `pricing-pipeline`, with a hyphen. It exposes
+`init` and `scaffold`. Commands below that use `python scripts/...` require
+a checkout of this package repository; installing the dependency does not add
+those scripts to your model project.
+
 `runtime_module` is the installed private Python module that exposes
 `get_engine(database=None)`. The TOML contains no credentials: keep them in
 that module's secret provider.
 
-The scaffold creates:
-
-```text
-pricing_models/claim_frequency/
-├── 01_data_ingestion.ipynb
-├── 02_model_exploration.ipynb
-├── 03_model_training.ipynb
-├── 04_model_editor.ipynb
-├── 05_manual_adjustment.ipynb
-└── 06_model_deployment.ipynb
-```
+The scaffold creates six notebooks under `pricing_models/claim_frequency/`:
 
 | Notebook | Purpose |
 |---|---|
@@ -86,8 +81,8 @@ The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same
 - [Script command index](scripts/README.md)
 - [Developer guide: package flows, module owners and argument-to-notebook mapping](docs/MAINTAINERS.md)
 
-For an underwriter comparison of already-scored models, use
-`scripts/build_underwriter_report.py` with
+To compare already-scored models, run `scripts/build_underwriter_report.py`
+from a package source checkout with
 `docs/notebooks/underwriter_report.example.toml`. It creates one offline HTML
 file and does not write models or diagnostics to SQL.
 
@@ -95,20 +90,24 @@ The packaged `pricing_pipeline.resources.migrations` chain is the authoritative
 SQL Server schema; inspect it with `pricing_pipeline.resources.migration_root()`
 and do not copy runnable DDL.
 
-## Work database setup
+## Database administration
 
-Apply only missing migrations to an existing database:
+Schema migrations and resets are administrator operations run from the package
+repository. They are deliberately excluded from the analyst CLI because the
+database schemas can contain models from multiple projects.
+
+To apply only missing migrations and retain existing data, run:
 
 ```bash
 uv run python scripts/apply_schema.py \
-  --runtime-module work_runtime.database \
+  --runtime-module project_runtime.database \
   --expected-database PricingAudit
 ```
 
 The destructive reset command and safeguards are in the [SQL
 runbook](docs/sql/README.md).
 
-## Verify
+## Verify the package from a source checkout
 
 ```bash
 uv sync --locked --all-extras
@@ -118,7 +117,8 @@ uv build --force-pep517 --sdist --wheel --out-dir dist
 
 Only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works
 outside this checkout. Do not commit model-local `.local/` state, notebook
-outputs, credentials, or private work runtime modules.
+outputs, credentials, or runtime modules containing credentials.
 
 Export with `candidate.recipe.save(path)`; reload with `ModelRecipe.load(path).build(dataset=dataset)`.
-SQL assigns recipe revisions on save. Deployment is separate; apply V047 and V048 first.
+SQL assigns recipe revisions on save. Deployment is separate. The database
+administrator must apply V047 and V048 before models are saved with this version.

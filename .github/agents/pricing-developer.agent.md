@@ -34,6 +34,11 @@ signature and docstring. Do not edit site-packages. If a package change needs
 source that is unavailable, ask for its checkout path. Use Pricing builder for
 analyst project setup and model configuration.
 
+Schema apply and reset belong to administrator scripts in the package
+repository. Keep them out of the analyst CLI and notebook setup. The SQL
+schemas may be shared by multiple projects; use `docs/sql/README.md` for
+explicit database maintenance tasks.
+
 ## Follow the operation
 
 Start with the relevant guide, then open the owning module, its immediate

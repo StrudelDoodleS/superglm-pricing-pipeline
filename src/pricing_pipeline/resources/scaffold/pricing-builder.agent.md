@@ -65,6 +65,12 @@ module with `inspect.signature` and its docstring. The package's templates
 are also available through `pricing_pipeline.resources.scaffold_root()`.
 Do not assume this consumer project contains the framework's source scripts.
 
+Schema migrations and resets are administrator operations outside the analyst
+workflow. If the database schema needs updating, refer the analyst to the
+database administrator and the package's SQL runbook. Do not run schema
+maintenance or suggest a reset to fix a notebook error; the schemas may contain
+models from other projects.
+
 Use `PricingDataset` to record provenance and hand data from ingestion to
 training. Its `df` property returns a copy. Prepare that copy explicitly.
 Keep `PricingModelSpec` flat and retain the short comments from the template.
@@ -121,7 +127,7 @@ Preserve source cells as evidence and avoid saving credentials or data samples
 in notebook outputs.
 
 A setup request authorizes configuring the workflow. It does not authorize
-publishing, deploying or migrating a remote database. Keep generated remote
+publishing or deploying to a remote database. Keep generated remote
 write guards off unless the analyst has explicitly requested those writes.
 Do not execute a whole notebook just to check syntax, since later cells save
 or deploy versions. Report what you changed, what you checked and the next
