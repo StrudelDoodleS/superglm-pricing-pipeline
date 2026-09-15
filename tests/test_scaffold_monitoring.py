@@ -131,12 +131,12 @@ def test_monitoring_upgrade_preserves_every_existing_file_and_analyst_edits(tmp_
     )
 
     assert set(result.created_files) == {
-        package / "07_model_monitoring.ipynb",
+        package / "07_optional_test_weekly_run.ipynb",
         package / "monitoring.py",
     }
     for path, original in before.items():
         assert path.read_bytes() == original
-    for name in ("monitoring.py", "07_model_monitoring.ipynb"):
+    for name in ("monitoring.py", "07_optional_test_weekly_run.ipynb"):
         path = package / name
         path.write_bytes(path.read_bytes() + b"\n# analyst edit\n")
         before[path] = path.read_bytes()
@@ -148,6 +148,26 @@ def test_monitoring_upgrade_preserves_every_existing_file_and_analyst_edits(tmp_
     assert repeated.created_files == ()
     assert all(path.read_bytes() == original for path, original in before.items())
     assert not (package / ".local").exists()
+
+
+@pytest.mark.parametrize(
+    "old_name,new_name",
+    [
+        ("04_model_editor.ipynb", "04_optional_model_editor.ipynb"),
+        ("05_manual_adjustment.ipynb", "05_optional_manual_adjustment.ipynb"),
+        ("07_model_monitoring.ipynb", "07_optional_test_weekly_run.ipynb"),
+    ],
+)
+def test_optional_notebook_names_preserve_existing_analyst_files(tmp_path, old_name, new_name):
+    package = _scaffold(tmp_path)
+    canonical = package / new_name
+    assert canonical.is_file()
+    original = canonical.read_bytes() + b"\nanalyst's existing work\n"
+    canonical.rename(package / old_name)
+    (package / old_name).write_bytes(original)
+    _scaffold(tmp_path)
+    assert (package / old_name).read_bytes() == original
+    assert not canonical.exists()
 
 
 def test_unconfigured_monitoring_rejects_old_ingestion_data_and_disposes_engine(
@@ -217,7 +237,7 @@ def test_monitoring_notebook_reloads_the_shared_module_and_displays_each_report(
 ):
     package = _scaffold(tmp_path)
     (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\n', encoding="utf-8")
-    notebook_path = package / "07_model_monitoring.ipynb"
+    notebook_path = package / "07_optional_test_weekly_run.ipynb"
     assert notebook_path.is_file(), "scaffolding must generate the monitoring notebook"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     code_cells = [
@@ -250,14 +270,14 @@ def test_monitoring_notebook_reloads_the_shared_module_and_displays_each_report(
     try:
         for cell in code_cells:
             exec(  # noqa: S102 - execute the generated notebook against a controlled report
-                compile(cell, "07_model_monitoring.ipynb", "exec"), namespace
+                compile(cell, "07_optional_test_weekly_run.ipynb", "exec"), namespace
             )
         assert namespace["report"].manifest_id == "first"
         script.write_text(report_module + 'MANIFEST = "second updated run"\n', encoding="utf-8")
         displayed.clear()
         for cell in code_cells:
             exec(  # noqa: S102 - verify that rerunning the notebook reloads module edits
-                compile(cell, "07_model_monitoring.ipynb", "exec"), namespace
+                compile(cell, "07_optional_test_weekly_run.ipynb", "exec"), namespace
             )
         assert namespace["report"].manifest_id == "second updated run"
     finally:

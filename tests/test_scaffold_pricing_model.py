@@ -24,10 +24,10 @@ EXPECTED_NOTEBOOKS = (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
-    "07_model_monitoring.ipynb",
+    "07_optional_test_weekly_run.ipynb",
 )
 
 
@@ -144,7 +144,7 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
     )
 
     for name, source in rendered.items():
-        if name in {"02_model_exploration.ipynb", "07_model_monitoring.ipynb"}:
+        if name in {"02_model_exploration.ipynb", "07_optional_test_weekly_run.ipynb"}:
             assert "connect(" not in source
             assert "RUNTIME_MODULE" not in source
             continue
@@ -158,7 +158,7 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
         assert namespace["RUNTIME_MODULE"] == settings["runtime_module"]
         assert namespace["EXPECTED_REMOTE_DATABASE"] == settings["expected_remote_database"]
         assert namespace["ALLOW_REMOTE_WRITES"] is False
-        if name == "05_manual_adjustment.ipynb":
+        if name == "05_optional_manual_adjustment.ipynb":
             assert namespace["SOURCE_SELECTOR"] == settings["manual_edit_source_selector"]
             assert namespace["CARRY_FORWARD"] is settings["manual_edit_carry_forward"]
 
@@ -290,7 +290,7 @@ def test_scaffold_notebooks_discover_project_metadata(tmp_path):
         assert '(candidate / "pyproject.toml").is_file()' in setup
         assert '(candidate / "pricing_models").is_dir()' in setup
         assert 'candidate / "pricing_pipeline"' not in setup
-        if name != "07_model_monitoring.ipynb":
+        if name != "07_optional_test_weekly_run.ipynb":
             assert "sys.path.insert" not in setup
 
 
@@ -304,8 +304,8 @@ def test_scaffold_separates_training_and_exploration(tmp_path):
         "".join(cell.get("source", [])) for cell in exploration_notebook["cells"]
     )
     training = _code(package_dir / "03_model_training.ipynb")
-    editor = _code(package_dir / "04_model_editor.ipynb")
-    manual = _code(package_dir / "05_manual_adjustment.ipynb")
+    editor = _code(package_dir / "04_optional_model_editor.ipynb")
+    manual = _code(package_dir / "05_optional_manual_adjustment.ipynb")
     deployment = _code(package_dir / "06_model_deployment.ipynb")
 
     assert "dataset.save(" in ingestion
@@ -566,7 +566,7 @@ def test_scaffold_ingestion_and_training_publish_with_dataset_provenance(
 
 def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "04_model_editor.ipynb")
+    notebook = _notebook(package_dir / "04_optional_model_editor.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -583,7 +583,7 @@ def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
 
 def test_scaffold_keeps_manual_preview_publish_and_deploy_separate(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "05_manual_adjustment.ipynb")
+    notebook = _notebook(package_dir / "05_optional_manual_adjustment.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -688,7 +688,7 @@ def test_scaffold_migrates_legacy_deployment_before_creating_manual_step(tmp_pat
 
     assert not legacy_path.exists()
     assert (package_dir / "06_model_deployment.ipynb").read_text(encoding="utf-8") == legacy_content
-    _notebook(package_dir / "05_manual_adjustment.ipynb")
+    _notebook(package_dir / "05_optional_manual_adjustment.ipynb")
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
 
 
@@ -906,7 +906,7 @@ def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp
 
     assert legacy_path.read_text(encoding="utf-8") == legacy_content
     assert deployment_path.read_text(encoding="utf-8") == deployment_content
-    assert not (package_dir / "05_manual_adjustment.ipynb").exists()
+    assert not (package_dir / "05_optional_manual_adjustment.ipynb").exists()
 
 
 def test_scaffold_accepts_explicit_model_identity(tmp_path):
@@ -938,7 +938,7 @@ def test_scaffold_renders_safe_connection_defaults_where_sql_is_used(tmp_path):
 
     for name in EXPECTED_NOTEBOOKS:
         source = _code(package_dir / name)
-        if name in {"02_model_exploration.ipynb", "07_model_monitoring.ipynb"}:
+        if name in {"02_model_exploration.ipynb", "07_optional_test_weekly_run.ipynb"}:
             assert "RUNTIME_MODULE" not in source
             assert "connect(" not in source
             continue
@@ -955,7 +955,7 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
         manual_edit_carry_forward=False,
     )
 
-    source = _code(package_dir / "05_manual_adjustment.ipynb")
+    source = _code(package_dir / "05_optional_manual_adjustment.ipynb")
     assert 'SOURCE_SELECTOR = "latest"' in source
     assert "CARRY_FORWARD = False" in source
 

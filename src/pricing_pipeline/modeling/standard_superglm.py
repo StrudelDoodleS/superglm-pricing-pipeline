@@ -535,6 +535,9 @@ _NON_MODEL_SOURCE_NOTEBOOKS = frozenset(
         "05_manual_adjustment.ipynb",
         "06_model_deployment.ipynb",
         "07_model_monitoring.ipynb",
+        "04_optional_model_editor.ipynb",
+        "05_optional_manual_adjustment.ipynb",
+        "07_optional_test_weekly_run.ipynb",
     }
 )
 

@@ -87,10 +87,10 @@ assert tuple(sorted(path.name for path in package.glob("*.ipynb"))) == (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
-    "07_model_monitoring.ipynb",
+    "07_optional_test_weekly_run.ipynb",
 )
 monitoring_path = package / "monitoring.py"
 assert monitoring_path.is_file()

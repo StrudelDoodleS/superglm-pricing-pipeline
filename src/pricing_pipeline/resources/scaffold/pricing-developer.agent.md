@@ -64,6 +64,12 @@ Useful starting points under `src/pricing_pipeline/`:
 | Monitoring | `modeling/monitoring/storage.py` for SQL baseline capture/loading, `snapshot.py` for its JSON contract, `data_checks.py` for preflight, `batch.py` for the weekly sequence, `workflow.py` for refits, `persistence.py` for observations, `challengers.py` for fitted-package export |
 | Reports | `reporting/report.py`; adapter records are in `evidence_types.py` |
 
+New projects name the optional notebooks `04_optional_model_editor.ipynb`,
+`05_optional_manual_adjustment.ipynb` and `07_optional_test_weekly_run.ipynb`.
+07 tests the actual weekly runner and writes real results. Existing projects
+keep their older filenames without duplicate notebooks. Preserve both old and
+new names in the operational-notebook source-hash exclusions.
+
 Notebook generation reads seven complete `.ipynb` templates, substitutes tokens
 in their JSON strings and writes copies. Edit a template to change the cells
 future projects receive. Edit an existing project's notebook to change that

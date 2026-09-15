@@ -6,15 +6,20 @@ writes, artifacts, publication, and deployment guards.
 
 ## Workflow boundaries
 
+The standard initial workflow uses 01, 03 and human promotion in 06. Notebook 02
+is optional exploration. Notebooks 04 and 05 are optional pricing edits. Notebook
+07 is an optional test of the weekly runner; it writes real results when run.
+Schedule `monitoring.py` for recurring work. It loads fresh data itself.
+
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
 | `02_model_exploration.ipynb` | Saved dataset from 01 | Selected model configuration as TOML | Publish or deploy |
 | `03_model_training.ipynb` | Saved dataset; selected recipe or Python configuration | Manifest, split evidence, run, metrics, candidate, package | Deploy |
-| `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
-| `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
+| `04_optional_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
+| `05_optional_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
 | `06_model_deployment.ipynb` | Published SQL package and current champion | Explicit promotion and deployment history | Fit or edit |
-| `07_model_monitoring.ipynb` | SQL champion and fresh source data | Four observations and three saved challengers | Automatically promote |
+| `07_optional_test_weekly_run.ipynb` | SQL champion and fresh source data | Four observations and three saved challengers | Automatically promote |
 
 Notebook 01 saves the prepared dataset. Notebook 02 loads all its rows, applies
 your transforms, and fits a local SuperGLM with your feature definitions,

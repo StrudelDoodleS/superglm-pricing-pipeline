@@ -173,7 +173,7 @@ def test_monitoring_schedule_sources_do_not_change_the_training_definition_hash(
     definition.write_text("model_feature = 'x'\n")
     original = hash_model_source(tmp_path)
     script = tmp_path / "monitoring.py"
-    notebook = tmp_path / "07_model_monitoring.ipynb"
+    notebook = tmp_path / "07_optional_test_weekly_run.ipynb"
     script.write_text("weekly_query = 'original'\n")
     notebook.write_text('{"cells": [{"cell_type": "code", "source": ["run()"]}]}')
     assert hash_model_source(tmp_path) == original

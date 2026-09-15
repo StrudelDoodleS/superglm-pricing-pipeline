@@ -58,8 +58,8 @@ Use `pricing-pipeline scaffold --help` to check current options. Fill in
 target name. Keep the seven generated notebooks and their separate steps.
 Keep `monitoring.py` beside notebook 07 as its shared configuration and execution file.
 The standard initial workflow needs 01, 03 and human promotion in 06. Notebook 02
-is optional exploration; 04 and 05 are optional edits. Notebook 07 is optional
-interactive monitoring. Weekly automation runs monitoring.py, which loads fresh
+is optional exploration; 04 and 05 are optional edits. Notebook 07 is an optional
+test of the weekly runner, with real SQL writes. Weekly automation runs monitoring.py, which loads fresh
 data itself; it does not rerun notebooks 01 through 03.
 For an existing model, edit its notebooks in place. Do not use `--force` to
 overwrite analyst work as a shortcut.
@@ -204,8 +204,9 @@ project with `--force` as an upgrade step.
 
 ## Configure recurring monitoring
 
-An ordinary scaffold rerun adds `07_model_monitoring.ipynb` and `monitoring.py`
-to an existing model. Use its existing model name, target and package name.
+An ordinary scaffold rerun adds missing `07_optional_test_weekly_run.ipynb` and
+`monitoring.py` files. If 07 already exists under its older filename, preserve it
+instead of creating a second copy. Use its existing model name, target and package name.
 Preserve completed 01/02 cells, the other notebooks, and edited monitoring files.
 
 Keep model identity and connection settings in `monitoring.py`. Notebook 07 imports

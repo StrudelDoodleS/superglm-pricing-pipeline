@@ -46,10 +46,10 @@ The scaffold creates seven notebooks under `pricing_models/claim_frequency/`:
 | `01_data_ingestion.ipynb` | Build the governed model frame and record its Data-as-at date. |
 | `02_model_exploration.ipynb` | Fit locally, define features and export a configuration for 03. |
 | `03_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
-| `04_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
-| `05_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |
+| `04_optional_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
+| `05_optional_manual_adjustment.ipynb` | Optionally apply business factors and publish a `MANUAL_EDIT`. |
 | `06_model_deployment.ipynb` | Review SQL evidence and explicitly promote a champion. |
-| `07_model_monitoring.ipynb` | Score the champion and publish three weekly challengers via `monitoring.py`. |
+| `07_optional_test_weekly_run.ipynb` | Optionally test `monitoring.py`; scheduled runs execute the Python file directly. |
 
 `pricing_scaffold.toml` supplies connection names and safe notebook defaults.
 An explicit `--config` wins, and explicit command-line options win over the

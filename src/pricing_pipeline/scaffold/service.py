@@ -1,7 +1,7 @@
 """Create the model directory and write rendered notebooks and monitoring code.
 
-Check output collisions and symlinks, handle the older deployment notebook
-name, and apply the requested overwrite policy.
+Check output collisions and symlinks, preserve older notebook filenames,
+and apply the requested overwrite policy.
 """
 
 from __future__ import annotations
@@ -20,6 +20,11 @@ from pricing_pipeline.scaffold.render import render_monitoring_module, render_no
 
 _LEGACY_DEPLOYMENT_NOTEBOOK = "04_model_deployment.ipynb"
 _DEPLOYMENT_NOTEBOOK = "06_model_deployment.ipynb"
+_PREVIOUS_NOTEBOOK_NAMES = {
+    "04_optional_model_editor.ipynb": "04_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb": "05_manual_adjustment.ipynb",
+    "07_optional_test_weekly_run.ipynb": "07_model_monitoring.ipynb",
+}
 
 
 @dataclass(frozen=True)
@@ -151,9 +156,20 @@ def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> Scaffol
     sql_dir = package_dir / "sql"
     _validate_managed_directories(pricing_models_dir, package_dir, sql_dir)
     notebooks = render_notebooks(options)
+    notebook_content = {}
+    for filename, source in notebooks.items():
+        path = package_dir / filename
+        previous_name = _PREVIOUS_NOTEBOOK_NAMES.get(filename)
+        if previous_name is not None and not (path.exists() or path.is_symlink()):
+            previous = package_dir / previous_name
+            if previous.exists() or previous.is_symlink():
+                # Use the existing path so normal reruns preserve analyst work
+                # without creating a second notebook for the same operation.
+                path = previous
+        notebook_content[path] = source
     content = {
         package_dir / "__init__.py": f'"""Pricing notebook package for {options.model_name}."""\n',
-        **{package_dir / filename: source for filename, source in notebooks.items()},
+        **notebook_content,
         package_dir / "monitoring.py": render_monitoring_module(options),
         sql_dir / "README.md": scaffold_root()
         .joinpath("sql", "README.md")

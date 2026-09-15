@@ -1,8 +1,9 @@
 # Run weekly challengers and promote a champion
 
 Schedule `pricing_models/<model>/monitoring.py` using the Python interpreter from
-your project environment. Notebook `07_model_monitoring.ipynb` calls the same
-`run()` function so you can test the workflow interactively first.
+your project environment. `07_optional_test_weekly_run.ipynb` is an optional way
+to test the same `run()` function during setup or debugging. Scheduled monitoring
+does not require the notebook. Its test run writes real observations and packages.
 
 The script loads fresh data, reads the deployed baseline from SQL, checks input
 compatibility, scores the champion and fits three challengers. It saves the
@@ -22,8 +23,9 @@ definitions, groupings and special levels of the baseline.
 ## Configure once
 
 After installing the package update, rerun your original `pricing-pipeline
-scaffold` command without `--force`. It adds 07 and monitoring.py and preserves
-your existing files, including completed 01/02 notebooks. For example:
+scaffold` command without `--force`. It adds missing notebooks and monitoring.py and preserves
+your existing files, including completed 01/02 notebooks. Existing 04, 05 and 07
+notebooks keep their previous filenames; the scaffold does not add duplicate copies. For example:
 
 ```bash
 uv run pricing-pipeline scaffold --model-name BURN_COST --target-name burn_cost --package-name burn_cost

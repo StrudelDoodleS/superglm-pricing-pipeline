@@ -133,8 +133,8 @@ pricing_pipeline/
       01_data_ingestion.ipynb
       02_model_exploration.ipynb
       03_model_training.ipynb
-      04_model_editor.ipynb
-      05_manual_adjustment.ipynb
+      04_optional_model_editor.ipynb
+      05_optional_manual_adjustment.ipynb
       06_model_deployment.ipynb
   modeling/monitoring/
     __init__.py             compatibility and public re-exports
