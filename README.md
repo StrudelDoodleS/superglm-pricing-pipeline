@@ -114,7 +114,7 @@ uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
 uv build --force-pep517 --sdist --wheel --out-dir dist
 ```
 
-Apply migrations through V050 before publishing with this version.
+Apply migrations through V051 before publishing with this version.
 
 Schedule the generated `monitoring.py` with the project interpreter.
 See [weekly runs and champion promotion](docs/notebooks/weekly_monitoring.md) and [SQL baseline upgrades](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).

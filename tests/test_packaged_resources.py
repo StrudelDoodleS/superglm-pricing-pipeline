@@ -71,6 +71,7 @@ EXPECTED_MIGRATIONS = (
     "V048__recipe_revision_views.sql",
     "V049__sql_monitoring_baselines.sql",
     "V050__monitoring_challenger_publications.sql",
+    "V051__model_registry.sql",
 )
 
 

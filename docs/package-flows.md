@@ -134,6 +134,11 @@ It locks the model directory, loads the current SQL champion and passes fresh
 data to [`batch.run_monitoring_batch`](../src/pricing_pipeline/modeling/monitoring/batch.py).
 The batch checks every variant before fitting, completes all fits, then saves
 observations and publishes the three exact fitted challengers.
+[`publishing.recipes.inherit_run_recipe`](../src/pricing_pipeline/publishing/recipes.py)
+reads their declared definition from the baseline's SQL recipe. Temporary refit
+controls stay in monitoring evidence and snapshots, so weekly fits retain the
+same definition revision. `pricing.V_MODEL_REGISTRY` shows that revision beside
+the model's deployment role, refit type and individual package/run IDs.
 [`monitoring_runner`](../src/pricing_pipeline/monitoring_runner.py) adds logs and
 exit codes when the Python file runs under a scheduler. See the
 [weekly workflow](notebooks/weekly_monitoring.md) for setup.

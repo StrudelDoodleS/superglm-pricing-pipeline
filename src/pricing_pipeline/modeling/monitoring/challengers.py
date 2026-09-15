@@ -20,7 +20,6 @@ from pricing_pipeline.data.manifest import (
     ModelFrameManifestSpec,
     model_frame_evidence,
 )
-from pricing_pipeline.data.transforms import transforms_from_metadata
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringError,
@@ -40,16 +39,15 @@ from pricing_pipeline.modeling.monitoring.invariants import (
     _verify_monitoring_invariants,
 )
 from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
-from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture
 from pricing_pipeline.modeling.standard_superglm import (
     ModelInputs,
     canonical_row_identity_index,
     export_fitted_superglm_build,
 )
 from pricing_pipeline.models.config import ModelBuildConfig, ValidationSplitConfig
-from pricing_pipeline.models.pricing import PricingModelSpec
 from pricing_pipeline.publishing.monitoring import find_monitoring_publication
 from pricing_pipeline.publishing.publish import PublicationRequest, publish_candidate
+from pricing_pipeline.publishing.recipes import inherit_run_recipe
 from pricing_pipeline.publishing.sqlite import resolve_sqlite_model_version
 from pricing_pipeline.publishing.sqlserver import resolve_model_version_for_export
 
@@ -133,28 +131,10 @@ def publish_monitoring_challenger(
     no_validation = ValidationSplitConfig(
         method="none", n_splits=None, random_state=None, shuffle=False
     )
-    spec = PricingModelSpec(
-        name=config.model_name,
-        label=config.model_label,
-        target=manifest_spec.target_column,
-        model_type=config.model_type,
-        deployment_slot=config.deployment_slot,
-        dataset_name=manifest_spec.dataset_name,
-        source_system=manifest_spec.source_system,
-        pk_columns=manifest_spec.pk_columns,
-        data_as_of_column=manifest_spec.data_as_of_column,
-        features=baseline.feature_names,
-        sample_weight_column=manifest_spec.weight_column,
-        export_weight_column=manifest_spec.export_weight_column,
-        offset_column=manifest_spec.offset_column,
-        offset_source_column=manifest_spec.offset_source_column,
-        offset_label=manifest_spec.offset_label,
-        transforms=transforms_from_metadata(baseline.input_transforms),
-        validation=no_validation,
-    )
-    recipe_capture = RecipeCapture.captured(
-        ModelRecipe.from_model(result.fitted_model, spec=spec).document
-    )
+    with engine.connect() as connection:
+        recipe_capture = inherit_run_recipe(
+            connection, model_run_id=baseline.model_run_id, model_config=config
+        )
     row_ids = df.loc[:, list(manifest_spec.pk_columns)].copy()
     aligned = df.copy()
     aligned.index = canonical_row_identity_index(row_ids)

@@ -2099,6 +2099,7 @@ def test_offline_upgrade_seals_existing_monitoring_without_certifying_it(persist
     engine, _, _, receipt = persisted_monitoring_case
     with engine.begin() as connection:
         connection.execute(text("DROP VIEW pricing.V_MODEL_CHALLENGER"))
+        connection.execute(text("DROP VIEW pricing.V_MODEL_REGISTRY"))
         for operation in ("UPDATE", "DELETE"):
             connection.execute(
                 text(f"DROP TRIGGER pricing.TR_DATASET_MANIFEST_CHALLENGER_{operation}")

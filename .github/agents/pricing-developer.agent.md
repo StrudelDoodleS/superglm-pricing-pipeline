@@ -56,14 +56,15 @@ Useful starting points under `src/pricing_pipeline/`:
 | Values inserted into notebook cells | `scaffold/config.py`, `scaffold/render.py`, `scaffold/service.py` |
 | CLI flags or init files | `cli.py`, `scaffold/commands.py` |
 | Analyst operations or model choices | `notebook.py`, `models/pricing.py` |
-| Reusable model configuration | `modeling/recipes/` |
+| Reusable model configuration | `modeling/recipes/`; SQL revision allocation and inheritance in `publishing/recipes.py` |
+| Champion and challenger registry | `workbench/champion.py`; `resources/migrations/V051__model_registry.sql` and the SQLite view mirror |
 | Fit, CV and export | `modeling/standard_superglm.py` |
 | Save or deploy a version | `publishing/publish.py`, `publishing/deployment.py` |
 | Editor publication | `publishing/editor.py`, then its named stage modules |
 | Monitoring | `modeling/monitoring/storage.py` for SQL baseline capture/loading, `snapshot.py` for its JSON contract, `data_checks.py` for preflight, `batch.py` for the weekly sequence, `workflow.py` for refits, `persistence.py` for observations, `challengers.py` for fitted-package export |
 | Reports | `reporting/report.py`; adapter records are in `evidence_types.py` |
 
-Notebook generation reads six complete `.ipynb` templates, substitutes tokens
+Notebook generation reads seven complete `.ipynb` templates, substitutes tokens
 in their JSON strings and writes copies. Edit a template to change the cells
 future projects receive. Edit an existing project's notebook to change that
 project. `notebook.py` contains the operations those cells call.
@@ -74,10 +75,23 @@ adds logs and exit codes. It saves one champion score and three exact fitted
 challengers. Notebook 06 uses `workbench/champion.py` for SQL-only review and
 explicit promotion. See `docs/notebooks/weekly_monitoring.md`.
 
+Weekly challengers inherit the baseline's verified SQL recipe. Do not recapture
+that definition from the refitted estimator, whose temporary frozen knots,
+lambdas and learned domains would create false recipe revisions. Keep actual
+execution settings in the SQL snapshot and sealed monitoring evidence.
+
+`pricing.V_MODEL_REGISTRY` shows model name, role, definition revision, refit type,
+dates and package/run IDs. The initial champion belongs in this view too. Roles
+are per deployment slot; former champions retain that history. `fit_version` is
+the old fitted-build counter, separate from `definition_revision`. Promotion
+changes deployment identity and role without fitting or renumbering. Test recipe
+inheritance across promotion and another weekly run, SQL-only review, and slot
+isolation. Preserve both Python and database checks on inherited definitions.
+
 Snapshots retain original declared refit controls separately from actual fitted
-execution settings. Preserve that distinction when changing promotion or refits. Keep its codec separate
-from the joblib bundle used by interactive editing. Preserve exact static scoring,
-frozen geometry and lambda rules, aggregate drift references and SQL lineage
+execution settings. Preserve that distinction when changing promotion or refits.
+Keep the snapshot codec separate from the joblib bundle used by interactive
+editing. Preserve exact static scoring, frozen geometry and lambda rules, aggregate drift references and SQL lineage
 checks. An upgrade must not require analysts to regenerate completed notebooks.
 
 ## Make and check the change

@@ -112,6 +112,13 @@ def simulate_demo_deployment(pricing, saved, *, directory: Path, slot: str) -> i
 
 
 _TABLES = (
+    (
+        "V_MODEL_REGISTRY",
+        "pricing",
+        "package_version",
+        "Champion and challengers with definition revision, refit type and source date",
+        "model_run_id; rate_package_id; recipe_sha256; deployment_slot",
+    ),
     ("PRICING_MODEL", "pricing", "model_id", "Registered burn-cost model", "MODEL_RUN.model_id"),
     (
         "MODEL_RECIPE",
@@ -264,9 +271,11 @@ def export_sql_tables(pricing, *, directory: Path, limit: int = 20) -> tuple[Pat
         stored = (
             connection.execute(
                 text(
-                    "SELECT model_run_id, rate_package_id, snapshot_json "
-                    "FROM pricing.MODEL_MONITORING_BASELINE "
-                    "WHERE capture_status='CAPTURED' ORDER BY model_run_id"
+                    "SELECT snapshot.model_run_id, snapshot.rate_package_id, snapshot.snapshot_json, "
+                    "recipe.recipe_json FROM pricing.MODEL_MONITORING_BASELINE AS snapshot "
+                    "JOIN pricing.MODEL_RUN AS run ON run.model_run_id=snapshot.model_run_id "
+                    "LEFT JOIN pricing.MODEL_RECIPE AS recipe ON recipe.recipe_id=run.recipe_id "
+                    "WHERE snapshot.capture_status='CAPTURED' ORDER BY snapshot.model_run_id"
                 )
             )
             .mappings()
@@ -275,6 +284,7 @@ def export_sql_tables(pricing, *, directory: Path, limit: int = 20) -> tuple[Pat
     feature_rows = []
     for row in stored:
         snapshot = json.loads(row["snapshot_json"])
+        definition = {} if row["recipe_json"] is None else json.loads(row["recipe_json"])
         filename = f"baseline_snapshot_model_run_{row['model_run_id']}.json"
         (directory / filename).write_text(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n")
         for name in snapshot["recipe"]["feature_order"]:
@@ -285,8 +295,9 @@ def export_sql_tables(pricing, *, directory: Path, limit: int = 20) -> tuple[Pat
                     "snapshot file": filename,
                     "feature": name,
                     "declared configuration": json.dumps(
-                        snapshot["recipe"]["features"][name], indent=2
+                        definition.get("features", {}).get(name), indent=2
                     ),
+                    "fit configuration": json.dumps(snapshot["recipe"]["features"][name], indent=2),
                     "scoring state": json.dumps(snapshot["prediction"]["terms"][name], indent=2),
                     "reference profile": json.dumps(
                         snapshot["reference_profiles"].get(name), indent=2

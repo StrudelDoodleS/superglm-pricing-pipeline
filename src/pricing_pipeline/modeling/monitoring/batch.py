@@ -272,6 +272,8 @@ def run_monitoring_batch(
                 if result.variant is MonitoringVariant.STATIC_SCORE
                 else "CHALLENGER",
                 "model_name": identity["model_name"],
+                "definition_revision": identity["recipe_revision"],
+                "fit_version": published.get("model_version"),
                 "model_id": identity["model_id"],
                 "baseline_model_run_id": model_run_id,
                 "baseline_deployment_id": deployment_id,
@@ -285,7 +287,6 @@ def run_monitoring_batch(
                         "model_run_id",
                         "rate_package_id",
                         "package_version",
-                        "model_version",
                         "package_status",
                         "publication_reused",
                     )

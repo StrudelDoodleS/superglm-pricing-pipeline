@@ -525,7 +525,7 @@ Rerun your existing scaffold command without `--force` to add notebook 07 and
 `monitoring.py`. Existing notebooks stay intact. See the [weekly workflow](weekly_monitoring.md)
 for the small change that gives an existing 06 notebook SQL-only review.
 
-After the database administrator applies migrations through V050, the existing
+After the database administrator applies migrations through V051, the existing
 `save_model_version` call also captures monitoring state in SQL. The snapshot
 contains explicit configuration, fitted geometry and smoothing settings, exact
 predictions as polynomial/lookup parameters, and aggregate categorical counts.
@@ -871,15 +871,18 @@ full fitting. Python overrides affect that snapshot; later changes to Python
 objects or TOML cannot change a completed build's recipe. The saved result exposes
 `recipe_revision`, `recipe_sha256` and `recipe_status`. SQL assigns revisions in
 the publication transaction. Same recipe with new data keeps its revision; a
-previous recipe reused later keeps its original revision. Model and package
-versions keep their existing meanings. Saving never deploys.
+previous recipe reused later keeps its original revision. Weekly monitoring
+refits inherit the champion's declared recipe too. Use `pricing.V_MODEL_REGISTRY`
+to see that `definition_revision` beside the model's champion/challenger role.
+Package and run IDs identify saved fits; `fit_version` is the legacy fit counter.
+Saving never deploys.
 
 Recipe mode skips `.local/routine_groupings.joblib`. Apply any further grouping
 explicitly in Python and fit again. Post-fit editor/manual packages inherit the
 training recipe and retain their separate edit/parent evidence. A training recipe
 alone does not reproduce those coefficient edits. Ordinary recipe loading refits
 declared choices; frozen learned knots, bases, lambdas or coefficients still use
-baseline artifacts and monitoring variants.
+the SQL baseline and monitoring variants.
 
 Supported recipes include Numeric, Polynomial, Categorical, OrderedCategorical,
 one-dimensional spline variants and the existing categorical interactions, plus

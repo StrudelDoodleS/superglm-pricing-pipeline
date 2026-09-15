@@ -54,6 +54,8 @@ def _observation(connection, monitor_run_id):
 
 def validate_monitoring_publication(connection, build):
     """Verify the sealed observation and build identity within the publication transaction."""
+    from pricing_pipeline.publishing.recipes import validate_inherited_recipe
+
     if build.monitor_run_id is None:
         return None
     row = _observation(connection, build.monitor_run_id)
@@ -62,6 +64,9 @@ def validate_monitoring_publication(connection, build):
             raise MonitoringPublicationError(
                 f"monitoring publication {name} does not match its observation"
             )
+    validate_inherited_recipe(
+        connection, model_run_id=row["baseline_model_run_id"], capture=build.recipe_capture
+    )
     return row
 
 

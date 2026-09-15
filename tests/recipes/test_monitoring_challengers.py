@@ -1,6 +1,5 @@
 """Monitoring refits publish exact, selectable packages and keep no model files."""
 
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -230,6 +229,8 @@ def test_next_sql_epoch_freezes_promoted_state_and_preserves_adaptive_policy(
     assert _sql_count(pricing.engine, "MODEL_MONITOR_RUN") == 8
     assert _sql_count(pricing.engine, "MODEL_MONITOR_PUBLICATION") == 6
     assert _sql_count(pricing.engine, "PRICING_RATE_PACKAGE") == 7
+    assert _sql_count(pricing.engine, "MODEL_RECIPE") == 1
+    assert second.runs.definition_revision.eq(1).all()
     assert _sql_count(pricing.engine, "PRICING_MODEL_DEPLOYMENT") == 2
     assert api.load_monitoring_baseline(pricing, model=model).model_run_id == promoted.model_run_id
 
@@ -281,6 +282,10 @@ def test_batch_publishes_the_exact_three_refits_without_refitting_or_kept_files(
     assert challengers.baseline_model_run_id.astype(str).eq(str(champion.model_run_id)).all()
     assert challengers.baseline_deployment_id.eq(baseline.deployment_id).all()
     assert set(challengers.package_version) == {2, 3, 4}
+    assert report.runs.definition_revision.eq(1).all()
+    assert "model_version" not in report.runs.columns
+    assert set(challengers.fit_version) == {"v2", "v3", "v4"}
+    assert _sql_count(pricing.engine, "MODEL_RECIPE") == 1
     assert _sql_count(pricing.engine, "PRICING_RATE_PACKAGE") == 4
     assert _sql_count(pricing.engine, "MODEL_RUN") == 4
     assert _sql_count(pricing.engine, "PRICING_MODEL_DEPLOYMENT") == 1
@@ -320,7 +325,27 @@ def test_batch_publishes_the_exact_three_refits_without_refitting_or_kept_files(
                 .one()
             )
             assert metadata["split_set_id"] is None
-            assert json.loads(metadata["recipe_json"])["validation"] == {"type": "none"}
+            assert metadata["recipe_json"] == candidate.completed_build.recipe_capture.canonical
+        registry = (
+            connection.execute(
+                text("SELECT * FROM pricing.V_MODEL_REGISTRY ORDER BY package_version")
+            )
+            .mappings()
+            .all()
+        )
+        assert [item["role"] for item in registry] == [
+            "CHAMPION",
+            "CHALLENGER",
+            "CHALLENGER",
+            "CHALLENGER",
+        ]
+        assert {item["definition_revision"] for item in registry} == {1}
+        assert [item["refit_type"] for item in registry] == [
+            "Analyst fit",
+            "Coefficients only",
+            "Coefficients and smoothing",
+            "Full refit",
+        ]
     assert {
         path for path in pricing.settings.workbench_artifact_root.rglob("*") if path.is_file()
     } == before_files

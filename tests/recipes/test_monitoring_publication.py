@@ -133,6 +133,7 @@ def test_monitoring_publication_validation_reads_sealed_refit(monitoring_publica
         model_id=champion.completed_build.model_id,
         manifest_id=champion.completed_build.manifest_id,
         model_frame_sha256=champion.completed_build.model_frame_sha256,
+        recipe_capture=champion.completed_build.recipe_capture,
     )
     with pricing.engine.begin() as connection:
         row = validate_monitoring_publication(connection, build)
@@ -142,6 +143,55 @@ def test_monitoring_publication_validation_reads_sealed_refit(monitoring_publica
             broken = SimpleNamespace(**{**vars(build), field: value})
             with pytest.raises(ValueError, match=field):
                 validate_monitoring_publication(connection, broken)
+
+
+def test_monitoring_publication_cannot_change_the_declared_recipe(monitoring_publication_case):
+    from pricing_pipeline.modeling.recipes import RecipeCapture
+    from pricing_pipeline.publishing.monitoring import validate_monitoring_publication
+
+    pricing, _, champion, _, recorded, _ = monitoring_publication_case
+    original = champion.completed_build
+    changed = original.recipe_capture.document.model_copy(update={"scoring": ("deviance",)})
+    build = original.model_copy(
+        update={
+            "monitor_run_id": recorded.monitor_run_id,
+            "recipe_capture": RecipeCapture.captured(changed),
+        }
+    )
+    with pricing.engine.begin() as connection, pytest.raises(ValueError, match="recipe"):
+        validate_monitoring_publication(connection, build)
+
+
+def test_database_also_rejects_a_different_challenger_definition(
+    monitoring_publication_case, monkeypatch
+):
+    from pricing_pipeline.modeling.monitoring import challengers
+    from pricing_pipeline.modeling.recipes import RecipeCapture
+    from pricing_pipeline.publishing import recipes
+
+    pricing = monitoring_publication_case[0]
+    export = challengers.export_fitted_superglm_build
+
+    def changed_definition(**kwargs):
+        document = kwargs["recipe_capture"].document.model_copy(update={"scoring": ("deviance",)})
+        kwargs["recipe_capture"] = RecipeCapture.captured(document)
+        return export(**kwargs)
+
+    monkeypatch.setattr(challengers, "export_fitted_superglm_build", changed_definition)
+    monkeypatch.setattr(recipes, "validate_inherited_recipe", lambda *args, **kwargs: None)
+    with pytest.raises(IntegrityError, match="retain their baseline model definition"):
+        _publish_challenger(monitoring_publication_case)
+    with pricing.engine.connect() as connection:
+        assert (
+            connection.execute(text("SELECT COUNT(*) FROM pricing.MODEL_RECIPE")).scalar_one() == 1
+        )
+        assert connection.execute(text("SELECT COUNT(*) FROM pricing.MODEL_RUN")).scalar_one() == 1
+        assert (
+            connection.execute(
+                text("SELECT COUNT(*) FROM pricing.MODEL_MONITOR_PUBLICATION")
+            ).scalar_one()
+            == 0
+        )
 
 
 def test_monitoring_publication_requires_captured_state_and_is_immutable(

@@ -54,6 +54,10 @@ class ReviewedModelVersion:
     rate_package_id: int
     model_run_id: int | str
     model_version: str
+    definition_revision: int | None
+    role: str
+    refit_type: str
+    published_at: Any
     manifest_id: str
     data_as_of_date: Any
     model_kind: str
@@ -73,12 +77,22 @@ class ReviewedModelVersion:
         return self.model_config.deployment_slot.strip().upper()
 
     @property
+    def fit_version(self) -> str:
+        """Legacy fit identifier; definition_revision identifies the model recipe."""
+        return self.model_version
+
+    @property
     def summary(self) -> pd.DataFrame:
         """Show the selected version and its reviewed champion, with dataset dates."""
         return pd.DataFrame(
             [
                 {
                     "model_name": self.model_name,
+                    "role": self.role,
+                    "definition_revision": self.definition_revision,
+                    "refit_type": self.refit_type,
+                    "data_as_of_date": self.data_as_of_date,
+                    "published_at": self.published_at,
                     "deployment_slot": self.deployment_slot,
                     "package_version": self.package_version,
                     "rate_package_id": self.rate_package_id,
@@ -86,7 +100,6 @@ class ReviewedModelVersion:
                     "model_kind": self.model_kind,
                     "monitoring_variant": self.monitoring_variant,
                     "manifest_id": self.manifest_id,
-                    "data_as_of_date": self.data_as_of_date,
                     "baseline_data_as_of_date": self.baseline_data_as_of_date,
                     "current_package_version": self.current_package_version,
                     "current_rate_package_id": self.current_rate_package_id,
@@ -130,6 +143,24 @@ def _version_rows(connection, engine, *, model_config, model_id, package_version
         SELECT model.model_id, model.model_name, model.target_name, model.model_type,
                package.package_version, package.rate_package_id, run.model_run_id,
                run.model_version, run.model_kind, run.manifest_id,
+               recipe.recipe_revision AS definition_revision,
+               run.created_ts AS published_at,
+               CASE WHEN deployment.rate_package_id=package.rate_package_id THEN 'CHAMPION'
+                    WHEN EXISTS (
+                        SELECT 1 FROM {pricing}.PRICING_MODEL_DEPLOYMENT AS history
+                        WHERE history.model_id=model.model_id
+                          AND history.rate_package_id=package.rate_package_id
+                          AND history.deployment_slot=:deployment_slot
+                          AND history.effective_to_ts IS NOT NULL
+                    ) THEN 'FORMER_CHAMPION' ELSE 'CHALLENGER' END AS role,
+               CASE observation.variant_code
+                   WHEN 'FROZEN_REFIT' THEN 'Coefficients only'
+                   WHEN 'REESTIMATE_LAMBDA' THEN 'Coefficients and smoothing'
+                   WHEN 'FULL_ADAPTIVE' THEN 'Full refit'
+                   ELSE CASE run.model_kind WHEN 'RAW' THEN 'Analyst fit'
+                                            WHEN 'ROUTINE_EDIT' THEN 'Grouped fit'
+                                            ELSE 'Manual adjustment' END
+               END AS refit_type,
                manifest.data_as_of_date,
                observation.variant_code AS monitoring_variant,
                observation.monitor_run_id,
@@ -146,6 +177,8 @@ def _version_rows(connection, engine, *, model_config, model_id, package_version
           ON run.rate_package_id=package.rate_package_id AND run.model_id=model.model_id
          AND run.run_status='SUCCESS'
         JOIN {pricing}.DATASET_MANIFEST AS manifest ON manifest.manifest_id=run.manifest_id
+        LEFT JOIN {pricing}.MODEL_RECIPE AS recipe
+          ON recipe.recipe_id=run.recipe_id AND recipe.model_id=run.model_id
         LEFT JOIN {monitor}.MODEL_MONITOR_PUBLICATION AS publication
           ON publication.model_run_id=run.model_run_id
         LEFT JOIN {monitor}.MODEL_MONITOR_RUN AS observation
@@ -204,7 +237,7 @@ def _version_rows(connection, engine, *, model_config, model_id, package_version
 
 
 def list_challengers(engine, *, model_config: ModelBuildConfig, model_id: int) -> pd.DataFrame:
-    """List published versions and mark the current champion in the configured slot."""
+    """List saved fits by role and definition revision in the configured slot."""
     model_id = _positive_integer(model_id, "model_id")
     with engine.connect() as connection:
         rows = _version_rows(connection, engine, model_config=model_config, model_id=model_id)
@@ -215,7 +248,19 @@ def list_challengers(engine, *, model_config: ModelBuildConfig, model_id: int) -
         }
         for row in rows
     ]
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records).rename(columns={"model_version": "fit_version"})
+    if df.empty:
+        return df
+    first = [
+        "model_name",
+        "role",
+        "definition_revision",
+        "refit_type",
+        "data_as_of_date",
+        "published_at",
+        "package_version",
+    ]
+    return df.loc[:, first + [name for name in df.columns if name not in first]]
 
 
 def review_model_version(

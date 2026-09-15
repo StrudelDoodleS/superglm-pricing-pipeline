@@ -1,10 +1,10 @@
 """Immutable declared model configuration and exact semantic identity.
 
 The document keeps registration bindings and execution settings for reconstruction.
-Its canonical payload excludes those bindings and execution-only settings. A
-monitoring challenger's recipe records its actual frozen controls. The SQL
-snapshot separately retains the declared policy for future refits. Recipes do
-not contain training rows or fitted coefficients.
+Its canonical payload excludes those bindings and execution-only settings.
+Monitoring challengers inherit this definition from their SQL baseline. Actual
+freeze controls and fitted state belong to the monitoring evidence and snapshot.
+Recipes do not contain training rows or fitted coefficients.
 """
 
 from __future__ import annotations

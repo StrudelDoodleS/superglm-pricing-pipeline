@@ -63,7 +63,7 @@ remains available for consumers that specifically want only spline segments.
 
 ## SQL monitoring baselines, V049
 
-Apply the migration chain through V050 before publishing with this version.
+Apply the migration chain through V051 before publishing with this version.
 V049 adds `pricing.MODEL_MONITORING_BASELINE`. It retains existing data and does
 not recreate model notebooks. Each successful publication captures one immutable
 row containing explicit JSON model state and its source lineage. Unsupported
@@ -106,6 +106,42 @@ A successful challenger publication also needs a captured SQL monitoring
 snapshot. New snapshots keep the original declared knot and lambda policies
 separately from the actual execution settings. This allows later adaptive refits
 after a frozen challenger is promoted. Older snapshot v1 remains readable.
+
+## Model registry, V051
+
+Use `pricing.V_MODEL_REGISTRY` to see the champion, challengers and former
+champions together. It includes ordinary training builds and weekly refits.
+It adds no tables and changes no existing deployment or historical recipe.
+
+```sql
+SELECT model_name, deployment_slot, role, definition_revision, refit_type,
+       data_as_of_date, published_at, package_version, model_run_id
+FROM pricing.V_MODEL_REGISTRY
+WHERE model_name = 'BURN_COST'
+ORDER BY deployment_slot, package_version DESC;
+```
+
+`definition_revision` is the declared recipe revision. Weekly refits inherit it,
+including the original validation plan. Their actual execution skips CV and
+records its frozen or re-estimated controls in the monitoring evidence and SQL
+snapshot. Changing declared features, grouping, transforms or fitting policies
+through an analyst build creates or reuses the corresponding recipe revision.
+Legacy recipes have a NULL revision and an explicit `recipe_status`.
+
+`package_version` and `model_run_id` identify individual saved results. The old
+`model_version` counter is exposed here as `fit_version` for audit joins.
+`published_at` is the UTC publication time, separate from the dataset's as-at date
+and the deployment time. Promotion changes the role without fitting or renumbering.
+
+The view has one row per package and known deployment slot. Filter the slot
+before counting packages across models with multiple slots. Ordinary builds can
+appear in every known slot; monitoring packages belong to their originating slot.
+A model with no deployment history has a NULL slot and challenger rows. A replaced
+champion is `FORMER_CHAMPION` in that slot, preserving its deployment history.
+
+`mlops.TR_MODEL_MONITOR_PUBLICATION_RECIPE` rejects new monitoring publications
+that change their baseline's recipe. Existing recorded revisions remain intact.
+The narrower `pricing.V_MODEL_CHALLENGER` remains available for existing queries.
 
 `mlops.TR_MODEL_MONITOR_PUBLICATION_LINEAGE_GUARD` checks the observation and
 candidate on insertion; `mlops.TR_MODEL_MONITOR_PUBLICATION_IMMUTABLE` rejects

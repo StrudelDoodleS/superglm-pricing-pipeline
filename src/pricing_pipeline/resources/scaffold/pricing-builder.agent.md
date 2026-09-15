@@ -57,6 +57,10 @@ Use `pricing-pipeline scaffold --help` to check current options. Fill in
 `pricing_scaffold.toml`, then scaffold the new model with its model name and
 target name. Keep the seven generated notebooks and their separate steps.
 Keep `monitoring.py` beside notebook 07 as its shared configuration and execution file.
+The standard initial workflow needs 01, 03 and human promotion in 06. Notebook 02
+is optional exploration; 04 and 05 are optional edits. Notebook 07 is optional
+interactive monitoring. Weekly automation runs monitoring.py, which loads fresh
+data itself; it does not rerun notebooks 01 through 03.
 For an existing model, edit its notebooks in place. Do not use `--force` to
 overwrite analyst work as a shortcut.
 
@@ -118,6 +122,11 @@ K-fold or overlapping test windows with this contract.
 
 Explain the cells in terms of their results. `fit_model` fits and validates.
 `save_model_version` saves the version and its evidence to the chosen database.
+Use `pricing.V_MODEL_REGISTRY` for the champion, challengers and former champions.
+Keep the registered model name stable. `definition_revision` identifies the declared
+recipe; weekly refits inherit it. Package and run IDs identify saved fits, and
+`fit_version` is the legacy fit counter. Do not call each weekly fit a new model
+definition or promote it automatically. Filter the deployment slot when reviewing.
 `deploy_model_version` makes a selected version active. Keep existing keyword
 arguments such as `frame=df` where the installed API requires them.
 
@@ -174,8 +183,11 @@ a partial recipe. Historical builds remain LEGACY.
 
 Never invent or increment version numbers. SQL assigns recipe revisions when a
 successful build is saved. A recipe revision identifies declared modelling
-choices; model_version and package_version retain their existing fitted-build
-and package meanings. New data can produce a new build using the same recipe.
+choices. New data produces another fit with the same definition revision.
+Changing declared features, groupings, transforms or fitting policies through
+an analyst build creates or reuses that definition's recipe revision. Weekly
+freeze controls do not create a new definition. Use package_version to select
+a saved result and fit_version only when its legacy audit identifier is needed.
 Post-fit edits retain their training recipe plus edit lineage. Loading a recipe
 is an ordinary refit. For weekly monitoring, use notebook 07 and its generated
 `monitoring.py` module. They read the deployed configuration and fitted settings
@@ -215,13 +227,16 @@ coefficients. `FROZEN_REFIT` refits coefficients with the saved basis and penalt
 `REESTIMATE_LAMBDA` also reestimates smoothing penalties. `FULL_ADAPTIVE` rebuilds
 the basis on current data and reestimates penalties. Each weekly run scores the
 current champion once and publishes the three refits as challenger packages.
-It records four observations and does not promote a challenger.
+It records four observations and does not promote a challenger. Explicit knots,
+boundaries and fixed lambda policies remain fixed even in FULL_ADAPTIVE.
+Feature definitions, grouping and special levels stay unchanged in all modes.
 
 The report's `role` distinguishes `CHAMPION` from `CHALLENGER`. Its
 `baseline_model_run_id`, `baseline_deployment_id`, `baseline_rate_package_id` and
 `baseline_package_version` identify the champion used for comparison. The three
 challengers also have `model_run_id`, `rate_package_id`, `package_version`,
-`model_version`, `package_status` and `publication_reused` values. The static score
+`fit_version`, `package_status` and `publication_reused` values.
+All four rows retain the same `definition_revision`. The static score
 does not create a candidate package. Each observation is persisted separately, so
 a later failure can leave earlier observations and publications saved. Exact-evidence
 retries reuse prior results.

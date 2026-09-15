@@ -1194,6 +1194,22 @@ BEFORE DELETE ON MODEL_MONITOR_PUBLICATION BEGIN
     SELECT RAISE(ABORT, 'monitoring publication links are immutable');
 END;
 
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_PUBLICATION_RECIPE
+BEFORE INSERT ON MODEL_MONITOR_PUBLICATION
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN AS observation
+    JOIN MODEL_FIT_CONTRACT AS contract ON contract.fit_contract_id=observation.fit_contract_id
+    JOIN MODEL_RUN AS baseline ON baseline.model_run_id=contract.baseline_model_run_id
+    JOIN MODEL_RUN AS candidate ON candidate.model_run_id=NEW.model_run_id
+    WHERE observation.monitor_run_id=NEW.monitor_run_id
+      AND (candidate.recipe_status<>baseline.recipe_status
+           OR candidate.recipe_id IS NOT baseline.recipe_id
+           OR candidate.recipe_unavailable_reason IS NOT baseline.recipe_unavailable_reason)
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring challengers must retain their baseline model definition');
+END;
+
 CREATE VIEW IF NOT EXISTS pricing.V_MODEL_CHALLENGER AS
 /*
 Purpose: Review published monitoring challengers and the current champion.

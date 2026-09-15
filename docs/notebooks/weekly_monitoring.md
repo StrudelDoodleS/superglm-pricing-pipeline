@@ -30,7 +30,7 @@ uv run pricing-pipeline scaffold --model-name BURN_COST --target-name burn_cost 
 ```
 
 Keep your model name, package name and deployment slot consistent with the
-existing project. The database needs migrations through V050, and the deployed
+existing project. The database needs migrations through V051, and the deployed
 model needs a captured SQL baseline. See the [SQL baseline upgrade](README.md#sql-baselines-and-existing-notebooks)
 for older publications that need a one-time capture.
 
@@ -128,7 +128,11 @@ serializes their fits. Separate machines do not share that lock; the existing
 SQL identity, deployment and retry checks still apply. Persistence rechecks the
 deployment so a changed baseline cannot receive stale results.
 
-Inspect candidates and the current champion through `pricing.V_MODEL_CHALLENGER`.
+Inspect candidates and the current champion through `pricing.V_MODEL_REGISTRY`.
+It shows the model name, role, definition revision, refit type, dataset date and
+publication time. The definition revision stays the same across weekly refits;
+each result has its own package and run IDs. Former champions keep that label
+after replacement. Filter `deployment_slot` when a model has several slots.
 Inspect comparison evidence through `pricing.V_MODEL_MONITORING_RUN`,
 `pricing.V_MODEL_MONITORING_RELATIVITY` and `pricing.V_MODEL_MONITORING_LAMBDA`.
 Loss metrics are in `mlops.MODEL_MONITOR_METRIC`, linked by `monitor_run_id`.
@@ -139,8 +143,9 @@ No task is registered with the operating system by scaffolding or running 07.
 The champion is the package in the current deployment slot. There is one champion
 per model and slot. A challenger becomes champion only through explicit deployment.
 
-Notebook 06 lists published versions and their monitoring origins. Set
-`PACKAGE_VERSION` to the version you want to review. Its SQL-only review shows
+Notebook 06 lists saved fits by role and definition revision. Set
+`PACKAGE_VERSION` to the package you want to review. It identifies a saved result,
+not a new model definition. Its SQL-only review shows
 the selected version, dated dataset, fit metrics and current champion. The next
 cell promotes that reviewed version with your deployment reason.
 

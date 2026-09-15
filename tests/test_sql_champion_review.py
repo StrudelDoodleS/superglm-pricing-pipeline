@@ -173,6 +173,10 @@ def test_listing_returns_sql_challengers_and_marks_current_champion(sql_review_c
     rows = list_challengers(engine, model_config=config, model_id=17)
     assert rows.package_version.tolist() == [2, 1]
     assert rows.is_current_champion.tolist() == [False, True]
+    assert rows.role.tolist() == ["CHALLENGER", "CHAMPION"]
+    assert rows.definition_revision.isna().all()
+    assert "model_version" not in rows.columns
+    assert rows.columns[:4].tolist() == ["model_name", "role", "definition_revision", "refit_type"]
     assert rows.manifest_id.tolist() == ["manifest-2", "manifest-1"]
 
 

@@ -7,12 +7,13 @@ TOML editing and estimator reconstruction belong to ``modeling.recipes``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from sqlalchemy import text
 
 from pricing_pipeline.infra.schema import schema_names_from_connectable
-from pricing_pipeline.modeling.recipes import ModelRecipe
+from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, RecipeDocument
 from pricing_pipeline.modeling.recipes.schema import RecipeError
 
 
@@ -64,6 +65,57 @@ def validate_recipe_capture(row, capture):
         )
     if capture.status == "CAPTURED":
         validate_recipe_content(row, recipe=ModelRecipe(capture.document))
+
+
+def _run_recipe(connection, model_run_id):
+    schema = schema_names_from_connectable(connection).pricing
+    row = (
+        connection.execute(
+            text(f"""SELECT run.recipe_status, run.recipe_unavailable_reason,
+                       recipe.recipe_json, recipe.recipe_sha256, recipe.recipe_format_version
+                FROM {schema}.MODEL_RUN AS run
+                LEFT JOIN {schema}.MODEL_RECIPE AS recipe
+                  ON recipe.recipe_id=run.recipe_id AND recipe.model_id=run.model_id
+                WHERE run.model_run_id=:run"""),
+            {"run": model_run_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        raise RecipeError("baseline model run has no SQL recipe record")
+    return row
+
+
+def inherit_run_recipe(connection, *, model_run_id, model_config) -> RecipeCapture:
+    """Carry the declared SQL definition into a refit, including unavailable status.
+
+    Runtime freeze controls and the absence of another CV run belong to the fit
+    evidence. They do not change this definition's revision.
+    """
+    row = _run_recipe(connection, model_run_id)
+    if row["recipe_status"] != "CAPTURED":
+        return RecipeCapture(
+            status=row["recipe_status"], unavailable_reason=row["recipe_unavailable_reason"]
+        )
+    document = RecipeDocument(
+        **json.loads(row["recipe_json"]),
+        name=model_config.model_name,
+        label=model_config.model_label,
+        model_type=model_config.model_type,
+        deployment_slot=model_config.deployment_slot,
+    )
+    capture = RecipeCapture.captured(document)
+    validate_recipe_capture(row, capture)
+    return capture
+
+
+def validate_inherited_recipe(connection, *, model_run_id, capture):
+    """A monitoring publication must keep its baseline's declared recipe."""
+    row = _run_recipe(connection, model_run_id)
+    validate_recipe_capture(row, capture)
+    if row["recipe_unavailable_reason"] != capture.unavailable_reason:
+        raise RecipeError("monitoring recipe availability differs from its baseline")
 
 
 def resolve_recipe(
