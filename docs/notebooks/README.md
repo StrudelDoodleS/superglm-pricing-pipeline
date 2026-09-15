@@ -530,7 +530,7 @@ Rerun your existing scaffold command without `--force` to add notebook 07 and
 `monitoring.py`. Existing notebooks stay intact. See the [weekly workflow](weekly_monitoring.md)
 for the small change that gives an existing 06 notebook SQL-only review.
 
-After the database administrator applies migrations through V051, the existing
+After the database administrator applies migrations through V052, the existing
 `save_model_version` call also captures monitoring state in SQL. The snapshot
 contains explicit configuration, fitted geometry and smoothing settings, exact
 predictions as polynomial/lookup parameters, and aggregate categorical counts.

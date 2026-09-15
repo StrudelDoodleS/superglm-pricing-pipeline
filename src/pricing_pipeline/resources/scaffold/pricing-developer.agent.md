@@ -56,7 +56,7 @@ Useful starting points under `src/pricing_pipeline/`:
 | Values inserted into notebook cells | `scaffold/config.py`, `scaffold/render.py`, `scaffold/service.py` |
 | CLI flags or init files | `cli.py`, `scaffold/commands.py` |
 | Analyst operations or model choices | `notebook.py`, `models/pricing.py` |
-| Reusable model configuration | `modeling/recipes/`; SQL revision allocation and inheritance in `publishing/recipes.py` |
+| Reusable model configuration | `modeling/recipes/`; SQL revision allocation and inheritance in `publishing/recipes.py`; gzip storage and the decoded `recipe_json` column in `resources/migrations/V052__compressed_model_recipes.sql` |
 | Champion and challenger registry | `workbench/champion.py`; `resources/migrations/V051__model_registry.sql` and the SQLite view mirror |
 | Fit, CV and export | `modeling/standard_superglm.py` |
 | Save or deploy a version | `publishing/publish.py`, `publishing/deployment.py` |

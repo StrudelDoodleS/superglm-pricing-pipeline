@@ -63,7 +63,7 @@ remains available for consumers that specifically want only spline segments.
 
 ## SQL monitoring baselines, V049
 
-Apply the migration chain through V051 before publishing with this version.
+Apply the migration chain through V052 before publishing with this version.
 V049 adds `pricing.MODEL_MONITORING_BASELINE`. It retains existing data and does
 not recreate model notebooks. Each successful publication captures one immutable
 row containing explicit JSON model state and its source lineage. Unsupported
@@ -709,7 +709,7 @@ directories; do not commit copied runnable SQL.
 
 ## Recipe revisions, V047 and V048
 
-Run the existing migration command through V048 before using recipe publication.
+Apply the full migration chain before using recipe publication.
 V047 adds `pricing.MODEL_RECIPE` and recipe linkage/status on `MODEL_RUN`. Old
 runs remain `LEGACY`; their model/package identifiers and dates are unchanged.
 V048 adds recipe revision, SHA-256 and status to the final-model and validation
@@ -748,6 +748,27 @@ skip cross-export equivalence; exact-export retries remain valid.
 The rating fingerprint itself is unchanged.
 Direct SQL writes do not provide the complete publication protocol.
 
+## Compressed recipes, V052
+
+SQL Server stores each recipe in `MODEL_RECIPE.recipe_gzip`, a `VARBINARY(MAX)`
+column. Publication writes `COMPRESS(CAST(:json AS NVARCHAR(MAX)))`. The
+`recipe_json` column decodes those bytes when selected and stores no second
+copy. `save_model_version()` handles this automatically. Existing readers and
+notebooks receive the same JSON and need no compression settings or extra cells.
+SQLite keeps plain text for local workflows.
+
+V052 compresses existing recipes in the administrator migration transaction.
+It checks byte-for-byte restoration before replacing the text column. Recipe
+IDs, revision numbers, hashes, timestamps and run links remain unchanged.
+Apply V052 with the updated package; older writers cannot insert into the
+computed `recipe_json` column. Pause publication jobs during the upgrade.
+
+SQL Server's gzip payload contains UTF-16LE text. The recipe hash continues to
+use canonical UTF-8 JSON. Python clients on Windows and Linux use the same
+publication and loading functions; SQL Server handles compression and decoding.
+
+## SQL Server recipe tests
+
 Live SQL recipe checks require an explicitly designated test database and private
 runtime module. They never create or reset a database and leave committed test
 history for inspection. Run with:
@@ -758,10 +779,13 @@ PRICING_RECIPE_TEST_DATABASE=PricingRecipeTest \
   uv run python -m pytest tests/recipes/test_sqlserver_integration.py -ra
 ```
 
-Use a disposable test destination with the pipeline initialized through V046 to
-exercise the upgrade; a destination already at V048 skips that upgrade scenario.
-The tests validate the database name before writes. They cover migration,
-concurrent allocation, rollback, immutable links and view queries. SQLite and
-T-SQL parser results do not establish live SQL Server behavior. No live runtime
-or test database was available during this implementation, so live checks remain
-outstanding.
+Use a disposable test destination initialized through V046 to V052. Starting
+at V046 also exercises the original recipe upgrade. The compression test creates
+an isolated schema with an existing Unicode recipe over 8 KB, runs V052, checks
+its contents and links, and rolls the schema back. The tests also cover gzip
+interoperability with Python, invalid documents, concurrent allocation, rollback,
+immutable links and view queries. They validate the database name before writes.
+
+SQLite and T-SQL parser results do not establish live SQL Server behavior. No
+live runtime or test database was available during this implementation, so live
+checks remain outstanding.

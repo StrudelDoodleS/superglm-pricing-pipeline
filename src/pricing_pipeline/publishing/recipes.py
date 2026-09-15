@@ -2,6 +2,7 @@
 
 Lock the registered model, reuse an identical canonical recipe or allocate
 its next revision. Compare stored content as well as its hash on reuse.
+SQL Server stores gzip bytes and exposes decoded JSON through a computed column.
 TOML editing and estimator reconstruction belong to ``modeling.recipes``.
 """
 
@@ -150,9 +151,15 @@ def resolve_recipe(
         ),
         params,
     ).scalar_one()
+    # SQL Server exposes decoded JSON through a computed column. SQLite keeps
+    # plain text for local workflows and inspection with ordinary SQLite tools.
+    json_column = "recipe_json" if connection.dialect.name == "sqlite" else "recipe_gzip"
+    json_value = (
+        ":json" if connection.dialect.name == "sqlite" else "COMPRESS(CAST(:json AS NVARCHAR(MAX)))"
+    )
     connection.execute(
         text(
-            f"INSERT INTO {schema}.MODEL_RECIPE (model_id, recipe_revision, recipe_sha256, recipe_format_version, recipe_json, created_by) VALUES (:model_id, :revision, :sha256, :format, :json, :created_by)"
+            f"INSERT INTO {schema}.MODEL_RECIPE (model_id, recipe_revision, recipe_sha256, recipe_format_version, {json_column}, created_by) VALUES (:model_id, :revision, :sha256, :format, {json_value}, :created_by)"
         ),
         params
         | {

@@ -32,7 +32,7 @@ uv run pricing-pipeline scaffold --model-name BURN_COST --target-name burn_cost 
 ```
 
 Keep your model name, package name and deployment slot consistent with the
-existing project. The database needs migrations through V051, and the deployed
+existing project. The database needs migrations through V052, and the deployed
 model needs a captured SQL baseline. See the [SQL baseline upgrade](README.md#sql-baselines-and-existing-notebooks)
 for older publications that need a one-time capture.
 

@@ -26,7 +26,7 @@ assert (
     == importlib.metadata.version("superglm-pricing-pipeline")
     == "0.2.1"
 )
-assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 51
+assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 52
 assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if item.is_file())) == (
     "mlops.sql",
     "pricing.sql",
