@@ -89,3 +89,17 @@ def test_registry_distinguishes_grouped_fits_from_coefficient_edits(sql_review_c
             CASE model_run_id WHEN '1' THEN 'ROUTINE_EDIT' ELSE 'EDITOR_EDIT' END""")
         )
     assert [row["refit_type"] for row in _registry(engine)] == ["Grouped fit", "Manual adjustment"]
+
+
+def test_registry_and_review_report_package_publication_time(sql_review_case):
+    from pricing_pipeline.workbench.champion import review_model_version
+
+    engine, config = sql_review_case
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE pricing.MODEL_RUN SET created_ts='2026-08-01 09:00:00'"))
+        connection.execute(
+            text("UPDATE pricing.PRICING_RATE_PACKAGE SET created_ts='2026-08-02 10:00:00'")
+        )
+    assert {row["published_at"] for row in _registry(engine)} == {"2026-08-02 10:00:00"}
+    reviewed = review_model_version(engine, model_config=config, model_id=17, package_version=1)
+    assert reviewed.published_at == "2026-08-02 10:00:00"

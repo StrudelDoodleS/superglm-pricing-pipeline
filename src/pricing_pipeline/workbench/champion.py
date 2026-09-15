@@ -144,7 +144,7 @@ def _version_rows(connection, engine, *, model_config, model_id, package_version
                package.package_version, package.rate_package_id, run.model_run_id,
                run.model_version, run.model_kind, run.manifest_id,
                recipe.recipe_revision AS definition_revision,
-               run.created_ts AS published_at,
+               package.created_ts AS published_at,
                CASE WHEN deployment.rate_package_id=package.rate_package_id THEN 'CHAMPION'
                     WHEN EXISTS (
                         SELECT 1 FROM {pricing}.PRICING_MODEL_DEPLOYMENT AS history

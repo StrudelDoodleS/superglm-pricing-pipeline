@@ -361,6 +361,9 @@ def test_package_writer_reserves_staged_version_for_direct_root_publication(
     }
     assert connection.statements.index(reservation) < connection.statements.index(package)
     package_sql, package_params = package
+    # DBAPI adapters must receive a Python scalar, not NumPy's np.float64(...)
+    # representation, which pymssql sends as an invalid SQL expression.
+    assert type(package_params["base_rate"]) is float
     bind_names = set(re.findall(r":([a-z0-9_]+)", package_sql))
     assert bind_names <= package_params.keys()
     export = tables.export_frame.iloc[0]

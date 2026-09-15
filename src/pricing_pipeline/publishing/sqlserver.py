@@ -1150,7 +1150,7 @@ def _insert_draft_package(
         "model_name": release["model_name"],
         "model_version": release["model_version"],
         "package_version": package_version,
-        "base_rate": export["base_rate"],
+        "base_rate": float(export["base_rate"]),
         "effective_from_date": release["effective_from_date"],
         "effective_to_date": release["effective_to_date"],
         "package_status": "DRAFT",

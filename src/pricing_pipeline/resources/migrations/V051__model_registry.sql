@@ -22,7 +22,7 @@ SELECT model.model_name, model.model_label, slots.deployment_slot,
                                    WHEN 'ROUTINE_EDIT' THEN 'Grouped fit'
                                    ELSE 'Manual adjustment' END
        END AS refit_type,
-       manifest.data_as_of_date, run.created_ts AS published_at,
+       manifest.data_as_of_date, package.created_ts AS published_at,
        package.package_version, package.rate_package_id, run.model_run_id,
        run.model_version AS fit_version, package.package_status, run.model_kind,
        model.model_id, model.target_name, model.model_type,
@@ -98,7 +98,7 @@ EXEC sys.sp_addextendedproperty @name=N'MS_Description',
 GO
 
 EXEC sys.sp_addextendedproperty @name=N'MS_Description',
-    @value=N'UTC publication timestamp from MODEL_RUN. Distinct from the source completeness date in data_as_of_date and the time a human deploys the package.',
+    @value=N'UTC creation timestamp of the published PRICING_RATE_PACKAGE. Distinct from the source completeness date in data_as_of_date and the time a human deploys the package.',
     @level0type=N'SCHEMA', @level0name=N'pricing', @level1type=N'VIEW', @level1name=N'V_MODEL_REGISTRY',
     @level2type=N'COLUMN', @level2name=N'published_at';
 GO
