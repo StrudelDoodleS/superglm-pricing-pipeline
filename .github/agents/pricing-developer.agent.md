@@ -52,7 +52,7 @@ Useful starting points under `src/pricing_pipeline/`:
 
 | Task | Start here |
 |---|---|
-| Notebook cells or default code | `resources/scaffold/notebooks/*.ipynb` |
+| Notebook cells or default code | `resources/scaffold/notebooks/*.ipynb`; weekly file in `resources/scaffold/monitoring.py.template` |
 | Values inserted into notebook cells | `scaffold/config.py`, `scaffold/render.py`, `scaffold/service.py` |
 | CLI flags or init files | `cli.py`, `scaffold/commands.py` |
 | Analyst operations or model choices | `notebook.py`, `models/pricing.py` |
@@ -60,7 +60,7 @@ Useful starting points under `src/pricing_pipeline/`:
 | Fit, CV and export | `modeling/standard_superglm.py` |
 | Save or deploy a version | `publishing/publish.py`, `publishing/deployment.py` |
 | Editor publication | `publishing/editor.py`, then its named stage modules |
-| Monitoring | `modeling/monitoring/storage.py` for SQL baseline capture/loading, `snapshot.py` for its JSON contract, `data_checks.py` for preflight, `workflow.py` for refits, `persistence.py` for observations |
+| Monitoring | `modeling/monitoring/storage.py` for SQL baseline capture/loading, `snapshot.py` for its JSON contract, `data_checks.py` for preflight, `batch.py` for the weekly sequence, `workflow.py` for refits, `persistence.py` for observations, `challengers.py` for fitted-package export |
 | Reports | `reporting/report.py`; adapter records are in `evidence_types.py` |
 
 Notebook generation reads six complete `.ipynb` templates, substitutes tokens
@@ -68,7 +68,14 @@ in their JSON strings and writes copies. Edit a template to change the cells
 future projects receive. Edit an existing project's notebook to change that
 project. `notebook.py` contains the operations those cells call.
 
-Weekly monitoring loads explicit baseline state from SQL. Keep its codec separate
+Weekly monitoring loads explicit baseline state from SQL. The generated
+`monitoring.py` and notebook 07 call `notebook.run_monitoring`; the script runner
+adds logs and exit codes. It saves one champion score and three exact fitted
+challengers. Notebook 06 uses `workbench/champion.py` for SQL-only review and
+explicit promotion. See `docs/notebooks/weekly_monitoring.md`.
+
+Snapshots retain original declared refit controls separately from actual fitted
+execution settings. Preserve that distinction when changing promotion or refits. Keep its codec separate
 from the joblib bundle used by interactive editing. Preserve exact static scoring,
 frozen geometry and lambda rules, aggregate drift references and SQL lineage
 checks. An upgrade must not require analysts to regenerate completed notebooks.

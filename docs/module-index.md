@@ -71,6 +71,8 @@ they are not a list of additional public APIs.
 | Module | Purpose |
 |---|---|
 | [modeling/monitoring/__init__.py](../src/pricing_pipeline/modeling/monitoring/__init__.py) | Controlled monitoring refits and their saved audit evidence. |
+| [modeling/monitoring/batch.py](../src/pricing_pipeline/modeling/monitoring/batch.py) | Check and run four variants on one fresh dataset, save observations and optionally publish exact refits. |
+| [modeling/monitoring/challengers.py](../src/pricing_pipeline/modeling/monitoring/challengers.py) | Export fitted challengers, publish their SQL state and remove temporary files. |
 | [modeling/monitoring/baseline.py](../src/pricing_pipeline/modeling/monitoring/baseline.py) | Verify the saved baseline and bind a monitoring dataframe to its declared roles. |
 | [modeling/monitoring/storage.py](../src/pricing_pipeline/modeling/monitoring/storage.py) | Capture baseline state at publication, load the current deployment from SQL and verify its source lineage. |
 | [modeling/monitoring/snapshot.py](../src/pricing_pipeline/modeling/monitoring/snapshot.py) | Define and validate versioned JSON baseline state without training rows or Python object serialization. |
@@ -109,6 +111,7 @@ they are not a list of additional public APIs.
 | Module | Purpose |
 |---|---|
 | [publishing/__init__.py](../src/pricing_pipeline/publishing/__init__.py) | Turn completed builds into SQL rating packages and deploy selected packages. |
+| [publishing/monitoring.py](../src/pricing_pipeline/publishing/monitoring.py) | Verify immutable links between sealed monitoring observations and published challengers. |
 | [publishing/deployment.py](../src/pricing_pipeline/publishing/deployment.py) | Activate a published rating package in a model's deployment slot. |
 | [publishing/editor.py](../src/pricing_pipeline/publishing/editor.py) | Verify editor or manual changes and publish them as a child package. |
 | [publishing/editor_contracts.py](../src/pricing_pipeline/publishing/editor_contracts.py) | Records and submission identity shared by the edit publication stages. |
@@ -179,7 +182,7 @@ they are not a list of additional public APIs.
 
 | Module | Purpose |
 |---|---|
-| [resources/scaffold/__init__.py](../src/pricing_pipeline/resources/scaffold/__init__.py) | Ship the default project TOML, builder/developer agents and six notebook templates. |
+| [resources/scaffold/__init__.py](../src/pricing_pipeline/resources/scaffold/__init__.py) | Ship the default project TOML, builder/developer agents, seven notebooks and the weekly monitoring module. |
 
 ## Developer tools
 
@@ -187,3 +190,10 @@ they are not a list of additional public APIs.
 |---|---|
 | [tools/__init__.py](../src/pricing_pipeline/tools/__init__.py) | Support repository maintenance tasks outside the notebook model workflow. |
 | [tools/db_diagrams.py](../src/pricing_pipeline/tools/db_diagrams.py) | Read database metadata and generate a browsable SQL schema diagram. |
+
+The generated `monitoring.py` calls `notebook.run_monitoring`.
+[`monitoring_runner.py`](../src/pricing_pipeline/monitoring_runner.py) supplies
+logs and process exit codes for direct script execution.
+[`workbench/champion.py`](../src/pricing_pipeline/workbench/champion.py) reads
+SQL-only package reviews and binds promotion to the current deployment seen
+during review.

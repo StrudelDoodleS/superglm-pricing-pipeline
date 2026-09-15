@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from pricing_pipeline.modeling.monitoring.snapshot_fitting import monitoring_recipe
 from pricing_pipeline.modeling.recipes.superglm import decode_feature
 
 
@@ -114,7 +115,7 @@ def sql_feature_domains(
     payload: dict[str, Any],
 ) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
     """Combine fitted receipt domains with validated, unfitted recipe constructors."""
-    recipe = payload["recipe"]
+    recipe = monitoring_recipe(payload)
     configured = {
         name: decode_feature(recipe["features"][name], f"features.{name}")
         for name in recipe["feature_order"]

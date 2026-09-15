@@ -22,7 +22,6 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringError,
     MonitoringFitResult,
     MonitoringInvariantEvidence,
-    MonitoringLambda,
     MonitoringVariant,
     _canonical_json,
     _required_sha256,
@@ -161,7 +160,9 @@ def _protected_geometry_fields(
     from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
 
     if isinstance(baseline, SqlBaseline):
-        return tuple(baseline.payload()["protected_geometry_fields"])
+        from pricing_pipeline.modeling.monitoring.snapshot_fitting import declared_geometry_fields
+
+        return declared_geometry_fields(baseline.payload())
 
     protected: list[str] = []
     for term_name, configured in baseline._config.feature_templates:
@@ -251,7 +252,7 @@ def _verify_monitoring_invariants(
         )
 
     baseline_lambda_rows = (
-        tuple(MonitoringLambda(**row) for row in baseline.payload()["fitted_lambda_policies"])
+        baseline.monitoring_lambda_policies
         if isinstance(baseline, SqlBaseline)
         else _result_lambdas(baseline, MonitoringVariant.REESTIMATE_LAMBDA)
     )

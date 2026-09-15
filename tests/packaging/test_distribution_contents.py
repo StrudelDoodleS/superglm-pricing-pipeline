@@ -85,6 +85,7 @@ MIGRATION_FILES = (
     "V047__model_recipes.sql",
     "V048__recipe_revision_views.sql",
     "V049__sql_monitoring_baselines.sql",
+    "V050__monitoring_challenger_publications.sql",
 )
 BASE_REQUIREMENTS = (
     "joblib",
@@ -119,6 +120,7 @@ SCAFFOLD_NOTEBOOK_FILES = (
     "04_model_editor.ipynb",
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_model_monitoring.ipynb",
 )
 SCAFFOLD_TEMPLATE = b"""# Connection names only. Keep credentials in the private runtime module or its secret provider.
 
@@ -239,6 +241,7 @@ def _expected_resource_names() -> set[str]:
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
         f"{SCAFFOLD_PREFIX}pricing-builder.agent.md",
         f"{SCAFFOLD_PREFIX}pricing-developer.agent.md",
+        f"{SCAFFOLD_PREFIX}monitoring.py.template",
         f"{SCAFFOLD_PREFIX}sql/README.md",
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
@@ -247,7 +250,7 @@ def _expected_resource_names() -> set[str]:
 
 
 def _assert_resource_inventory(names: set[str]) -> None:
-    assert len(MIGRATION_FILES) == 49
+    assert len(MIGRATION_FILES) == 50
     assert {
         name for name in names if name.startswith(RESOURCE_PREFIX)
     } == _expected_resource_names()

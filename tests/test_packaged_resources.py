@@ -17,6 +17,7 @@ SCAFFOLD_NOTEBOOKS = (
     "04_model_editor.ipynb",
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_model_monitoring.ipynb",
 )
 
 EXPECTED_MIGRATIONS = (
@@ -69,6 +70,7 @@ EXPECTED_MIGRATIONS = (
     "V047__model_recipes.sql",
     "V048__recipe_revision_views.sql",
     "V049__sql_monitoring_baselines.sql",
+    "V050__monitoring_challenger_publications.sql",
 )
 
 

@@ -55,7 +55,8 @@ column names, database names or business assumptions.
 
 Use `pricing-pipeline scaffold --help` to check current options. Fill in
 `pricing_scaffold.toml`, then scaffold the new model with its model name and
-target name. Keep the six generated notebooks and their separate steps.
+target name. Keep the seven generated notebooks and their separate steps.
+Keep `monitoring.py` beside notebook 07 as its shared configuration and execution file.
 For an existing model, edit its notebooks in place. Do not use `--force` to
 overwrite analyst work as a shortcut.
 
@@ -176,12 +177,11 @@ successful build is saved. A recipe revision identifies declared modelling
 choices; model_version and package_version retain their existing fitted-build
 and package meanings. New data can produce a new build using the same recipe.
 Post-fit edits retain their training recipe plus edit lineage. Loading a recipe
-is an ordinary refit. For weekly monitoring, use
-`load_monitoring_baseline(pricing, model=model)` from `pricing_pipeline.notebook`.
-It reads the deployed configuration and fitted settings from SQL. Pass it to
-`check_monitoring_data` and `run_monitoring_fit`; do not require a local model file.
+is an ordinary refit. For weekly monitoring, use notebook 07 and its generated
+`monitoring.py` module. They read the deployed configuration and fitted settings
+from SQL; do not require a local model file.
 Saving a challenger does not deploy it. Keep notebook 06 and deployment selection
-separate. SQL stores need migrations through V049 before use.
+separate. SQL stores need the current package migrations before use.
 
 Package updates do not rewrite existing 01 or 02 notebooks. Preserve completed
 cells and recipe TOMLs. The existing publication call captures the new SQL state
@@ -189,6 +189,87 @@ automatically. Older publications can use the explicit one-time
 `capture_existing_monitoring_baseline(candidate)` helper while their verified
 artifact is available. Explain that this writes SQL. Never regenerate a filled
 project with `--force` as an upgrade step.
+
+## Configure recurring monitoring
+
+An ordinary scaffold rerun adds `07_model_monitoring.ipynb` and `monitoring.py`
+to an existing model. Use its existing model name, target and package name.
+Preserve completed 01/02 cells, the other notebooks, and edited monitoring files.
+
+Keep model identity and connection settings in `monitoring.py`. Notebook 07 imports
+and reloads that module, calls its `run()` function, and displays the resulting runs,
+metrics, warnings and categorical drift. Do not duplicate those settings in the
+notebook. Retain `runtime_module`, the expected destination database check and the
+remote write guard. Credentials belong in the project's private runtime.
+
+Configure the one editable `load_dataset()` function with the analyst's current
+source query and enrichment. The generated error is deliberate until that read is
+configured. Source reads may use a separate runtime and database from monitoring
+storage. Return `PricingDataset` with a dataset name, source name, unique key and
+the source snapshot-date column. Preserve deterministic row order and any source
+columns required by the saved transforms. Do not substitute 01's saved dataset or
+use today's run date as the data's snapshot date.
+
+Explain the four modes before the first run. `STATIC_SCORE` uses the deployed
+coefficients. `FROZEN_REFIT` refits coefficients with the saved basis and penalties.
+`REESTIMATE_LAMBDA` also reestimates smoothing penalties. `FULL_ADAPTIVE` rebuilds
+the basis on current data and reestimates penalties. Each weekly run scores the
+current champion once and publishes the three refits as challenger packages.
+It records four observations and does not promote a challenger.
+
+The report's `role` distinguishes `CHAMPION` from `CHALLENGER`. Its
+`baseline_model_run_id`, `baseline_deployment_id`, `baseline_rate_package_id` and
+`baseline_package_version` identify the champion used for comparison. The three
+challengers also have `model_run_id`, `rate_package_id`, `package_version`,
+`model_version`, `package_status` and `publication_reused` values. The static score
+does not create a candidate package. Each observation is persisted separately, so
+a later failure can leave earlier observations and publications saved. Exact-evidence
+retries reuse prior results.
+
+For an authorized monitoring run, guide the analyst through one successful manual
+terminal execution before scheduling. Notebook 07 prints the exact command. The
+scheduler must execute the generated file with the project's Python interpreter:
+
+```text
+/absolute/project/.venv/bin/python /absolute/project/pricing_models/model_name/monitoring.py
+```
+
+On Windows, Task Scheduler uses the Python executable as Program/script and the
+quoted absolute `monitoring.py` path as Add arguments. WSL cron uses the same file
+command printed by its project kernel. Keep the interpreter environment and project
+path fixed. The generated module resolves its own directory and imports the project
+runtime even when the scheduler starts elsewhere. Check the terminal's reported log
+under the model's `.local/monitoring_logs` and its exit status. A nonzero status means
+the run failed. The machine, WSL when used, source system and model database must be
+available. Scaffolding does not register an operating-system task.
+
+## Review and promote a challenger
+
+Use `06_model_deployment.ipynb` for review and promotion. It lists the slot's
+current champion, all published packages, and `list_challengers(pricing, model=model)`.
+Ordinary training packages remain selectable through `list_model_versions`.
+Explain which champion a weekly challenger was compared with; a saved challenger
+may predate the current champion.
+
+Require the analyst to set an explicit `PACKAGE_VERSION`. Do not choose the newest
+package when it is unset. Call `review_model_version(pricing, model=model,
+package_version=PACKAGE_VERSION)` and display the returned summary and metrics.
+This review reads SQL and needs no local model files. Preserve the returned immutable
+review record for the separate promotion cell.
+
+For an authorized promotion, enter `DEPLOYMENT_REASON` in its separate decision
+cell after review. Keep that cell separate from the model and connection settings,
+which invalidate the previous review when changed. Call
+`deploy_model_version(pricing, package=reviewed, reason=DEPLOYMENT_REASON)`. This
+changes the champion in the selected deployment slot. If the package selection
+changes, review it again. If the slot's champion changed since review, the database
+rejects the stale review. Refresh the lists, compare again and obtain a fresh review;
+do not bypass that check. Weekly notebook and scheduler execution never promotes
+the packages it creates.
+
+Scaffold reruns preserve an existing 06. Update its review cells deliberately to
+adopt this SQL workflow, while retaining the analyst's configuration and completed
+work. Do not use `--force` to replace a filled notebook.
 
 `pricing-pipeline init` preserves customized agent files. An existing project's
 agent needs an intentional manual update to adopt these instructions.

@@ -63,7 +63,7 @@ remains available for consumers that specifically want only spline segments.
 
 ## SQL monitoring baselines, V049
 
-Apply the migration chain through V049 before publishing with this version.
+Apply the migration chain through V050 before publishing with this version.
 V049 adds `pricing.MODEL_MONITORING_BASELINE`. It retains existing data and does
 not recreate model notebooks. Each successful publication captures one immutable
 row containing explicit JSON model state and its source lineage. Unsupported
@@ -88,6 +88,32 @@ SELECT model_run_id, capture_status, unavailable_reason,
        snapshot_schema_version, superglm_version, snapshot_sha256
 FROM pricing.MODEL_MONITORING_BASELINE;
 ```
+
+## Champion and challenger packages, V050
+
+`mlops.MODEL_MONITOR_PUBLICATION` links a sealed refit observation to the exact
+published model run. It is immutable and has one row per published challenger.
+`STATIC_SCORE` represents the champion and creates no new package. Distinct
+variants keep distinct package identities even when their rates happen to match.
+
+`pricing.V_MODEL_CHALLENGER` joins the candidate package, its monitoring variant,
+baseline and dated dataset with the current deployment. Use it to list weekly
+challengers. The champion remains the open row in
+`pricing.PRICING_MODEL_DEPLOYMENT` for the selected model and slot; the link table
+does not introduce another deployment status.
+
+A successful challenger publication also needs a captured SQL monitoring
+snapshot. New snapshots keep the original declared knot and lambda policies
+separately from the actual execution settings. This allows later adaptive refits
+after a frozen challenger is promoted. Older snapshot v1 remains readable.
+
+`mlops.TR_MODEL_MONITOR_PUBLICATION_LINEAGE_GUARD` checks the observation and
+candidate on insertion; `mlops.TR_MODEL_MONITOR_PUBLICATION_IMMUTABLE` rejects
+updates and deletions. `pricing.TR_DATASET_MANIFEST_CHALLENGER_IDENTITY` preserves
+the baseline dataset identity once a challenger publication references it.
+
+SQL-only review and promotion need no local fitted model files. The promotion
+transaction checks the package and deployment IDs seen during review.
 
 ## Data and run lineage
 

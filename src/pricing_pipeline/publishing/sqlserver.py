@@ -23,6 +23,11 @@ from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.publishing.identity import canonical_json, canonical_revision_metadata
 from pricing_pipeline.publishing.lineage import record_model_run
 from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
+from pricing_pipeline.publishing.monitoring import (
+    reuse_monitoring_publication,
+    save_monitoring_publication,
+    validate_export_monitoring_link,
+)
 from pricing_pipeline.publishing.publish import (
     CompletedModelPublishResult,
     DraftVerification,
@@ -776,6 +781,9 @@ def _resolve_existing_or_equivalent(
     tables: RatingTables,
 ) -> CompletedModelPublishResult | None:
     build = prepared.build
+    monitoring = reuse_monitoring_publication(connection, build)
+    if monitoring is not None:
+        return monitoring
     revision_metadata_json = canonical_revision_metadata(prepared.revision_metadata)
     existing = (
         connection.execute(
@@ -820,14 +828,18 @@ def _resolve_existing_or_equivalent(
             )
         if str(existing["package_status"]).upper() != "PUBLISHED":
             raise RuntimeError("existing model package is not PUBLISHED")
-        return _completed_package(
+        completed = _completed_package(
             connection,
             prepared=prepared,
             rate_package_id=int(existing["rate_package_id"]),
             was_existing=True,
             deduplicated=False,
         )
+        validate_export_monitoring_link(connection, build, completed.model_run_id)
+        return completed
 
+    if build.monitor_run_id is not None:
+        return None
     equivalent = (
         connection.execute(
             text(
@@ -854,6 +866,8 @@ def _resolve_existing_or_equivalent(
                   AND mr.model_kind = :model_kind
                   AND mr.model_equivalence_sha256 = :model_equivalence_sha256
                   AND mr.run_status = 'SUCCESS'
+                  AND NOT EXISTS (SELECT 1 FROM mlops.MODEL_MONITOR_PUBLICATION AS monitor_link
+                                  WHERE monitor_link.model_run_id=mr.model_run_id)
                   {identity_predicate()}
                 ORDER BY rp.package_version
                 """
@@ -1704,6 +1718,9 @@ def publish_sqlserver(
             save_publication_monitoring_baseline(
                 connection, model_run_id=existing.model_run_id, prepared=prepared
             )
+            save_monitoring_publication(
+                connection, build=prepared.build, model_run_id=existing.model_run_id
+            )
             _delete_staging_children(connection, export_id=prepared.build.export_id)
             return existing
         _replace_staging_frames(connection, prepared, tables)
@@ -1715,6 +1732,7 @@ def publish_sqlserver(
         save_publication_monitoring_baseline(
             connection, model_run_id=model_run_id, prepared=prepared
         )
+        save_monitoring_publication(connection, build=prepared.build, model_run_id=model_run_id)
         _delete_staging_children(connection, export_id=prepared.build.export_id)
         return replace(
             _publication_result(package, model_run_id, prepared),

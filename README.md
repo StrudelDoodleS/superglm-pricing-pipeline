@@ -39,7 +39,7 @@ those scripts to your model project.
 `get_engine(database=None)`. The TOML contains no credentials: keep them in
 that module's secret provider.
 
-The scaffold creates six notebooks under `pricing_models/claim_frequency/`:
+The scaffold creates seven notebooks under `pricing_models/claim_frequency/`:
 
 | Notebook | Purpose |
 |---|---|
@@ -48,7 +48,8 @@ The scaffold creates six notebooks under `pricing_models/claim_frequency/`:
 | `03_model_training.ipynb` | Fit and publish `RAW`, then optionally `ROUTINE_EDIT`. |
 | `04_model_editor.ipynb` | Optionally publish an `EDITOR_EDIT`. |
 | `05_manual_adjustment.ipynb` | Apply replayable business factors and optionally deploy a `MANUAL_EDIT`. |
-| `06_model_deployment.ipynb` | Review and deploy one selected package. |
+| `06_model_deployment.ipynb` | Review SQL evidence and explicitly promote a champion. |
+| `07_model_monitoring.ipynb` | Score the champion and publish three weekly challengers via `monitoring.py`. |
 
 `pricing_scaffold.toml` supplies connection names and safe notebook defaults.
 An explicit `--config` wins, and explicit command-line options win over the
@@ -58,7 +59,6 @@ notebooks set it to `False`.
 `init` seeds **Pricing builder** and **Pricing developer** under `.github/agents/`.
 Rerunning it adds missing agents and preserves config and agent edits. For package
 maintenance, the developer agent uses the [source navigation guides](docs/MAINTAINERS.md).
-
 The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same scaffold.
 
 ## Important rules
@@ -114,10 +114,10 @@ uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
 uv build --force-pep517 --sdist --wheel --out-dir dist
 ```
 
-Apply migrations through V049 before publishing with this version.
+Apply migrations through V050 before publishing with this version.
 
-Weekly monitoring loads the deployed model from SQL with `load_monitoring_baseline`.
-See the [SQL monitoring notebook](tutorials/sql_monitoring/demo.ipynb) and [upgrade notes](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).
+Schedule the generated `monitoring.py` with the project interpreter.
+See [weekly runs and champion promotion](docs/notebooks/weekly_monitoring.md) and [SQL baseline upgrades](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).
 
 Package updates preserve your completed 01 and 02 notebooks and recipe TOMLs.
 New publications capture the SQL baseline automatically. Do not regenerate an

@@ -43,6 +43,7 @@ from pricing_pipeline.data.transforms import (
     transforms_metadata,
 )
 from pricing_pipeline.infra.config import Settings
+from pricing_pipeline.infra.file_lock import exclusive_file_lock
 from pricing_pipeline.infra.offline_sqlite import open_offline_sqlite
 from pricing_pipeline.infra.runtime import runtime_from_env_or_module
 from pricing_pipeline.infra.schema import schema_names_from_connectable
@@ -72,6 +73,7 @@ from pricing_pipeline.modeling.monitoring import (
     MonitoringDataError,
     MonitoringFitResult,
     MonitoringInvariantEvidence,
+    MonitoringReport,
     MonitoringVariant,
     PersistedMonitoringRun,
     SqlBaseline,
@@ -113,6 +115,7 @@ from pricing_pipeline.publishing.sqlserver import (
     register_pricing_model,
     resolve_model_version_for_export,
 )
+from pricing_pipeline.workbench.champion import ReviewedModelVersion
 from pricing_pipeline.workbench.core import Candidate, Workbench
 from pricing_pipeline.workbench.submission import save_editor_submission
 
@@ -801,6 +804,75 @@ def load_monitoring_baseline(
     )
 
 
+def list_challengers(pricing: NotebookContext, *, model: RegisteredModel) -> pd.DataFrame:
+    """List published SQL packages, monitoring origins and the current champion."""
+    from pricing_pipeline.workbench.champion import list_challengers as _list_challengers
+
+    return _list_challengers(pricing.engine, model_config=model.config, model_id=model.model_id)
+
+
+def review_model_version(
+    pricing: NotebookContext,
+    *,
+    model: RegisteredModel,
+    package_version: int,
+) -> ReviewedModelVersion:
+    """Review a saved package and current champion using SQL alone.
+
+    Return an immutable selection with summary and metric tables. Pass it to
+    ``deploy_model_version`` after review. No fitted model file is opened.
+    """
+    from pricing_pipeline.workbench.champion import review_model_version as _review_model_version
+
+    return _review_model_version(
+        pricing.engine,
+        model_config=model.config,
+        model_id=model.model_id,
+        package_version=package_version,
+    )
+
+
+def run_monitoring(
+    pricing: NotebookContext,
+    *,
+    model: RegisteredModel,
+    dataset: PricingDataset,
+    component_role: str = "OTHER",
+    created_by: str | None = None,
+    continuous_points: int = 101,
+    max_reml_iter: int = 20,
+    reml_tol: float | None = None,
+) -> MonitoringReport:
+    """Score the champion and save three refitted challengers from fresh data.
+
+    Load the deployed baseline, apply its saved transforms and column roles,
+    check data support, fit all variants, then persist evidence and the exact
+    fitted challengers. Promotion is a separate explicit operation. The result
+    contains package IDs, metrics, compatibility issues and categorical drift.
+    A model-directory lock serializes notebook and scheduled runs in this project.
+    """
+    pricing.require_write("monitoring")
+    with exclusive_file_lock(model.source_root / ".local" / "monitoring.lock"):
+        baseline = load_monitoring_baseline(pricing, model=model)
+        from pricing_pipeline.modeling.monitoring.batch import run_monitoring_batch
+        from pricing_pipeline.modeling.monitoring.challengers import MonitoringPublicationConfig
+
+        return run_monitoring_batch(
+            pricing.engine,
+            baseline,
+            dataset,
+            target_column=model.config.target_name,
+            component_role=component_role,
+            created_by=_created_by(created_by),
+            continuous_points=continuous_points,
+            max_reml_iter=max_reml_iter,
+            reml_tol=reml_tol,
+            publication=MonitoringPublicationConfig(
+                settings=pricing.settings, model_config=model.config, model_id=model.model_id
+            ),
+        )
+
+
 def open_deployed_candidate(
     pricing: NotebookContext,
     *,
@@ -991,20 +1063,30 @@ def publish_manual_adjustment(
 def deploy_model_version(
     pricing: NotebookContext,
     *,
-    package: Candidate,
+    package: Candidate | ReviewedModelVersion,
     reason: str,
     deployed_by: str | None = None,
 ):
-    """Deploy a saved model version using the deployment snapshot reviewed with it."""
+    """Promote a saved version if its reviewed champion is still current."""
     pricing.require_write("deploy_model_version")
     if pricing.mode == "local":
         raise RuntimeError(
             "Remote mode is required for deployment; local SQLite is an audit "
             "workbench and cannot change a live package."
         )
+    from pricing_pipeline.workbench.champion import promote_model_version
+
+    if isinstance(package, ReviewedModelVersion):
+        if package.engine is not pricing.engine:
+            raise ValueError("package was reviewed with a different notebook context")
+        return promote_model_version(
+            package,
+            deployment_reason=_required_text(reason, "reason"),
+            deployed_by=_created_by(deployed_by),
+        )
     if not isinstance(package, Candidate):
         raise TypeError(
-            "package must come from load_model_version(); deployment requires the "
+            "package must come from review_model_version() or load_model_version(); deployment requires the "
             "champion snapshot that was visible during review"
         )
     if package.workbench.engine is not pricing.engine:
@@ -1052,12 +1134,14 @@ __all__ = [
     "MonitoringDataError",
     "MonitoringFitResult",
     "MonitoringInvariantEvidence",
+    "MonitoringReport",
     "MonitoringVariant",
     "NotebookContext",
     "PersistedMonitoringRun",
     "PricingDataset",
     "PricingModelSpec",
     "RegisteredModel",
+    "ReviewedModelVersion",
     "SqlBaseline",
     "apply_level_groupings",
     "apply_manual_adjustment_policy",
@@ -1073,6 +1157,7 @@ __all__ = [
     "inspect_level_groupings",
     "inspect_model_frame",
     "list_candidate_versions",
+    "list_challengers",
     "list_model_versions",
     "load_level_groupings",
     "load_model_frame",
@@ -1087,6 +1172,8 @@ __all__ = [
     "publish_edits",
     "publish_manual_adjustment",
     "register_model",
+    "review_model_version",
+    "run_monitoring",
     "run_monitoring_fit",
     "save_model_frame",
     "save_model_version",

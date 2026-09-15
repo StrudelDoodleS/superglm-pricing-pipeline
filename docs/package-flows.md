@@ -129,6 +129,15 @@ This workflow is implemented through notebook helpers; `workbench` is not a sepa
 
 ## From a baseline to monitoring evidence
 
+The generated `monitoring.py` and notebook 07 call `notebook.run_monitoring`.
+It locks the model directory, loads the current SQL champion and passes fresh
+data to [`batch.run_monitoring_batch`](../src/pricing_pipeline/modeling/monitoring/batch.py).
+The batch checks every variant before fitting, completes all fits, then saves
+observations and publishes the three exact fitted challengers.
+[`monitoring_runner`](../src/pricing_pipeline/monitoring_runner.py) adds logs and
+exit codes when the Python file runs under a scheduler. See the
+[weekly workflow](notebooks/weekly_monitoring.md) for setup.
+
 Start with [`storage.load_monitoring_baseline`](../src/pricing_pipeline/modeling/monitoring/storage.py)
 to read the current deployment's JSON state from SQL. Publication captures that
 state with the successful model run. It contains the model configuration, fitted
@@ -171,6 +180,10 @@ flowchart TD
     A --> E
     E --> R["MonitoringFitResult"]
     R --> P["persist_monitoring_fit: SQL observation linked to baseline and dataset"]
+    P --> RP["Publish the three exact refits and link each package to its observation"]
+    RP --> RV["Notebook 06: review a selected SQL package and current champion"]
+    RV --> DEP["Explicit promotion with a check for intervening deployments"]
+    DEP --> SQL
 ```
 
 | Preset | Coefficients | Smoothing parameters | Spline knots and boundaries |
@@ -213,8 +226,21 @@ bases and refits with a group-selection penalty rather than relaxing the contrac
 | Save the observation | [`persistence`](../src/pricing_pipeline/modeling/monitoring/persistence.py) | `persist_monitoring_fit` links the result to its baseline run, deployment and dataset manifest. |
 
 Existing imports from `pricing_pipeline.modeling.monitoring` still work.
-Monitoring observations do not allocate deployable packages. The persistence
-transaction and its retry handling remain together in one module.
+`persist_monitoring_fit` writes observations.
+[`challengers`](../src/pricing_pipeline/modeling/monitoring/challengers.py) exports
+the already fitted models and publishes them without fitting again.
+[`publishing.monitoring`](../src/pricing_pipeline/publishing/monitoring.py) verifies
+the sealed evidence and writes the immutable publication link in the publication
+transaction. Temporary files are removed after SQL capture. Exact retries reuse
+the linked package; distinct variants retain separate identities.
+
+[`workbench.champion`](../src/pricing_pipeline/workbench/champion.py) loads a SQL-only
+review. Promotion uses the current package and deployment IDs recorded during
+review, checked again inside the deployment transaction. Weekly execution never
+calls deployment. Promoted snapshots retain the original declared monitoring
+policy separately from their actual fitted execution settings. The next batch
+can still re-estimate originally adaptive lambdas and geometry.
+
 
 Distribution drift is evidence to investigate, not proof that upstream SQL changed.
 Matching labels and matching marginal distributions cannot certify unchanged

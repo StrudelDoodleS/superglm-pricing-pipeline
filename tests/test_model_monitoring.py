@@ -2098,6 +2098,12 @@ def test_monitoring_child_failure_rolls_back_observation(persisted_monitoring_ca
 def test_offline_upgrade_seals_existing_monitoring_without_certifying_it(persisted_monitoring_case):
     engine, _, _, receipt = persisted_monitoring_case
     with engine.begin() as connection:
+        connection.execute(text("DROP VIEW pricing.V_MODEL_CHALLENGER"))
+        for operation in ("UPDATE", "DELETE"):
+            connection.execute(
+                text(f"DROP TRIGGER pricing.TR_DATASET_MANIFEST_CHALLENGER_{operation}")
+            )
+        connection.execute(text("DROP TABLE pricing.MODEL_MONITOR_PUBLICATION"))
         for view in ("LAMBDA", "RELATIVITY", "RUN"):
             connection.execute(text(f"DROP VIEW pricing.V_MODEL_MONITORING_{view}"))
         connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE"))

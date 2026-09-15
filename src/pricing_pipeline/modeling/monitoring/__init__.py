@@ -4,6 +4,7 @@ Public imports remain here. Start reading in workflow.run_monitoring_fit;
 persistence.persist_monitoring_fit saves its result. Contracts name the records
 passed between baseline verification, fitting, extraction and invariant checks."""
 
+from pricing_pipeline.modeling.monitoring.batch import MonitoringReport, run_monitoring_batch
 from pricing_pipeline.modeling.monitoring.contracts import (
     FIT_CONTRACT_SCHEMA,
     FIT_CONTRACT_SCHEMA_VERSION,
@@ -60,6 +61,7 @@ __all__ = [
     "MonitoringInvariantEvidence",
     "MonitoringLambda",
     "MonitoringRelativity",
+    "MonitoringReport",
     "MonitoringTerm",
     "MonitoringVariant",
     "MonitoringVariantPolicy",
@@ -71,5 +73,6 @@ __all__ = [
     "load_monitoring_baseline",
     "materialize_monitoring_model",
     "persist_monitoring_fit",
+    "run_monitoring_batch",
     "run_monitoring_fit",
 ]

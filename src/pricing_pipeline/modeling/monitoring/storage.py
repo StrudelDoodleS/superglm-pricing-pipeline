@@ -16,6 +16,7 @@ from sqlalchemy import text
 from pricing_pipeline.infra.schema import schema_names_from_connectable
 from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringError,
+    MonitoringVariant,
     _canonical_json,
     _sha256_text,
 )
@@ -211,16 +212,48 @@ def save_publication_monitoring_baseline(
     connection, *, model_run_id: int | str, prepared: PreparedPublication
 ) -> None:
     """Capture supported state, or record why it is unavailable, before commit."""
+    from pricing_pipeline.modeling.monitoring.snapshot import restore_monitoring_snapshot
     from pricing_pipeline.workbench.artifacts import load_candidate_bundle
+
+    build = prepared.build
+    monitoring_baseline, monitoring_variant = None, None
+    if getattr(build, "monitor_run_id", None) is not None:
+        from pricing_pipeline.publishing.monitoring import validate_monitoring_publication
+
+        observation = validate_monitoring_publication(connection, build)
+        parent = _stored_row(connection, observation["baseline_model_run_id"])
+        if parent is None or parent["capture_status"] != "CAPTURED":
+            raise MonitoringError(
+                "monitoring publication requires its baseline's captured SQL state"
+            )
+        _verify_stored_row(connection, parent)
+        monitoring_baseline = restore_monitoring_snapshot(
+            parent["snapshot_json"], expected_sha256=parent["snapshot_sha256"]
+        )
+        monitoring_variant = MonitoringVariant(observation["variant_code"])
 
     existing = _stored_row(connection, model_run_id)
     if existing is not None:
         _verify_stored_row(connection, existing)
+        if monitoring_baseline is not None:
+            if existing["capture_status"] != "CAPTURED":
+                raise MonitoringError("monitoring challenger must have captured SQL state")
+            captured = restore_monitoring_snapshot(
+                existing["snapshot_json"], expected_sha256=existing["snapshot_sha256"]
+            )
+            if (
+                captured.declared_monitoring_policy
+                != monitoring_baseline.declared_monitoring_policy
+            ):
+                raise MonitoringError(
+                    "monitoring challenger declared policy differs from its baseline"
+                )
         return
     source = _read_source_lineage(connection, model_run_id)
-    build = prepared.build
     if source["export_id"] != build.export_id:
         # An equivalent publication belongs to its original run and artifacts.
+        if monitoring_baseline is not None:
+            raise MonitoringError("monitoring challenger cannot reuse an unrelated publication")
         return
     bundle = load_candidate_bundle(
         build.candidate_artifact_path,
@@ -235,10 +268,25 @@ def save_publication_monitoring_baseline(
         raise MonitoringError(
             "publication monitoring baseline recipe does not match build evidence"
         )
-    _save_captured_baseline(connection, source, bundle, created_by=build.created_by)
+    _save_captured_baseline(
+        connection,
+        source,
+        bundle,
+        created_by=build.created_by,
+        monitoring_baseline=monitoring_baseline,
+        monitoring_variant=monitoring_variant,
+    )
 
 
-def _save_captured_baseline(connection, source, bundle, *, created_by):
+def _save_captured_baseline(
+    connection,
+    source,
+    bundle,
+    *,
+    created_by,
+    monitoring_baseline=None,
+    monitoring_variant=None,
+):
     from pricing_pipeline.modeling.monitoring.snapshot import (
         MonitoringSnapshotUnsupported,
         capture_monitoring_snapshot,
@@ -272,9 +320,33 @@ def _save_captured_baseline(connection, source, bundle, *, created_by):
         )
     source["row_order_sha256"] = bundle.row_order_sha256
     source_json = _canonical_json(source)
+    if monitoring_baseline is not None:
+        from pricing_pipeline.modeling.monitoring.invariants import _verify_monitoring_invariants
+
+        _verify_monitoring_invariants(
+            monitoring_baseline,
+            bundle.fitted_model,
+            variant=monitoring_variant,
+            contract=monitoring_baseline.model_fit_contract(),
+            offset_contract=bundle.offset_contract,
+            fit_sample_weight_name=bundle.fit_sample_weight_name,
+            export_weight_name=bundle.export_weight_name,
+            input_transforms=bundle.input_transforms,
+        )
     try:
-        snapshot = capture_monitoring_snapshot(bundle)
+        snapshot = (
+            capture_monitoring_snapshot(bundle)
+            if monitoring_baseline is None
+            else capture_monitoring_snapshot(
+                bundle,
+                declared_monitoring_policy=monitoring_baseline.declared_monitoring_policy,
+            )
+        )
     except MonitoringSnapshotUnsupported as exc:
+        if monitoring_baseline is not None:
+            raise MonitoringError(
+                f"monitoring challenger SQL snapshot is unavailable: {exc}"
+            ) from exc
         status = "UNAVAILABLE"
         reason = (str(exc).strip() or "The model cannot be captured as a monitoring snapshot.")[
             :2000
@@ -291,9 +363,15 @@ def _save_captured_baseline(connection, source, bundle, *, created_by):
             },
             source,
         )
-        restore_monitoring_snapshot(
+        restored = restore_monitoring_snapshot(
             snapshot.snapshot_json, expected_sha256=snapshot.snapshot_sha256
         )
+        if (
+            monitoring_baseline is not None
+            and restored.declared_monitoring_policy
+            != monitoring_baseline.declared_monitoring_policy
+        ):
+            raise MonitoringError("captured challenger policy differs from its SQL baseline")
     schema = schema_names_from_connectable(connection).pricing
     connection.execute(
         text(f"""INSERT INTO {schema}.MODEL_MONITORING_BASELINE

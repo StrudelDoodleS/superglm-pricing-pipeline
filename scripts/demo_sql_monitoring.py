@@ -170,6 +170,20 @@ _TABLES = (
         "fit_contract_id; baseline_deployment_id; manifest_id",
     ),
     (
+        "MODEL_MONITOR_PUBLICATION",
+        "mlops",
+        "monitor_run_id",
+        "Each refit observation linked to its exact saved challenger",
+        "monitor_run_id; model_run_id",
+    ),
+    (
+        "V_MODEL_CHALLENGER",
+        "pricing",
+        "model_run_id",
+        "Challengers with baseline, dataset date, and current champion identity",
+        "monitor_run_id; model_run_id; baseline_model_run_id; current_rate_package_id",
+    ),
+    (
         "MODEL_MONITOR_TERM",
         "mlops",
         "monitor_run_id, sequence_no",
@@ -247,27 +261,38 @@ def export_sql_tables(pricing, *, directory: Path, limit: int = 20) -> tuple[Pat
                     "key links": links,
                 }
             )
-        stored = connection.execute(
-            text(
-                "SELECT snapshot_json FROM pricing.MODEL_MONITORING_BASELINE WHERE capture_status='CAPTURED'"
+        stored = (
+            connection.execute(
+                text(
+                    "SELECT model_run_id, rate_package_id, snapshot_json "
+                    "FROM pricing.MODEL_MONITORING_BASELINE "
+                    "WHERE capture_status='CAPTURED' ORDER BY model_run_id"
+                )
             )
-        ).scalar_one()
-        snapshot = json.loads(stored)
-        (directory / "baseline_snapshot.json").write_text(
-            json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n"
+            .mappings()
+            .all()
         )
     feature_rows = []
-    for name in snapshot["recipe"]["feature_order"]:
-        feature_rows.append(
-            {
-                "feature": name,
-                "declared configuration": json.dumps(
-                    snapshot["recipe"]["features"][name], indent=2
-                ),
-                "scoring state": json.dumps(snapshot["prediction"]["terms"][name], indent=2),
-                "reference profile": json.dumps(snapshot["reference_profiles"].get(name), indent=2),
-            }
-        )
+    for row in stored:
+        snapshot = json.loads(row["snapshot_json"])
+        filename = f"baseline_snapshot_model_run_{row['model_run_id']}.json"
+        (directory / filename).write_text(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n")
+        for name in snapshot["recipe"]["feature_order"]:
+            feature_rows.append(
+                {
+                    "model_run_id": row["model_run_id"],
+                    "rate_package_id": row["rate_package_id"],
+                    "snapshot file": filename,
+                    "feature": name,
+                    "declared configuration": json.dumps(
+                        snapshot["recipe"]["features"][name], indent=2
+                    ),
+                    "scoring state": json.dumps(snapshot["prediction"]["terms"][name], indent=2),
+                    "reference profile": json.dumps(
+                        snapshot["reference_profiles"].get(name), indent=2
+                    ),
+                }
+            )
     guide = pd.DataFrame(summaries)
     readme = pd.DataFrame(
         {
@@ -286,8 +311,8 @@ def export_sql_tables(pricing, *, directory: Path, limit: int = 20) -> tuple[Pat
                 "Publication bundle, workbook and receipt files were deleted before loading the monitoring baseline from SQL.",
                 "This SQLite mirror places monitoring tables in pricing. Their SQL Server schema is mlops; the baseline table is pricing in both.",
                 f"Each table sheet contains at most {limit} actual rows. The tables sheet gives full row counts and sorting.",
-                "baseline_snapshot.json and json/ contain complete JSON. Long workbook cells explicitly show a truncated preview.",
-                "Monitoring refits are diagnostics; they do not create or deploy new rating packages.",
+                "baseline_snapshot_model_run_*.json and json/ contain complete JSON. Long workbook cells explicitly show a truncated preview.",
+                "The scheduled workflow saves three exact challenger packages and four observations. SQLite challengers have LOCAL_AUDIT status. The champion remains unchanged; no production deployment was tested.",
             ],
         }
     )

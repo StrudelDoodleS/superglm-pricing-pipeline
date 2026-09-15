@@ -18,6 +18,7 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     _canonical_json,
     _sha256_text,
 )
+from pricing_pipeline.modeling.recipes.schema import RecipeError
 from pricing_pipeline.modeling.recipes.superglm import decode_estimator, decode_object
 from pricing_pipeline.publishing.metadata import SuperGLMPublicationReceipt
 
@@ -58,14 +59,19 @@ def validate_snapshot_payload(payload):
         SNAPSHOT_SCHEMA_VERSION,
     )
 
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
+    if not isinstance(payload, dict):
         raise MonitoringError("invalid SQL monitoring snapshot fields")
     if (
         payload["schema_name"] != SNAPSHOT_SCHEMA
         or type(payload["schema_version"]) is not int
-        or payload["schema_version"] != SNAPSHOT_SCHEMA_VERSION
+        or payload["schema_version"] not in {1, SNAPSHOT_SCHEMA_VERSION}
     ):
         raise MonitoringError("unsupported SQL monitoring snapshot schema")
+    expected_fields = _FIELDS | (
+        {"declared_monitoring_policy"} if payload["schema_version"] == 2 else set()
+    )
+    if set(payload) != expected_fields:
+        raise MonitoringError("invalid SQL monitoring snapshot fields")
     if payload["superglm_version"] != version("superglm"):
         raise MonitoringError(
             "SQL monitoring snapshot SuperGLM version does not match this runtime"
@@ -223,6 +229,37 @@ def validate_snapshot_payload(payload):
     if _sha256_text(_canonical_json(structure)) != payload["fit_contract"]["structure_sha256"]:
         raise MonitoringError("snapshot fit contract structure digest mismatch")
     _validate_evidence(payload)
+    _validate_declared_monitoring_policy(payload)
+
+
+def _validate_declared_monitoring_policy(payload):
+    from pricing_pipeline.modeling.monitoring.snapshot_fitting import (
+        SPLINE_CONTROL_FIELDS,
+        declared_monitoring_policy,
+        monitoring_recipe,
+        spline_recipes,
+    )
+
+    policy = declared_monitoring_policy(payload)
+    if (
+        not isinstance(policy, dict)
+        or set(policy) != {"schema_version", "splines"}
+        or type(policy["schema_version"]) is not int
+        or policy["schema_version"] != 1
+        or not isinstance(policy["splines"], dict)
+        or set(policy["splines"]) != set(spline_recipes(payload["recipe"]))
+    ):
+        raise MonitoringError("invalid declared monitoring policy fields")
+    for controls in policy["splines"].values():
+        if not isinstance(controls, dict) or set(controls) != SPLINE_CONTROL_FIELDS:
+            raise MonitoringError("invalid declared monitoring spline controls")
+    try:
+        recipe = monitoring_recipe(payload)
+        decode_estimator(
+            recipe["estimator"], recipe["features"], recipe["feature_order"], recipe["interactions"]
+        )
+    except (RecipeError, TypeError, ValueError) as exc:
+        raise MonitoringError(f"invalid declared monitoring policy: {exc}") from exc
 
 
 def _validate_evidence(payload):

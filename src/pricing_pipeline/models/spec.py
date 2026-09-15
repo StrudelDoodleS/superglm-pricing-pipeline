@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from numbers import Real
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -60,6 +61,7 @@ class ApprovedModelBuild(BaseModel):
     target_name: str
     deployment_slot: str
     manifest_id: str
+    monitor_run_id: str | None = None
     split_set_id: str | None = None
     export_id: str
     rating_workbook_path: str
@@ -80,6 +82,18 @@ class ApprovedModelBuild(BaseModel):
     metrics: dict[str, float] = Field(default_factory=dict)
     metric_scopes: dict[str, str] = Field(default_factory=dict)
     fold_metrics: tuple[dict[str, int | str | float], ...] = ()
+
+    @field_validator("monitor_run_id", mode="before")
+    @classmethod
+    def _monitor_run_id(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a UUID string")
+        try:
+            return str(UUID(value.strip()))
+        except ValueError as exc:
+            raise ValueError("must be a UUID string") from exc
 
     def __init__(self, **data: Any) -> None:
         try:

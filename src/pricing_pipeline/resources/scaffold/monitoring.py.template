@@ -1,0 +1,99 @@
+"""Score the current champion and save three challengers using fresh source data.
+
+Edit the settings and load_dataset() here. Notebook 07 and the scheduler call run().
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+MODEL_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = MODEL_DIR.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from pricing_pipeline.notebook import (
+    PricingDataset,
+    connect,
+    load_registered_model,
+    run_monitoring,
+)
+
+DATABASE_MODE = __DATABASE_MODE_LITERAL__  # "local" or "remote"
+RUNTIME_MODULE = __RUNTIME_MODULE_LITERAL__  # e.g. "project_runtime.database"; no secrets
+EXPECTED_REMOTE_DATABASE = __EXPECTED_REMOTE_DATABASE_LITERAL__
+ALLOW_REMOTE_WRITES = False
+
+MODEL_NAME = "__MODEL_NAME__"
+MODEL_LABEL = "__MODEL_LABEL__"
+DEPLOYMENT_SLOT = "__DEPLOYMENT_SLOT__"
+
+
+def load_dataset() -> PricingDataset:
+    """Load the current source rows, enrich them, and record their snapshot date."""
+
+    # Replace this error with your current query or file read and return PricingDataset.
+    # Keep source columns needed by the deployed model's saved transforms.
+    raise RuntimeError(
+        f"Configure load_dataset() in {MODEL_DIR / 'monitoring.py'} to read fresh data "
+        "and return PricingDataset with name, source, key, and as_of column."
+    )
+
+    # SQL example. Source reads can use a different runtime and database.
+    # from importlib import import_module
+    # import pandas as pd
+    # from sqlalchemy import text
+    # source_runtime = import_module("project_runtime.source_database")
+    # source_engine = source_runtime.get_engine(database="replace_with_source_database")
+    # try:
+    #     with source_engine.connect() as connection:
+    #         df = pd.read_sql_query(
+    #             text(
+    #                 "SELECT __PRIMARY_KEY__, __TARGET_NAME__, __FEATURE_NAME__, segment, data_as_of "
+    #                 "FROM replace_with_current_source ORDER BY __PRIMARY_KEY__"
+    #             ),
+    #             connection,
+    #         )
+    # finally:
+    #     source_engine.dispose()
+    # Enrich df here. Preserve unique keys and deterministic row order.
+    # return PricingDataset(
+    #     df=df,
+    #     name="__MONITORING_DATASET_NAME__",
+    #     source="replace_with_source_name",
+    #     key="__PRIMARY_KEY__",
+    #     as_of="data_as_of",  # Source snapshot column, not today's run date.
+    # )
+
+
+def run():
+    """Save four observations and three challenger packages without promotion."""
+
+    pricing = connect(
+        mode=DATABASE_MODE,
+        runtime_module=RUNTIME_MODULE,
+        local_root=MODEL_DIR / ".local",
+        expected_remote_database=EXPECTED_REMOTE_DATABASE,
+        allow_remote_writes=ALLOW_REMOTE_WRITES,
+    )
+    try:
+        model = load_registered_model(
+            pricing,
+            model_name=MODEL_NAME,
+            model_label=MODEL_LABEL,
+            deployment_slot=DEPLOYMENT_SLOT,
+            source_root=MODEL_DIR,
+        )
+        dataset = load_dataset()
+        return run_monitoring(pricing, model=model, dataset=dataset)
+    finally:
+        pricing.engine.dispose()
+
+
+if __name__ == "__main__":
+    from pricing_pipeline.monitoring_runner import run_monitoring_script
+
+    raise SystemExit(
+        run_monitoring_script(run, log_directory=MODEL_DIR / ".local" / "monitoring_logs")
+    )

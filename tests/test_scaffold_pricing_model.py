@@ -27,6 +27,7 @@ EXPECTED_NOTEBOOKS = (
     "04_model_editor.ipynb",
     "05_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_model_monitoring.ipynb",
 )
 
 
@@ -143,7 +144,7 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
     )
 
     for name, source in rendered.items():
-        if name == "02_model_exploration.ipynb":
+        if name in {"02_model_exploration.ipynb", "07_model_monitoring.ipynb"}:
             assert "connect(" not in source
             assert "RUNTIME_MODULE" not in source
             continue
@@ -214,7 +215,7 @@ def test_scaffold_renderer_preserves_non_ascii_escaping():
     assert 'label="M\\u00fcller"' in code
 
 
-def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
+def test_scaffold_writes_seven_notebook_workflow_and_monitoring_script(tmp_path):
     result = scaffold_pricing_model(
         ScaffoldOptions(
             model_name="MY_MODEL",
@@ -228,6 +229,7 @@ def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
     expected = (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "monitoring.py",
         package_dir / "sql" / "README.md",
     )
     assert result.created_files == expected
@@ -274,7 +276,7 @@ def test_scaffold_rejects_invalid_sql_directory_before_writing(tmp_path, kind):
         assert list(external.iterdir()) == []
 
 
-def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(tmp_path):
+def test_scaffold_notebooks_discover_project_metadata(tmp_path):
     package_dir = _scaffold(tmp_path)
 
     for name in EXPECTED_NOTEBOOKS:
@@ -288,7 +290,8 @@ def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(
         assert '(candidate / "pyproject.toml").is_file()' in setup
         assert '(candidate / "pricing_models").is_dir()' in setup
         assert 'candidate / "pricing_pipeline"' not in setup
-        assert "sys.path.insert" not in setup
+        if name != "07_model_monitoring.ipynb":
+            assert "sys.path.insert" not in setup
 
 
 def test_scaffold_separates_training_and_exploration(tmp_path):
@@ -343,8 +346,9 @@ def test_scaffold_separates_training_and_exploration(tmp_path):
     assert "POLICY_SOURCE_PACKAGE_VERSION = None" in manual
 
     assert "list_model_versions(" in deployment
+    assert "list_challengers(" in deployment
     assert 'eq("PUBLISHED")' in deployment
-    assert "load_model_version(" in deployment
+    assert "review_model_version(" in deployment
     assert "deploy_model_version(" in deployment
 
     assert "save_model_frame(" not in exploration
@@ -664,6 +668,7 @@ def test_scaffold_force_overwrites_all_workflow_files(tmp_path):
     assert result.created_files == (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "monitoring.py",
         package_dir / "sql" / "README.md",
     )
     assert training_path.read_text(encoding="utf-8") != "stale"
@@ -731,7 +736,7 @@ def test_scaffold_refuses_legacy_deployment_symlinks_without_touching_targets(
         assert not external_path.exists()
 
 
-@pytest.mark.parametrize("output_name", ("__init__.py", *EXPECTED_NOTEBOOKS))
+@pytest.mark.parametrize("output_name", ("__init__.py", *EXPECTED_NOTEBOOKS, "monitoring.py"))
 def test_scaffold_rejects_output_symlinks_before_writing_any_files(tmp_path, output_name):
     package_dir = tmp_path / "pricing_models" / "my_model"
     output_path = package_dir / output_name
@@ -788,10 +793,14 @@ def test_scaffold_allows_a_symlinked_user_root_after_resolving_it(tmp_path):
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
 
 
+@pytest.mark.parametrize("portable", [False, True])
 def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, portable
 ):
     from pricing_pipeline.scaffold import service
+
+    if portable:
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
 
     external_path = tmp_path / "external-init.py"
     external_content = "do not modify this file\n"
@@ -815,6 +824,63 @@ def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
         )
 
     assert external_path.read_text(encoding="utf-8") == external_content
+
+
+def test_scaffold_without_no_follow_support_creates_preserves_and_replaces(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    package = _scaffold(tmp_path)
+    originals = {path: path.read_bytes() for path in package.rglob("*") if path.is_file()}
+    monitoring = package / "monitoring.py"
+    monitoring.write_bytes(b"analyst monitoring edits\n")
+
+    _scaffold(tmp_path)
+
+    assert monitoring.read_bytes() == b"analyst monitoring edits\n"
+    assert all(
+        path.read_bytes() == content for path, content in originals.items() if path != monitoring
+    )
+
+    _scaffold(tmp_path, force=True)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert {path for path in package.rglob("*") if path.is_file()} == set(originals)
+
+
+def test_portable_scaffold_force_replaces_a_hardlink_without_changing_its_target(
+    tmp_path, monkeypatch
+):
+    package = _scaffold(tmp_path)
+    path = package / "monitoring.py"
+    generated = path.read_bytes()
+    external = tmp_path / "external.py"
+    external.write_bytes(b"external code must not change\n")
+    path.unlink()
+    path.hardlink_to(external)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    _scaffold(tmp_path)
+    assert path.samefile(external)
+    _scaffold(tmp_path, force=True)
+
+    assert external.read_bytes() == b"external code must not change\n"
+    assert path.read_bytes() == generated
+    assert not path.samefile(external)
+
+
+def test_portable_scaffold_cleans_temporary_files_after_a_failed_replace(tmp_path, monkeypatch):
+    package = _scaffold(tmp_path)
+    originals = {path: path.read_bytes() for path in package.rglob("*") if path.is_file()}
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    def reject_replace(source, destination):
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(os, "replace", reject_replace)
+    with pytest.raises(OSError, match="replace denied"):
+        _scaffold(tmp_path, force=True)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert {path for path in package.rglob("*") if path.is_file()} == set(originals)
 
 
 def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp_path):
@@ -872,7 +938,7 @@ def test_scaffold_renders_safe_connection_defaults_where_sql_is_used(tmp_path):
 
     for name in EXPECTED_NOTEBOOKS:
         source = _code(package_dir / name)
-        if name == "02_model_exploration.ipynb":
+        if name in {"02_model_exploration.ipynb", "07_model_monitoring.ipynb"}:
             assert "RUNTIME_MODULE" not in source
             assert "connect(" not in source
             continue
@@ -1107,7 +1173,7 @@ def test_scaffold_script_reports_all_notebook_paths(tmp_path):
     )
 
     assert result.returncode == 0
-    for name in EXPECTED_NOTEBOOKS:
+    for name in (*EXPECTED_NOTEBOOKS, "monitoring.py"):
         assert f"pricing_models/script_model/{name}" in result.stdout
     assert "model.toml" not in result.stdout
     assert "DAG" not in result.stdout

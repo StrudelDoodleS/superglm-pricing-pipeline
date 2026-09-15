@@ -387,12 +387,6 @@ def test_pricing_model_spec_allows_stratifying_by_target_or_feature(stratify_col
     "validation",
     [
         ValidationSplitConfig(
-            method="none",
-            n_splits=None,
-            random_state=None,
-            shuffle=False,
-        ),
-        ValidationSplitConfig(
             method="custom",
             n_splits=None,
             random_state=None,

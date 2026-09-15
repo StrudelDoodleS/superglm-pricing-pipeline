@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import platform
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from typing import Any
@@ -39,7 +40,7 @@ from pricing_pipeline.modeling.recipes.superglm import (
 from pricing_pipeline.publishing.metadata import OffsetExportContract
 
 SNAPSHOT_SCHEMA = "superglm_monitoring_snapshot"
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 
 
 class MonitoringSnapshotUnsupported(MonitoringError):
@@ -78,6 +79,15 @@ class SqlBaseline:
 
     def payload(self) -> dict[str, Any]:
         return json.loads(self.snapshot_json)
+
+    @property
+    def declared_monitoring_policy(self) -> dict[str, Any]:
+        """Original spline controls, separate from any temporary refit settings."""
+        return snapshot_fitting.declared_monitoring_policy(self.payload())
+
+    @property
+    def monitoring_lambda_policies(self) -> tuple[MonitoringLambda, ...]:
+        return snapshot_fitting.declared_lambda_policies(self.payload())
 
     @property
     def offset_contract(self) -> OffsetExportContract:
@@ -260,7 +270,10 @@ def _capture_prediction(model):
     }
 
 
-def capture_monitoring_snapshot(bundle) -> MonitoringSnapshot:
+def capture_monitoring_snapshot(
+    bundle, *, declared_monitoring_policy: Mapping[str, Any] | None = None
+) -> MonitoringSnapshot:
+    """Save exact fitted evidence and the declared controls used by future refits."""
     from pricing_pipeline.modeling.monitoring.baseline import _require_fitted_superglm
     from pricing_pipeline.modeling.monitoring.data_checks import _inspect_features
     from pricing_pipeline.modeling.monitoring.evidence import _result_lambdas, _result_terms
@@ -349,6 +362,11 @@ def capture_monitoring_snapshot(bundle) -> MonitoringSnapshot:
         "fit_sample_weight_name": bundle.fit_sample_weight_name,
         "export_weight_name": bundle.export_weight_name,
     }
+    payload["declared_monitoring_policy"] = (
+        snapshot_fitting.declared_monitoring_policy(payload)
+        if declared_monitoring_policy is None
+        else declared_monitoring_policy
+    )
     encoded = _canonical_json(payload)
     digest = _sha256_text(encoded)
     restored = restore_monitoring_snapshot(encoded, expected_sha256=digest)

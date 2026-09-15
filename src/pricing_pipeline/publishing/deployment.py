@@ -29,6 +29,7 @@ class DeploymentResult:
 
 
 _DEPLOYMENT_LOCK_TIMEOUT_MS = 10_000
+_UNSPECIFIED_DEPLOYMENT_ID = object()
 
 
 class DeploymentError(RuntimeError):
@@ -48,7 +49,13 @@ def deploy_rate_package(
     deployment_reason: str,
     deployed_by: str,
     model_id: int,
+    expected_current_deployment_id: int | None | object = _UNSPECIFIED_DEPLOYMENT_ID,
 ) -> DeploymentResult:
+    """Deploy using the reviewed package and, when supplied, deployment identity.
+
+    Omitting the deployment ID retains the historical package-only comparison.
+    Passing None explicitly requires that no champion deployment exists.
+    """
     deployment_reason = _required_text(deployment_reason, "deployment_reason")
     deployed_by = _required_text(deployed_by, "deployed_by")
     slot = _required_text(config.deployment_slot, "deployment_slot").upper()
@@ -75,6 +82,14 @@ def deploy_rate_package(
                 f"rate_package_id={expected_current_rate_package_id}, "
                 f"found {previous_rate_package_id}"
             )
+        if expected_current_deployment_id is not _UNSPECIFIED_DEPLOYMENT_ID:
+            current_deployment_id = int(current["deployment_id"]) if current is not None else None
+            if current_deployment_id != expected_current_deployment_id:
+                raise StaleChampionError(
+                    "deployment approval is stale: expected current "
+                    f"deployment_id={expected_current_deployment_id}, "
+                    f"found {current_deployment_id}"
+                )
         if previous_rate_package_id == resolved_rate_package_id:
             return DeploymentResult(
                 model_id=int(model_id),
@@ -216,6 +231,7 @@ def _current_deployment(con, *, model_id: int, deployment_slot: str) -> dict[str
         con.execute(
             text("""
         SELECT
+            deployment_id,
             rate_package_id,
             effective_from_ts,
             deployed_by,

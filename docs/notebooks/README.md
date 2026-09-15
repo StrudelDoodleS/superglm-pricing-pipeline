@@ -13,7 +13,8 @@ writes, artifacts, publication, and deployment guards.
 | `03_model_training.ipynb` | Saved dataset; selected recipe or Python configuration | Manifest, split evidence, run, metrics, candidate, package | Deploy |
 | `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
 | `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
-| `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
+| `06_model_deployment.ipynb` | Published SQL package and current champion | Explicit promotion and deployment history | Fit or edit |
+| `07_model_monitoring.ipynb` | SQL champion and fresh source data | Four observations and three saved challengers | Automatically promote |
 
 Notebook 01 saves the prepared dataset. Notebook 02 loads all its rows, applies
 your transforms, and fits a local SuperGLM with your feature definitions,
@@ -199,8 +200,9 @@ aggregated using the identical denominator.
 
 ## Baseline epochs and monitoring
 
-Treat the editor as an optional genesis/refresh gate, not a weekly modelling
-step:
+Notebook 07 and the generated `monitoring.py` run the weekly comparisons.
+Notebook 06 reviews and promotes a saved package. The editor is optional when
+defining or revising the model:
 
 ```text
 baseline epoch
@@ -210,20 +212,22 @@ baseline epoch
                                                           |
 monitoring
   ingest a new dated snapshot -> static/frozen/lambda/adaptive comparisons
-                              -> SQL evidence only; never auto-deploy
+                              -> SQL evidence and three challenger packages
+                              -> review in06 -> explicit promotion
 ```
 
 The deployed run starts the epoch. Its exact edited model is authoritative, so
 the contract includes editor-created groupings, categorical levels and bases,
 special levels, monotonic/shape constraints, basis type and dimension, fitted
-knots, and fitted REML lambdas. A proper refresh goes through the baseline lane
-again, is deployed deliberately, and starts a new contract and comparison
-epoch.
+knots, and fitted REML lambdas. Promoting a saved challenger starts a new comparison epoch. Its exact fitted
+state becomes the baseline, with the original declared refit policies preserved.
+A change to feature definitions or groupings goes through the model-building
+notebooks before publication and promotion.
 
-Keep these as two conceptual lanes even if the notebooks remain in one model
-directory. If they are split into physical subdirectories, use `baseline/` and
-`monitoring/`; do not call the second lane `deployment`, because its variants
-are diagnostic observations rather than candidate packages.
+The [weekly workflow guide](weekly_monitoring.md) shows the generated file,
+Windows Task Scheduler and cron setup, SQL review, retries and promotion.
+The low-level `run_monitoring_fit` and `persist_monitoring_fit` calls still
+produce observations only. `run_monitoring` also publishes the three refits.
 
 For the implementation owners and comparison diagram, see
 [From a baseline to monitoring evidence](../package-flows.md#from-a-baseline-to-monitoring-evidence).
@@ -499,6 +503,9 @@ Import these from `pricing_pipeline.notebook`.
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
 | `check_monitoring_data(...)` | Check input compatibility and categorical mix changes before the preset loop | Issues, distributions and drift distances; errors can be raised before fitting |
 | `load_monitoring_baseline(...)` | Read the current deployment's configuration and fitted state from SQL | `SqlBaseline`; no local model file required |
+| `run_monitoring(...)` | Score the SQL champion and publish three refitted challengers from fresh data | `MonitoringReport` with observations, package IDs, metrics and checks |
+| `list_challengers(...)` | List published SQL packages and the current champion | DataFrame with monitoring origin and dated model/data identities |
+| `review_model_version(...)` | Review an exact package using SQL alone | Immutable selection with `.summary`, `.metrics` and the reviewed champion |
 | `run_monitoring_fit(...)` | Score or refit one controlled preset from a SQL baseline or verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
 
@@ -514,9 +521,11 @@ names. Saving a version does not deploy it; local saves remain `LOCAL_AUDIT`.
 Updating the package does not regenerate existing notebooks. Completed 01 and 02
 notebooks, including feature transforms, groupings, specials and saved recipe
 TOMLs, remain usable. Keep their source in version control or make a backup.
-There is no need to rerun the scaffold. Its `--force` option overwrites files.
+Rerun your existing scaffold command without `--force` to add notebook 07 and
+`monitoring.py`. Existing notebooks stay intact. See the [weekly workflow](weekly_monitoring.md)
+for the small change that gives an existing 06 notebook SQL-only review.
 
-After the database administrator applies migrations through V049, the existing
+After the database administrator applies migrations through V050, the existing
 `save_model_version` call also captures monitoring state in SQL. The snapshot
 contains explicit configuration, fitted geometry and smoothing settings, exact
 predictions as polynomial/lookup parameters, and aggregate categorical counts.
@@ -542,8 +551,9 @@ monitoring loads use SQL only. If the old model file is already gone, its recipe
 alone cannot recover the old coefficients and learned knots. Publish a complete
 reviewed model to establish a new baseline.
 
-A monitoring notebook can load the baseline once, prepare the new manifest's
-feature frame in the same column order, and run the presets explicitly:
+The generated weekly workflow calls `run_monitoring` to fit and publish the
+challengers. For custom observation-only workflows, the lower-level calls below
+load the baseline once and run individual comparisons:
 
 ```python
 from pricing_pipeline.notebook import (
@@ -679,9 +689,9 @@ cells. The optional deployment cell defaults to off.
 
 `carry_forward = true` means that the relative policy is intended to be
 replayed against a later clean candidate. Apply it to that new base model, not
-to the previous `MANUAL_EDIT`, so an uplift does not compound. Current weekly
-monitoring rows are evidence-only and are not automatically adjusted or
-deployable; policy replay matters only when a new candidate is being prepared.
+to the previous `MANUAL_EDIT`, so an uplift does not compound. Weekly refits do not automatically replay this policy. Applying an adjustment
+to a later fit remains a separate reviewed publication step. Monitoring
+observations retain their unadjusted comparison metrics.
 Set `POLICY_SOURCE_PACKAGE_VERSION` to an earlier `MANUAL_EDIT` package to load
 and verify its policy from SQL rather than typing its rules again. Replay is
 refused when that policy recorded `carry_forward = false`; the trusted publisher

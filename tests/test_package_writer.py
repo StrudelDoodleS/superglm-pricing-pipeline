@@ -479,7 +479,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
     engine = _Engine()
     events = []
     prepared = SimpleNamespace(
-        build=SimpleNamespace(export_id="export-1", model_id=17),
+        build=SimpleNamespace(export_id="export-1", model_id=17, monitor_run_id=None),
         verification=object(),
     )
     tables = object()
@@ -510,6 +510,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
         "pricing_pipeline.modeling.monitoring.storage.save_publication_monitoring_baseline",
         stage("baseline"),
     )
+    monkeypatch.setattr(sqlserver, "save_monitoring_publication", stage("monitoring_link"))
     monkeypatch.setattr(sqlserver, "_delete_staging_children", stage("cleanup"))
     monkeypatch.setattr(
         sqlserver,
@@ -530,6 +531,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
         "verify",
         "publish",
         "baseline",
+        "monitoring_link",
         "cleanup",
         "result",
         "recipe_result",

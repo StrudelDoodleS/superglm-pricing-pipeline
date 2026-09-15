@@ -499,6 +499,8 @@ def decode_feature(data, path):
 
 def encode_validation(validation):
     if type(validation) is ValidationSplitConfig:
+        if validation.method == "none":
+            return {"type": "none"}
         if validation.method not in ("kfold", "train_test_split", "column_kfold", "column_holdout"):
             raise UnsupportedRecipeError(
                 f"validation: unsupported ValidationSplitConfig method {validation.method!r}"
@@ -542,6 +544,9 @@ def decode_validation(data):
     }
     if not isinstance(name, str):
         raise RecipeError("validation.type: expected a string")
+    if name == "none":
+        _checked(data, ("type",), "validation")
+        return ValidationSplitConfig(method="none", n_splits=None, random_state=None, shuffle=False)
     if name in splitters:
         cls, params = splitters[name]
         kwargs = _checked(data, ("type", *params), "validation")

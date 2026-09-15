@@ -31,6 +31,11 @@ from pricing_pipeline.publishing.identity import (
     canonical_revision_metadata,
     immutable_conflicts,
 )
+from pricing_pipeline.publishing.monitoring import (
+    reuse_monitoring_publication,
+    save_monitoring_publication,
+    validate_export_monitoring_link,
+)
 from pricing_pipeline.publishing.publish import (
     CompletedModelPublishResult,
     ModelRegistryError,
@@ -672,6 +677,8 @@ def _equivalent_local_publication(
                   AND mr.model_kind = :model_kind
                   AND mr.model_equivalence_sha256 = :model_equivalence_sha256
                   AND mr.run_status = 'SUCCESS'
+                  AND NOT EXISTS (SELECT 1 FROM pricing.MODEL_MONITOR_PUBLICATION AS monitor_link
+                                  WHERE monitor_link.model_run_id=mr.model_run_id)
                   {identity_predicate()}
                 """
             ),
@@ -744,12 +751,16 @@ def _resolve_existing_or_equivalent(
     tables: RatingTables,
 ) -> CompletedModelPublishResult | None:
     build = prepared.build
+    monitoring = reuse_monitoring_publication(connection, build)
+    if monitoring is not None:
+        return monitoring
     existing = _existing_local_publication(
         connection,
         model_id=build.model_id,
         export_id=build.export_id,
     )
     if existing is not None:
+        validate_export_monitoring_link(connection, build, existing["model_run_id"])
         conflicts = _local_publication_conflicts(
             existing,
             prepared=prepared,
@@ -772,6 +783,8 @@ def _resolve_existing_or_equivalent(
             )
         return _publication_result(existing, prepared, was_existing=True)
 
+    if build.monitor_run_id is not None:
+        return None
     equivalent = _equivalent_local_publication(connection, prepared)
     if equivalent is None:
         return None
@@ -1200,6 +1213,9 @@ def publish_sqlite(
             save_publication_monitoring_baseline(
                 connection, model_run_id=existing.model_run_id, prepared=prepared
             )
+            save_monitoring_publication(
+                connection, build=prepared.build, model_run_id=existing.model_run_id
+            )
             return existing
         _require_reserved_version(connection, prepared)
         package = _insert_local_package(connection, prepared, tables, metadata)
@@ -1208,6 +1224,7 @@ def publish_sqlite(
         save_publication_monitoring_baseline(
             connection, model_run_id=model_run_id, prepared=prepared
         )
+        save_monitoring_publication(connection, build=prepared.build, model_run_id=model_run_id)
         created = _existing_local_publication(
             connection,
             model_id=prepared.build.model_id,
