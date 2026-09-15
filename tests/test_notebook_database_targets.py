@@ -563,6 +563,10 @@ def test_publish_candidate_records_local_package_run_and_audit_links(
         )
 
     monkeypatch.setattr(publication, "prepare_rating_tables", prepare_tables)
+    # Artifact verification and capture are independent of this audit-link test.
+    monkeypatch.setattr(
+        sqlite, "save_publication_monitoring_baseline", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         sqlite,
         "_verify_candidate_artifact",

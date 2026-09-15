@@ -72,8 +72,14 @@ they are not a list of additional public APIs.
 |---|---|
 | [modeling/monitoring/__init__.py](../src/pricing_pipeline/modeling/monitoring/__init__.py) | Controlled monitoring refits and their saved audit evidence. |
 | [modeling/monitoring/baseline.py](../src/pricing_pipeline/modeling/monitoring/baseline.py) | Verify the saved baseline and bind a monitoring dataframe to its declared roles. |
+| [modeling/monitoring/storage.py](../src/pricing_pipeline/modeling/monitoring/storage.py) | Capture baseline state at publication, load the current deployment from SQL and verify its source lineage. |
+| [modeling/monitoring/snapshot.py](../src/pricing_pipeline/modeling/monitoring/snapshot.py) | Define and validate versioned JSON baseline state without training rows or Python object serialization. |
+| [modeling/monitoring/snapshot_prediction.py](../src/pricing_pipeline/modeling/monitoring/snapshot_prediction.py) | Score the saved polynomial and categorical contributions and report static metrics. |
+| [modeling/monitoring/snapshot_fitting.py](../src/pricing_pipeline/modeling/monitoring/snapshot_fitting.py) | Construct each controlled refit from the saved recipe, geometry and smoothing settings. |
+| [modeling/monitoring/snapshot_validation.py](../src/pricing_pipeline/modeling/monitoring/snapshot_validation.py) | Reject incompatible formats, versions and contradictory snapshot evidence before scoring or fitting. |
 | [modeling/monitoring/contracts.py](../src/pricing_pipeline/modeling/monitoring/contracts.py) | Records, variant policies and canonical values used by monitoring. |
 | [modeling/monitoring/data_checks.py](../src/pricing_pipeline/modeling/monitoring/data_checks.py) | Check monitoring inputs and compare categorical mixes before any model refit. |
+| [modeling/monitoring/domains.py](../src/pricing_pipeline/modeling/monitoring/domains.py) | Read saved feature domains for SQL preflight without reconstructing fitted models. |
 | [modeling/monitoring/support_checks.py](../src/pricing_pipeline/modeling/monitoring/support_checks.py) | Check effective numeric and ordered spline support before estimating monitoring coefficients. |
 | [modeling/monitoring/evidence.py](../src/pricing_pipeline/modeling/monitoring/evidence.py) | Extract monitoring terms, smoothing parameters, relativities and loss metrics. |
 | [modeling/monitoring/fitting.py](../src/pricing_pipeline/modeling/monitoring/fitting.py) | Capture baseline structure and reconstruct the model allowed by a monitoring variant. |

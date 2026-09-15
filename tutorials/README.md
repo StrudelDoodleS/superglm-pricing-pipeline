@@ -1,5 +1,12 @@
 # Tutorials
 
+Open [SQL monitoring and table extracts](sql_monitoring/demo.ipynb) for an
+executed synthetic Tweedie burn-cost example. It saves the baseline in SQL,
+removes the publication files, checks a later dataset, runs all four monitoring
+variants, and exports actual SQL rows to an Excel workbook. The isolated SQLite
+demo labels its simulated deployment explicitly. Output starts at
+`state/sql_monitoring_demo/sql_tables.xlsx`; reruns use separate directories.
+
 Open [PricingModelSpec prototypes](model_spec_prototypes/comparison.ipynb) to
 review the A and C designs. The approved C layout is now used by the package
 scaffolder: dataset details are saved during ingestion, and training uses a

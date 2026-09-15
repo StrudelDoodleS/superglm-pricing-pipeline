@@ -48,6 +48,7 @@ by multiple projects. Follow the [SQL runbook](../docs/sql/README.md).
 | Script | Purpose |
 |---|---|
 | `simulate_model_monitoring.py` | Generate a synthetic 60% baseline plus four 10% arrivals; verify monitoring invariants and render feature, lambda, knot, relativity, and out-of-time performance figures. |
+| `demo_sql_monitoring.py` | Data, isolated SQLite setup and workbook export helpers for [the SQL monitoring notebook](../tutorials/sql_monitoring/demo.ipynb); run the notebook to fit and monitor. |
 
 Run it with `uv run python scripts/simulate_model_monitoring.py`. Generated
 CSVs, invariant evidence, and PNGs stay in ignored local state under

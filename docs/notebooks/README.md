@@ -498,7 +498,8 @@ Import these from `pricing_pipeline.notebook`.
 | `deploy_model_version(...)` | Deploy exactly the reviewed model version | Deployment record; stale champion fails |
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
 | `check_monitoring_data(...)` | Check input compatibility and categorical mix changes before the preset loop | Issues, distributions and drift distances; errors can be raised before fitting |
-| `run_monitoring_fit(...)` | Score or refit one controlled monitoring preset from a verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
+| `load_monitoring_baseline(...)` | Read the current deployment's configuration and fitted state from SQL | `SqlBaseline`; no local model file required |
+| `run_monitoring_fit(...)` | Score or refit one controlled preset from a SQL baseline or verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
 
 The previous names remain aliases for existing notebooks:
@@ -508,15 +509,48 @@ The previous names remain aliases for existing notebooks:
 Arguments and return types are unchanged. New notebook templates use the new
 names. Saving a version does not deploy it; local saves remain `LOCAL_AUDIT`.
 
-A monitoring notebook can open the champion once, prepare the new manifest's
+### SQL baselines and existing notebooks
+
+Updating the package does not regenerate existing notebooks. Completed 01 and 02
+notebooks, including feature transforms, groupings, specials and saved recipe
+TOMLs, remain usable. Keep their source in version control or make a backup.
+There is no need to rerun the scaffold. Its `--force` option overwrites files.
+
+After the database administrator applies migrations through V049, the existing
+`save_model_version` call also captures monitoring state in SQL. The snapshot
+contains explicit configuration, fitted geometry and smoothing settings, exact
+predictions as polynomial/lookup parameters, and aggregate categorical counts.
+It does not store training rows or a serialized Python object. Unsupported
+snapshot configurations record an unavailable reason; loading one reports it.
+
+Use the same SuperGLM version and Python major/minor version for publication and
+monitoring. The loader checks both before reconstructing a model. SQL removes
+the dependency on local model files; it does not remove runtime compatibility checks.
+
+For a model published before this update, capture its state once while its
+verified model artifact is still available:
+
+```python
+from pricing_pipeline.modeling.monitoring import capture_existing_monitoring_baseline
+
+candidate = open_deployed_candidate(pricing, model=model)
+capture_existing_monitoring_baseline(candidate)
+```
+
+This is an explicit SQL write. It does not fit or deploy a model. Subsequent
+monitoring loads use SQL only. If the old model file is already gone, its recipe
+alone cannot recover the old coefficients and learned knots. Publish a complete
+reviewed model to establish a new baseline.
+
+A monitoring notebook can load the baseline once, prepare the new manifest's
 feature frame in the same column order, and run the presets explicitly:
 
 ```python
 from pricing_pipeline.notebook import (
-    MonitoringVariant, check_monitoring_data, run_monitoring_fit,
+    MonitoringVariant, check_monitoring_data, load_monitoring_baseline, run_monitoring_fit,
 )
 
-baseline = open_deployed_candidate(pricing, model=model)
+baseline = load_monitoring_baseline(pricing, model=model)
 check = check_monitoring_data(baseline, X_new, sample_weight=weight_new)
 display(check.issues, check.drift)
 check.raise_for_errors()  # Warnings allow fitting; incompatible inputs stop here.
@@ -537,7 +571,7 @@ results = {
 }
 ```
 
-The check compares against the candidate's reverified training inputs. New raw
+The check compares against reference counts and weights saved in SQL. New raw
 categorical levels, missing feature columns, nulls, invalid numeric values and
 invalid weights block controlled refits. Known levels with no rows or no positive
 weight produce a support warning. Grouped features are checked against their
@@ -592,13 +626,15 @@ that fallback does not permit refitting unknown levels.
 
 Persist only after all requested fits have succeeded. Pass the new snapshot's
 `manifest_id`, `baseline.model_run_id`, and
-`baseline.technical["current_deployment_id"]`. Exact retries deduplicate; a
+`baseline.deployment_id`. Exact retries deduplicate; a
 different data-as-at/manifest creates a new observation.
 
-For persisted evidence, `run_monitoring_fit` accepts the deployed `Candidate`,
-re-queries its current SQL lineage, and reloads the exact artifact from its
-stored path, byte count, runtime metadata, and SHA-256. A raw fitted `SuperGLM`
-is supported only for local simulation and its result cannot be persisted. The
+For persisted evidence, use a baseline returned by `load_monitoring_baseline`.
+Loading verifies its JSON digest and SQL source lineage. Persistence checks the
+baseline state and current deployment again, so a deployment change during the
+fits prevents saving observations against a stale champion. The existing
+`Candidate` path remains available and verifies its local model artifact. A raw
+fitted `SuperGLM` is supported for local simulation; its result cannot be persisted. The
 ordered `model_frame` must hash to the supplied observation manifest at
 persistence time. If the deployed fit contract declares a sample-weight or
 offset input, the new snapshot must supply it; an offset is rejected when the

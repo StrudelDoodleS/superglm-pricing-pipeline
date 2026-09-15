@@ -12,11 +12,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 from superglm import SuperGLM
+
+if TYPE_CHECKING:
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
 
 FIT_CONTRACT_SCHEMA = "superglm_monitoring_fit_contract"
 
@@ -139,7 +142,7 @@ class MonitoringFitResult:
 
     variant: MonitoringVariant
     contract: ModelFitContract
-    fitted_model: SuperGLM
+    fitted_model: SuperGLM | SqlBaseline
     terms: tuple[MonitoringTerm, ...]
     lambdas: tuple[MonitoringLambda, ...]
     relativities: tuple[MonitoringRelativity, ...]

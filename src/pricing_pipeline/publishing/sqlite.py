@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.offline_sqlite import local_publish_lock
+from pricing_pipeline.modeling.monitoring.storage import save_publication_monitoring_baseline
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild, ApprovedModelBuildError
 from pricing_pipeline.orchestration.publish_completed_build import (
@@ -1196,11 +1197,17 @@ def publish_sqlite(
     with _sqlite_publication_transaction(engine, prepared) as connection:
         existing = _resolve_existing_or_equivalent(connection, prepared, tables)
         if existing is not None:
+            save_publication_monitoring_baseline(
+                connection, model_run_id=existing.model_run_id, prepared=prepared
+            )
             return existing
         _require_reserved_version(connection, prepared)
         package = _insert_local_package(connection, prepared, tables, metadata)
         _insert_local_rating_tables(connection, package, tables)
-        _insert_local_lineage(connection, package, prepared)
+        model_run_id = _insert_local_lineage(connection, package, prepared)
+        save_publication_monitoring_baseline(
+            connection, model_run_id=model_run_id, prepared=prepared
+        )
         created = _existing_local_publication(
             connection,
             model_id=prepared.build.model_id,

@@ -84,6 +84,7 @@ MIGRATION_FILES = (
     "V046__full_fit_diagnostics.sql",
     "V047__model_recipes.sql",
     "V048__recipe_revision_views.sql",
+    "V049__sql_monitoring_baselines.sql",
 )
 BASE_REQUIREMENTS = (
     "joblib",
@@ -246,7 +247,7 @@ def _expected_resource_names() -> set[str]:
 
 
 def _assert_resource_inventory(names: set[str]) -> None:
-    assert len(MIGRATION_FILES) == 48
+    assert len(MIGRATION_FILES) == 49
     assert {
         name for name in names if name.startswith(RESOURCE_PREFIX)
     } == _expected_resource_names()

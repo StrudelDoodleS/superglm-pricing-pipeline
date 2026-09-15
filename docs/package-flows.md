@@ -129,8 +129,13 @@ This workflow is implemented through notebook helpers; `workbench` is not a sepa
 
 ## From a baseline to monitoring evidence
 
-Start with [`workflow.run_monitoring_fit`](../src/pricing_pipeline/modeling/monitoring/workflow.py).
-It calls the stages in order; it does not write monitoring rows itself.
+Start with [`storage.load_monitoring_baseline`](../src/pricing_pipeline/modeling/monitoring/storage.py)
+to read the current deployment's JSON state from SQL. Publication captures that
+state with the successful model run. It contains the model configuration, fitted
+geometry and smoothing settings, exact scoring representation and aggregate
+categorical counts. Loading needs no local model file or original training rows.
+[`workflow.run_monitoring_fit`](../src/pricing_pipeline/modeling/monitoring/workflow.py)
+calls the stages in order; it does not write monitoring rows itself.
 
 Run [`check_monitoring_data`](../src/pricing_pipeline/modeling/monitoring/data_checks.py)
 once before the preset loop. Inspect its issues and drift table, then call
@@ -140,8 +145,8 @@ group warns. Constant numeric values and splines with no saved-domain overlap
 also block. Partial continuous coverage losses and categorical mix changes warn.
 Pass `variant` to check a specific comparison; the default is `FROZEN_REFIT`.
 `STATIC_SCORE` requires prediction compatibility, not support for re-estimation.
-The reference
-comes from the candidate's reverified saved training inputs. Aggregate reports
+The SQL baseline supplies the reference counts and weights. Existing Candidate
+inputs still use their verified saved training inputs. Aggregate reports
 can be logged with `to_json()`; they are separate from SQL monitoring observations.
 
 These are separate comparisons against the same saved baseline. Each selected
@@ -149,7 +154,9 @@ variant starts from that baseline, not from the preceding comparison's refit.
 
 ```mermaid
 flowchart TD
-    B["Deployed baseline model"] --> C["check_monitoring_data: compatibility and categorical drift"]
+    P0["Publication: save configuration, fitted settings and aggregate counts"] --> SQL["SQL monitoring baseline"]
+    SQL --> B["load_monitoring_baseline: verify the current deployment"]
+    B --> C["check_monitoring_data: compatibility and categorical drift"]
     D["New dated dataset"] --> C
     C --> Q["Incompatible inputs: stop and report"]
     C --> W["Compatible inputs: retain any review warnings"]
@@ -186,8 +193,10 @@ deployment if selected. That deployment starts a new baseline comparison epoch.
 
 The declared policy is in
 [`MONITORING_VARIANT_POLICIES`](../src/pricing_pipeline/modeling/monitoring/contracts.py).
-[`materialize_monitoring_model`](../src/pricing_pipeline/modeling/monitoring/fitting.py)
-reconstructs each refit; [`invariants`](../src/pricing_pipeline/modeling/monitoring/invariants.py)
+[`snapshot_fitting`](../src/pricing_pipeline/modeling/monitoring/snapshot_fitting.py)
+reconstructs each SQL-baseline refit. In-memory models use
+[`materialize_monitoring_model`](../src/pricing_pipeline/modeling/monitoring/fitting.py).
+[`invariants`](../src/pricing_pipeline/modeling/monitoring/invariants.py)
 checks its permitted changes. The [notebook guide](notebooks/README.md#baseline-epochs-and-monitoring)
 explains baseline epochs. The implementation also rejects unsupported frozen
 bases and refits with a group-selection penalty rather than relaxing the contract.

@@ -263,6 +263,9 @@ def test_open_offline_sqlite_adds_model_run_candidate_columns_to_existing_store(
     engine, paths = open_offline_sqlite(tmp_path)
     engine.dispose()
     with sqlite3.connect(paths["pricing"]) as connection:
+        # This fixture represents the schema before candidate columns and their
+        # monitoring source-identity guard existed.
+        connection.execute("DROP TRIGGER TR_MODEL_RUN_BASELINE_IDENTITY_UPDATE")
         for column in sorted(candidate_columns):
             connection.execute(f"ALTER TABLE MODEL_RUN DROP COLUMN {column}")
 

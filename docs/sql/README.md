@@ -61,6 +61,34 @@ remains available for consumers that specifically want only spline segments.
 | `mlops` | Normalized run lineage plus controlled deployed-model monitoring evidence |
 | `dbo` | `SCHEMA_MIGRATION` checksums/status and `SCHEMA_CONFIGURATION` schema-name lock |
 
+## SQL monitoring baselines, V049
+
+Apply the migration chain through V049 before publishing with this version.
+V049 adds `pricing.MODEL_MONITORING_BASELINE`. It retains existing data and does
+not recreate model notebooks. Each successful publication captures one immutable
+row containing explicit JSON model state and its source lineage. Unsupported
+snapshot configurations record `capture_status = 'UNAVAILABLE'` and a reason.
+
+The snapshot includes constructor settings, fitted geometry and lambdas, exact
+scoring parameters and aggregate categorical reference counts. It contains no
+training rows or serialized Python objects. Its source identity links to the
+model run, package, recipe, receipt and dataset. Digest and lineage checks run
+when loading the baseline and saving monitoring observations.
+
+`mlops.MODEL_FIT_CONTRACT` remains the comparison contract, including the selected
+relativity evaluation grid. The new table supplies enough state to start the
+weekly run on another machine. They have different purposes.
+
+An older publication has no new state until an explicit one-time capture uses its
+verified saved model. See [the notebook upgrade example](../notebooks/README.md#sql-baselines-and-existing-notebooks).
+New publications capture the state inside their publication transaction.
+
+```sql
+SELECT model_run_id, capture_status, unavailable_reason,
+       snapshot_schema_version, superglm_version, snapshot_sha256
+FROM pricing.MODEL_MONITORING_BASELINE;
+```
+
 ## Data and run lineage
 
 ```mermaid
@@ -285,6 +313,10 @@ concurrency backstop:
 | `TR_PRICING_MODEL_DEPLOYMENT_MONITORING_LINEAGE_GUARD` | A deployment referenced by monitoring may be closed normally, but its model, package, slot, start time, and identity cannot be changed or deleted. |
 | `TR_DATASET_MANIFEST_MONITORING_LINEAGE_GUARD` | A dataset manifest referenced by monitoring evidence cannot be changed or deleted. |
 | `TR_MODEL_RUN_MONITORING_LINEAGE_GUARD` | A run referenced by a monitoring fit contract retains its model, package, and successful status. |
+| `TR_MODEL_MONITORING_BASELINE_LINEAGE_GUARD` | A SQL baseline must belong to a successful model run and its published package. |
+| `TR_MODEL_MONITORING_BASELINE_IMMUTABLE` | Captured SQL baseline state and its source lineage cannot change or be deleted. |
+| `TR_MODEL_RUN_BASELINE_IDENTITY` | A run referenced by a SQL baseline retains its source identities and hashes. |
+| `TR_RATE_PACKAGE_BASELINE_IDENTITY` | A package referenced by a SQL baseline retains its ownership, version, export and receipt. |
 | `mlops.TR_MODEL_FIT_CONTRACT_IMMUTABLE` | A baseline fit contract cannot be changed or deleted. |
 | `mlops.TR_MODEL_FIT_CONTRACT_LINEAGE_GUARD` | A contract must identify one successful run and its published package. |
 | `mlops.TR_MODEL_MONITOR_RUN_LINEAGE_GUARD` | Contract, deployed package, model run, and monitoring row must identify one baseline. |

@@ -357,6 +357,109 @@ BEGIN
     SELECT RAISE(ABORT, 'monitoring variant policy is immutable');
 END;
 
+CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITORING_BASELINE (
+/*
+Purpose: Store the JSON fitted state and reference summaries used by recurring monitoring.
+One row: One immutable publication capture, or an explicit unavailable reason, per successful model run.
+Use: Load the current deployment through SQL. Historical runs can be captured once from verified artifacts without refitting.
+*/
+    model_run_id TEXT NOT NULL PRIMARY KEY REFERENCES MODEL_RUN(model_run_id),
+    model_id INTEGER NOT NULL REFERENCES PRICING_MODEL(model_id),
+    rate_package_id INTEGER NOT NULL REFERENCES PRICING_RATE_PACKAGE(rate_package_id),
+    capture_status TEXT NOT NULL CHECK (capture_status IN ('CAPTURED', 'UNAVAILABLE')),
+    unavailable_reason TEXT,
+    snapshot_schema_version INTEGER,
+    snapshot_json TEXT CHECK (snapshot_json IS NULL OR (json_valid(snapshot_json) AND json_type(snapshot_json)='object')),
+    snapshot_sha256 TEXT CHECK (snapshot_sha256 IS NULL OR (length(snapshot_sha256)=64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
+    superglm_version TEXT,
+    source_lineage_json TEXT NOT NULL CHECK (json_valid(source_lineage_json) AND json_type(source_lineage_json)='object'),
+    source_lineage_sha256 TEXT NOT NULL CHECK (length(source_lineage_sha256)=64 AND source_lineage_sha256 NOT GLOB '*[^0-9a-f]*'),
+    created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NOT NULL,
+    CHECK (
+        (capture_status='CAPTURED' AND unavailable_reason IS NULL
+         AND snapshot_schema_version IS NOT NULL AND snapshot_schema_version>=1
+         AND snapshot_json IS NOT NULL AND snapshot_sha256 IS NOT NULL AND superglm_version IS NOT NULL)
+        OR (capture_status='UNAVAILABLE' AND unavailable_reason IS NOT NULL AND length(trim(unavailable_reason))>0
+            AND snapshot_schema_version IS NULL AND snapshot_json IS NULL AND snapshot_sha256 IS NULL AND superglm_version IS NULL)
+    )
+);
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_LINEAGE_INSERT
+BEFORE INSERT ON MODEL_MONITORING_BASELINE
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_RUN AS mr JOIN PRICING_RATE_PACKAGE AS rp
+      ON rp.rate_package_id=mr.rate_package_id AND rp.model_id=mr.model_id
+    WHERE mr.model_run_id=NEW.model_run_id AND mr.model_id=NEW.model_id
+      AND mr.rate_package_id=NEW.rate_package_id AND mr.run_status='SUCCESS'
+      AND rp.package_status IN ('PUBLISHED', 'LOCAL_AUDIT')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baseline must identify one successful published model run');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_UPDATE
+BEFORE UPDATE ON MODEL_MONITORING_BASELINE
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baselines are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_DELETE
+BEFORE DELETE ON MODEL_MONITORING_BASELINE
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baselines are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_BASELINE_IDENTITY_UPDATE
+BEFORE UPDATE ON MODEL_RUN
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE model_run_id=OLD.model_run_id)
+AND (
+    NEW.model_run_id IS NOT OLD.model_run_id OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.rate_package_id IS NOT OLD.rate_package_id OR NEW.run_status IS NOT OLD.run_status
+    OR NEW.model_version IS NOT OLD.model_version OR NEW.model_kind IS NOT OLD.model_kind
+    OR NEW.export_id IS NOT OLD.export_id OR NEW.manifest_id IS NOT OLD.manifest_id
+    OR NEW.publication_receipt_sha256 IS NOT OLD.publication_receipt_sha256
+    OR NEW.model_source_sha256 IS NOT OLD.model_source_sha256
+    OR NEW.model_equivalence_sha256 IS NOT OLD.model_equivalence_sha256
+    OR NEW.candidate_artifact_sha256 IS NOT OLD.candidate_artifact_sha256
+    OR NEW.candidate_artifact_format IS NOT OLD.candidate_artifact_format
+    OR NEW.candidate_artifact_size_bytes IS NOT OLD.candidate_artifact_size_bytes
+    OR NEW.candidate_python_version IS NOT OLD.candidate_python_version
+    OR NEW.candidate_superglm_version IS NOT OLD.candidate_superglm_version
+    OR NEW.rating_workbook_sha256 IS NOT OLD.rating_workbook_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a model run referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_BASELINE_IDENTITY_DELETE
+BEFORE DELETE ON MODEL_RUN
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE model_run_id=OLD.model_run_id)
+BEGIN
+    SELECT RAISE(ABORT, 'a model run referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_RATE_PACKAGE_BASELINE_IDENTITY_UPDATE
+BEFORE UPDATE ON PRICING_RATE_PACKAGE
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE rate_package_id=OLD.rate_package_id)
+AND (
+    NEW.rate_package_id IS NOT OLD.rate_package_id OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.model_version IS NOT OLD.model_version OR NEW.package_version IS NOT OLD.package_version
+    OR NEW.source_export_id IS NOT OLD.source_export_id
+    OR NEW.publication_receipt_sha256 IS NOT OLD.publication_receipt_sha256
+    OR NEW.publication_receipt_json IS NOT OLD.publication_receipt_json
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a package referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_RATE_PACKAGE_BASELINE_IDENTITY_DELETE
+BEFORE DELETE ON PRICING_RATE_PACKAGE
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE rate_package_id=OLD.rate_package_id)
+BEGIN
+    SELECT RAISE(ABORT, 'a package referenced by a monitoring baseline retains its source identity');
+END;
+
 CREATE TABLE IF NOT EXISTS pricing.MODEL_FIT_CONTRACT (
 /*
 Purpose: Record the model structure and fitted settings frozen for a monitoring baseline.

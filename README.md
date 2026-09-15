@@ -82,9 +82,8 @@ The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same
 - [Developer guide: package flows, module owners and argument-to-notebook mapping](docs/MAINTAINERS.md)
 
 To compare already-scored models, run `scripts/build_underwriter_report.py`
-from a package source checkout with
-`docs/notebooks/underwriter_report.example.toml`. It creates one offline HTML
-file and does not write models or diagnostics to SQL.
+from a source checkout with `docs/notebooks/underwriter_report.example.toml`.
+It creates one offline HTML file and does not write to SQL.
 
 The packaged `pricing_pipeline.resources.migrations` chain is the authoritative
 SQL Server schema; inspect it with `pricing_pipeline.resources.migration_root()`
@@ -115,10 +114,11 @@ uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
 uv build --force-pep517 --sdist --wheel --out-dir dist
 ```
 
-Only `tests/packaging/test_clean_wheel_install.py` proves the built wheel works
-outside this checkout. Do not commit model-local `.local/` state, notebook
-outputs, credentials, or runtime modules containing credentials.
+Apply migrations through V049 before publishing with this version.
 
-Export with `candidate.recipe.save(path)`; reload with `ModelRecipe.load(path).build(dataset=dataset)`.
-SQL assigns recipe revisions on save. Deployment is separate. The database
-administrator must apply V047 and V048 before models are saved with this version.
+Weekly monitoring loads the deployed model from SQL with `load_monitoring_baseline`.
+See the [SQL monitoring notebook](tutorials/sql_monitoring/demo.ipynb) and [upgrade notes](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).
+
+Package updates preserve your completed 01 and 02 notebooks and recipe TOMLs.
+New publications capture the SQL baseline automatically. Do not regenerate an
+existing project with `scaffold --force`; that option overwrites its files.

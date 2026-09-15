@@ -36,6 +36,7 @@ from pricing_pipeline.modeling.monitoring.fitting import (
     materialize_monitoring_model,
 )
 from pricing_pipeline.modeling.monitoring.invariants import _verify_monitoring_invariants
+from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
 from pricing_pipeline.publishing.metadata import (
     OffsetExportContract,
 )
@@ -43,7 +44,7 @@ from pricing_pipeline.workbench.core import Candidate
 
 
 def run_monitoring_fit(
-    baseline_model: SuperGLM | Candidate,
+    baseline_model: SuperGLM | Candidate | SqlBaseline,
     X: pd.DataFrame,
     y: Any,
     *,
@@ -64,6 +65,8 @@ def run_monitoring_fit(
 ) -> MonitoringFitResult:
     """Score or refit a baseline under the selected monitoring variant.
 
+    Accept a SQL baseline from ``load_monitoring_baseline``, a saved Candidate,
+    or an in-memory fitted SuperGLM. SQL baselines need no local model file.
     Verify the baseline and supplied data, materialize the permitted model,
     then extract metrics and relativities and check its frozen structure.
     Return ``MonitoringFitResult`` for ``persist_monitoring_fit``.
@@ -86,14 +89,10 @@ def run_monitoring_fit(
         resolved_offset = baseline_bundle.offset_contract
         baseline_preparation = getattr(baseline_bundle, "input_transforms", None)
         if input_transforms is not None and preparation != baseline_preparation:
-            raise MonitoringError(
-                "input_transforms does not match the verified baseline candidate artifact"
-            )
+            raise MonitoringError("input_transforms does not match the saved baseline")
         preparation = baseline_preparation
         if offset_contract is not None and offset_contract != resolved_offset:
-            raise MonitoringError(
-                "offset_contract does not match the verified baseline candidate artifact"
-            )
+            raise MonitoringError("offset_contract does not match the saved baseline")
         for supplied, expected, field_name in (
             (
                 fit_sample_weight_name,
@@ -107,23 +106,15 @@ def run_monitoring_fit(
             ),
         ):
             if supplied is not None and supplied != expected:
-                raise MonitoringError(
-                    f"{field_name} does not match the verified baseline candidate artifact"
-                )
+                raise MonitoringError(f"{field_name} does not match the saved baseline")
         fit_sample_weight_name = baseline_bundle.fit_sample_weight_name
         export_weight_name = baseline_bundle.export_weight_name
         if fit_sample_weight_name is not None and sample_weight is None:
-            raise MonitoringError(
-                "sample_weight is required by the verified baseline candidate fit contract"
-            )
+            raise MonitoringError("sample_weight is required by the saved baseline fit contract")
         if resolved_offset.handling != "NONE" and offset is None:
-            raise MonitoringError(
-                "offset is required by the verified baseline candidate fit contract"
-            )
+            raise MonitoringError("offset is required by the saved baseline fit contract")
         if resolved_offset.handling == "NONE" and offset is not None:
-            raise MonitoringError(
-                "offset was not used by the verified baseline candidate fit contract"
-            )
+            raise MonitoringError("offset was not used by the saved baseline fit contract")
     model_frame_sha256 = _bind_monitoring_model_frame(
         X,
         y,
@@ -153,18 +144,26 @@ def run_monitoring_fit(
         sample_weight,
         variant=resolved_variant,
     )
-    contract = build_model_fit_contract(
-        baseline,
-        offset_contract=resolved_offset,
-        fit_sample_weight_name=fit_sample_weight_name,
-        export_weight_name=export_weight_name,
-        input_transforms=preparation,
-        continuous_points=continuous_points,
+    contract = (
+        baseline.model_fit_contract(continuous_points=continuous_points)
+        if isinstance(baseline, SqlBaseline)
+        else build_model_fit_contract(
+            baseline,
+            offset_contract=resolved_offset,
+            fit_sample_weight_name=fit_sample_weight_name,
+            export_weight_name=export_weight_name,
+            input_transforms=preparation,
+            continuous_points=continuous_points,
+        )
     )
     if resolved_variant is MonitoringVariant.STATIC_SCORE:
         fitted = baseline
     else:
-        fitted = materialize_monitoring_model(baseline, resolved_variant)
+        fitted = (
+            baseline.materialize(resolved_variant)
+            if isinstance(baseline, SqlBaseline)
+            else materialize_monitoring_model(baseline, resolved_variant)
+        )
         fitted.fit_reml(
             X,
             np.asarray(y),
@@ -189,14 +188,26 @@ def run_monitoring_fit(
         variant=resolved_variant,
         contract=contract,
         fitted_model=fitted,
-        terms=_result_terms(
-            fitted,
-            offset_contract=resolved_offset,
-            fit_sample_weight_name=fit_sample_weight_name,
-            export_weight_name=export_weight_name,
+        terms=(
+            fitted.terms
+            if isinstance(fitted, SqlBaseline)
+            else _result_terms(
+                fitted,
+                offset_contract=resolved_offset,
+                fit_sample_weight_name=fit_sample_weight_name,
+                export_weight_name=export_weight_name,
+            )
         ),
-        lambdas=_result_lambdas(fitted, resolved_variant),
-        relativities=_result_relativities(fitted, payload["evaluation_grid"]),
+        lambdas=(
+            fitted.lambdas
+            if isinstance(fitted, SqlBaseline)
+            else _result_lambdas(fitted, resolved_variant)
+        ),
+        relativities=(
+            fitted.relativities(payload["evaluation_grid"])
+            if isinstance(fitted, SqlBaseline)
+            else _result_relativities(fitted, payload["evaluation_grid"])
+        ),
         metrics=_result_metrics(fitted, X, y, sample_weight, offset),
         invariant_evidence=invariant_evidence,
         model_frame_sha256=model_frame_sha256,

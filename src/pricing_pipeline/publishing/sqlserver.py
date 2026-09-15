@@ -1694,11 +1694,16 @@ def publish_sqlserver(
     prepared: PreparedPublication,
     tables: RatingTables,
 ) -> CompletedModelPublishResult:
+    from pricing_pipeline.modeling.monitoring.storage import save_publication_monitoring_baseline
+
     with engine.begin() as connection:
         lock_model(connection, prepared.build.model_id)
         _lock_export(connection, prepared.build.export_id)
         existing = _resolve_existing_or_equivalent(connection, prepared, tables)
         if existing is not None:
+            save_publication_monitoring_baseline(
+                connection, model_run_id=existing.model_run_id, prepared=prepared
+            )
             _delete_staging_children(connection, export_id=prepared.build.export_id)
             return existing
         _replace_staging_frames(connection, prepared, tables)
@@ -1707,6 +1712,9 @@ def publish_sqlserver(
         model_run_id = _insert_lineage(connection, package, prepared)
         _verify_draft(connection, package, prepared.verification)
         _mark_published(connection, package.rate_package_id)
+        save_publication_monitoring_baseline(
+            connection, model_run_id=model_run_id, prepared=prepared
+        )
         _delete_staging_children(connection, export_id=prepared.build.export_id)
         return replace(
             _publication_result(package, model_run_id, prepared),

@@ -35,6 +35,11 @@ from pricing_pipeline.modeling.monitoring.fitting import (
 from pricing_pipeline.modeling.monitoring.persistence import (
     persist_monitoring_fit,
 )
+from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+from pricing_pipeline.modeling.monitoring.storage import (
+    capture_existing_monitoring_baseline,
+    load_monitoring_baseline,
+)
 from pricing_pipeline.modeling.monitoring.workflow import (
     run_monitoring_fit,
 )
@@ -59,8 +64,11 @@ __all__ = [
     "MonitoringVariant",
     "MonitoringVariantPolicy",
     "PersistedMonitoringRun",
+    "SqlBaseline",
     "build_model_fit_contract",
+    "capture_existing_monitoring_baseline",
     "check_monitoring_data",
+    "load_monitoring_baseline",
     "materialize_monitoring_model",
     "persist_monitoring_fit",
     "run_monitoring_fit",

@@ -153,6 +153,10 @@ def test_reopening_sqlite_refreshes_the_old_status_dependent_guard(fitted_case, 
     pricing, _, candidate, _ = fitted_case
     api.save_model_version(pricing, candidate)
     with pricing.engine.begin() as c:
+        # Model the older database this upgrade targets, before publication
+        # automatically captured immutable monitoring baseline source identity.
+        c.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITORING_BASELINE_DELETE"))
+        c.execute(text("DELETE FROM pricing.MODEL_MONITORING_BASELINE"))
         c.execute(text("DROP TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE"))
         c.execute(
             text("""CREATE TRIGGER pricing.TR_MODEL_RUN_RECIPE_IMMUTABLE

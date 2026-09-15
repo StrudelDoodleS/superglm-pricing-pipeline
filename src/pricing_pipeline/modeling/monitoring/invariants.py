@@ -22,6 +22,7 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     MonitoringError,
     MonitoringFitResult,
     MonitoringInvariantEvidence,
+    MonitoringLambda,
     MonitoringVariant,
     _canonical_json,
     _required_sha256,
@@ -46,6 +47,10 @@ def _publication_receipt_payload(
     export_weight_name: str | None,
     input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
+    if isinstance(model, SqlBaseline):
+        return model.payload()["receipt"]
     return build_superglm_publication_receipt(
         model,
         offset_contract=offset_contract,
@@ -97,7 +102,13 @@ def _normalized_runtime_structure(
             fitted.pop("lower_bound", None)
             fitted.pop("upper_bound", None)
 
-    telemetry = model.training_telemetry()
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
+    telemetry = (
+        model.payload()["telemetry"]
+        if isinstance(model, SqlBaseline)
+        else model.training_telemetry()
+    )
     feature_schema = copy.deepcopy(telemetry["features"])
     # Active design-matrix groups may contract when a governed level has no
     # effective rows in a particular snapshot. SuperGLM keeps that level known
@@ -147,6 +158,11 @@ def _protected_geometry_fields(
             for field_name in sorted(fields)
         )
 
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
+    if isinstance(baseline, SqlBaseline):
+        return tuple(baseline.payload()["protected_geometry_fields"])
+
     protected: list[str] = []
     for term_name, configured in baseline._config.feature_templates:
         spline = (
@@ -187,6 +203,8 @@ def _verify_monitoring_invariants(
     export_weight_name: str | None,
     input_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> MonitoringInvariantEvidence:
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
     baseline_receipt = _publication_receipt_payload(
         baseline,
         offset_contract=offset_contract,
@@ -232,8 +250,14 @@ def _verify_monitoring_invariants(
             + ", ".join(changed_geometry)
         )
 
-    baseline_lambda_rows = _result_lambdas(baseline, MonitoringVariant.REESTIMATE_LAMBDA)
-    fitted_lambda_rows = _result_lambdas(fitted, variant)
+    baseline_lambda_rows = (
+        tuple(MonitoringLambda(**row) for row in baseline.payload()["fitted_lambda_policies"])
+        if isinstance(baseline, SqlBaseline)
+        else _result_lambdas(baseline, MonitoringVariant.REESTIMATE_LAMBDA)
+    )
+    fitted_lambda_rows = (
+        fitted.lambdas if isinstance(fitted, SqlBaseline) else _result_lambdas(fitted, variant)
+    )
     baseline_lambdas = {row.component_name: row.lambda_value for row in baseline_lambda_rows}
     fitted_lambdas = {row.component_name: row.lambda_value for row in fitted_lambda_rows}
     if set(fitted_lambdas) != set(baseline_lambdas):
@@ -266,7 +290,11 @@ def _verify_monitoring_invariants(
     ):
         raise MonitoringError("post-fit invariant guard found a protected lambda was not fixed")
 
-    diagnostics = fitted.reml_diagnostics()
+    diagnostics = (
+        {"termination_reason": fitted.payload().get("reml_termination_reason")}
+        if isinstance(fitted, SqlBaseline)
+        else fitted.reml_diagnostics()
+    )
     termination_reason = diagnostics.get("termination_reason")
     if (
         variant is MonitoringVariant.FROZEN_REFIT

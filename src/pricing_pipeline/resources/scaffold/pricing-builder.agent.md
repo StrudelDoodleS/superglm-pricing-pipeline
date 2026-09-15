@@ -176,9 +176,19 @@ successful build is saved. A recipe revision identifies declared modelling
 choices; model_version and package_version retain their existing fitted-build
 and package meanings. New data can produce a new build using the same recipe.
 Post-fit edits retain their training recipe plus edit lineage. Loading a recipe
-is an ordinary refit; frozen learned structures still require baseline artifacts
-and monitoring variants. Saving a challenger does not deploy it. Keep notebook
-06 and deployment selection separate. SQL stores need V047 and V048 before use.
+is an ordinary refit. For weekly monitoring, use
+`load_monitoring_baseline(pricing, model=model)` from `pricing_pipeline.notebook`.
+It reads the deployed configuration and fitted settings from SQL. Pass it to
+`check_monitoring_data` and `run_monitoring_fit`; do not require a local model file.
+Saving a challenger does not deploy it. Keep notebook 06 and deployment selection
+separate. SQL stores need migrations through V049 before use.
+
+Package updates do not rewrite existing 01 or 02 notebooks. Preserve completed
+cells and recipe TOMLs. The existing publication call captures the new SQL state
+automatically. Older publications can use the explicit one-time
+`capture_existing_monitoring_baseline(candidate)` helper while their verified
+artifact is available. Explain that this writes SQL. Never regenerate a filled
+project with `--force` as an upgrade step.
 
 `pricing-pipeline init` preserves customized agent files. An existing project's
 agent needs an intentional manual update to adopt these instructions.

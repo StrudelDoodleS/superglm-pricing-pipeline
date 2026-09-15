@@ -74,10 +74,14 @@ from pricing_pipeline.modeling.monitoring import (
     MonitoringInvariantEvidence,
     MonitoringVariant,
     PersistedMonitoringRun,
+    SqlBaseline,
     build_model_fit_contract,
     check_monitoring_data,
     persist_monitoring_fit,
     run_monitoring_fit,
+)
+from pricing_pipeline.modeling.monitoring import (
+    load_monitoring_baseline as _load_monitoring_baseline,
 )
 from pricing_pipeline.modeling.recipes import ModelRecipe, RecipeCapture, UnsupportedRecipeError
 from pricing_pipeline.modeling.recipes.schema import capture_environment
@@ -782,6 +786,21 @@ def load_model_version(
     )
 
 
+def load_monitoring_baseline(
+    pricing: NotebookContext,
+    *,
+    model: RegisteredModel,
+) -> SqlBaseline:
+    """Read the current deployment's monitoring state from SQL, without model files.
+
+    Pass the result to ``check_monitoring_data`` and ``run_monitoring_fit``.
+    The model's configured deployment slot selects the baseline.
+    """
+    return _load_monitoring_baseline(
+        pricing.engine, model.name, deployment_slot=model.config.deployment_slot
+    )
+
+
 def open_deployed_candidate(
     pricing: NotebookContext,
     *,
@@ -1039,6 +1058,7 @@ __all__ = [
     "PricingDataset",
     "PricingModelSpec",
     "RegisteredModel",
+    "SqlBaseline",
     "apply_level_groupings",
     "apply_manual_adjustment_policy",
     "apply_transforms",
@@ -1057,6 +1077,7 @@ __all__ = [
     "load_level_groupings",
     "load_model_frame",
     "load_model_version",
+    "load_monitoring_baseline",
     "load_registered_model",
     "manual_adjustment_policy_from_candidate",
     "open_candidate",
