@@ -99,7 +99,7 @@ BASE_REQUIREMENTS = (
     "python-dotenv",
     "scikit-learn",
     "sqlalchemy",
-    "superglm>=0.30",
+    "superglm>=0.33",
     "tomli-w>=1.2.0",
 )
 OPTIONAL_REQUIREMENTS = {

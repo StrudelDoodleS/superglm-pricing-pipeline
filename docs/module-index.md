@@ -96,7 +96,7 @@ they are not a list of additional public APIs.
 | [modeling/recipes/__init__.py](../src/pricing_pipeline/modeling/recipes/__init__.py) | Portable declared recipes with no database or fitting side effects. |
 | [modeling/recipes/io.py](../src/pricing_pipeline/modeling/recipes/io.py) | Read and write editable model recipes as TOML. |
 | [modeling/recipes/schema.py](../src/pricing_pipeline/modeling/recipes/schema.py) | Immutable declared model configuration and exact semantic identity. |
-| [modeling/recipes/superglm.py](../src/pricing_pipeline/modeling/recipes/superglm.py) | Allowlisted SuperGLM 0.30 constructor codecs. |
+| [modeling/recipes/superglm.py](../src/pricing_pipeline/modeling/recipes/superglm.py) | Supported SuperGLM constructor settings for saving and loading recipes. |
 
 ## Remote build handoffs
 

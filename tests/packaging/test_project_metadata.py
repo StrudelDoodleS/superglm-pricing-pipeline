@@ -69,7 +69,7 @@ def test_dependency_contract_is_exact():
         "python-dotenv",
         "scikit-learn",
         "sqlalchemy",
-        "superglm>=0.30",
+        "superglm>=0.33",
         "tomli-w>=1.2.0",
     ]
     assert project["optional-dependencies"] == {

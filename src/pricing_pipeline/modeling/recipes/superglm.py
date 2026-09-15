@@ -1,4 +1,4 @@
-"""Allowlisted SuperGLM 0.30 constructor codecs.
+"""Supported SuperGLM constructor settings for saving and loading recipes.
 
 All private SuperGLM access for recipes lives here. ``_config`` owns pristine
 constructor templates; ``clone_unfitted`` materializes them independently after
