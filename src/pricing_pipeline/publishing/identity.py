@@ -124,12 +124,15 @@ def find_equivalent_publication(
     build: ApprovedModelBuild,
 ) -> EquivalentModelPublication | None:
     """Read SQL lineage for the same model, dataset version, kind, and rating fingerprint."""
+    if build.monitor_run_id is not None:
+        return None  # Monitoring reuses its exact observation, never rounded rating equivalence.
     digest = build.model_equivalence_sha256
     if digest is None:
         raise ModelEquivalenceError(
             "calculate model equivalence before checking prior publications"
         )
     schemas = schema_names_from_connectable(engine)
+    monitor_schema = schemas.pricing if engine.dialect.name == "sqlite" else schemas.mlops
     with engine.connect() as connection:
         rows = (
             connection.execute(
@@ -173,6 +176,8 @@ def find_equivalent_publication(
                       AND mr.model_equivalence_sha256 =
                           :model_equivalence_sha256
                       AND mr.run_status = 'SUCCESS'
+                      AND NOT EXISTS (SELECT 1 FROM {monitor_schema}.MODEL_MONITOR_PUBLICATION AS monitor_link
+                                      WHERE monitor_link.model_run_id=mr.model_run_id)
                       {identity_predicate()}
                     """
                 ),

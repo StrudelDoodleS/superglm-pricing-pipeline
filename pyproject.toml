@@ -13,7 +13,7 @@ dependencies = [
   "python-dotenv",
   "scikit-learn",
   "sqlalchemy",
-  "superglm>=0.30",
+  "superglm>=0.33",
   "tomli-w>=1.2.0",
 ]
 
@@ -25,6 +25,7 @@ sqlserver = ["pyodbc"]
 azure = ["azure-identity", "pyodbc"]
 report = ["plotly>=6.9", "scipy"]
 notebook = ["ipykernel"]
+demo = ["ipykernel", "pymssql>=2.3.13", "jupyterlab>=4.4,<5"]
 scratch = ["catboost", "lightgbm", "matplotlib", "scipy", "xgboost"]
 mlflow = ["mlflow"]
 
@@ -56,7 +57,10 @@ consider_namespace_packages = true
 [tool.ruff]
 target-version = "py314"
 line-length = 100
-extend-exclude = ["src/pricing_pipeline/resources/scaffold/notebooks"]
+extend-exclude = [
+  "src/pricing_pipeline/resources/scaffold/notebooks",
+  "src/pricing_pipeline/resources/demo/**/*.ipynb",
+]
 
 [dependency-groups]
 dev = [

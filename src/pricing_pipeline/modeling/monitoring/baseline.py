@@ -1,11 +1,12 @@
-"""Verify the saved baseline and bind a monitoring dataframe to its declared roles.
+"""Verify a SQL or artifact baseline and bind a dataframe to its declared roles.
 
 The workflow calls these checks before reconstructing or fitting a model."""
 
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -27,6 +28,9 @@ from pricing_pipeline.workbench.artifacts import (
     load_candidate_bundle,
 )
 from pricing_pipeline.workbench.core import Candidate, CandidateLineageError
+
+if TYPE_CHECKING:
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
 
 
 def _verified_candidate_baseline(
@@ -188,8 +192,29 @@ def _verified_candidate_baseline(
 
 
 def _resolve_monitoring_baseline(
-    value: SuperGLM | Candidate,
-) -> tuple[SuperGLM, dict[str, Any] | None, CandidateBundle | None]:
+    value: SuperGLM | Candidate | SqlBaseline,
+) -> tuple[SuperGLM | SqlBaseline, dict[str, Any] | None, CandidateBundle | SqlBaseline | None]:
+    from pricing_pipeline.modeling.monitoring.snapshot import (
+        SqlBaseline,
+        restore_monitoring_snapshot,
+    )
+
+    if isinstance(value, SqlBaseline):
+        # Recheck even a caller-created/replaced record before consuming its JSON.
+        checked = restore_monitoring_snapshot(
+            value.snapshot_json, expected_sha256=value.snapshot_sha256
+        )
+        if (
+            value.identity is not None
+            and value.identity.get("snapshot_sha256") != checked.snapshot_sha256
+        ):
+            raise MonitoringError(
+                "SQL baseline identity does not match the snapshot used for monitoring"
+            )
+        checked = replace(
+            checked, identity=None if value.identity is None else dict(value.identity)
+        )
+        return checked, checked.identity, checked
     if isinstance(value, Candidate):
         return _verified_candidate_baseline(value)
     return _require_fitted_superglm(value), None, None

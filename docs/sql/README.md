@@ -61,6 +61,96 @@ remains available for consumers that specifically want only spline segments.
 | `mlops` | Normalized run lineage plus controlled deployed-model monitoring evidence |
 | `dbo` | `SCHEMA_MIGRATION` checksums/status and `SCHEMA_CONFIGURATION` schema-name lock |
 
+## SQL monitoring baselines, V049
+
+Apply the migration chain through V052 before publishing with this version.
+V049 adds `pricing.MODEL_MONITORING_BASELINE`. It retains existing data and does
+not recreate model notebooks. Each successful publication captures one immutable
+row containing explicit JSON model state and its source lineage. Unsupported
+snapshot configurations record `capture_status = 'UNAVAILABLE'` and a reason.
+
+The snapshot includes constructor settings, fitted geometry and lambdas, exact
+scoring parameters and aggregate categorical reference counts. It contains no
+training rows or serialized Python objects. Its source identity links to the
+model run, package, recipe, receipt and dataset. Digest and lineage checks run
+when loading the baseline and saving monitoring observations.
+
+`mlops.MODEL_FIT_CONTRACT` remains the comparison contract, including the selected
+relativity evaluation grid. The new table supplies enough state to start the
+weekly run on another machine. They have different purposes.
+
+An older publication has no new state until an explicit one-time capture uses its
+verified saved model. See [the notebook upgrade example](../notebooks/README.md#sql-baselines-and-existing-notebooks).
+New publications capture the state inside their publication transaction.
+
+```sql
+SELECT model_run_id, capture_status, unavailable_reason,
+       snapshot_schema_version, superglm_version, snapshot_sha256
+FROM pricing.MODEL_MONITORING_BASELINE;
+```
+
+## Champion and challenger packages, V050
+
+`mlops.MODEL_MONITOR_PUBLICATION` links a sealed refit observation to the exact
+published model run. It is immutable and has one row per published challenger.
+`STATIC_SCORE` represents the champion and creates no new package. Distinct
+variants keep distinct package identities even when their rates happen to match.
+
+`pricing.V_MODEL_CHALLENGER` joins the candidate package, its monitoring variant,
+baseline and dated dataset with the current deployment. Use it to list weekly
+challengers. The champion remains the open row in
+`pricing.PRICING_MODEL_DEPLOYMENT` for the selected model and slot; the link table
+does not introduce another deployment status.
+
+A successful challenger publication also needs a captured SQL monitoring
+snapshot. New snapshots keep the original declared knot and lambda policies
+separately from the actual execution settings. This allows later adaptive refits
+after a frozen challenger is promoted. Older snapshot v1 remains readable.
+
+## Model registry, V051
+
+Use `pricing.V_MODEL_REGISTRY` to see the champion, challengers and former
+champions together. It includes ordinary training builds and weekly refits.
+It adds no tables and changes no existing deployment or historical recipe.
+
+```sql
+SELECT model_name, deployment_slot, role, definition_revision, refit_type,
+       data_as_of_date, published_at, package_version, model_run_id
+FROM pricing.V_MODEL_REGISTRY
+WHERE model_name = 'BURN_COST'
+ORDER BY deployment_slot, package_version DESC;
+```
+
+`definition_revision` is the declared recipe revision. Weekly refits inherit it,
+including the original validation plan. Their actual execution skips CV and
+records its frozen or re-estimated controls in the monitoring evidence and SQL
+snapshot. Changing declared features, grouping, transforms or fitting policies
+through an analyst build creates or reuses the corresponding recipe revision.
+Legacy recipes have a NULL revision and an explicit `recipe_status`.
+
+`package_version` and `model_run_id` identify individual saved results. The old
+`model_version` counter is exposed here as `fit_version` for audit joins.
+`published_at` is the UTC publication time, separate from the dataset's as-at date
+and the deployment time. Promotion changes the role without fitting or renumbering.
+
+The view has one row per package and known deployment slot. Filter the slot
+before counting packages across models with multiple slots. Ordinary builds can
+appear in every known slot; monitoring packages belong to their originating slot.
+A model with no deployment history has a NULL slot and challenger rows. A replaced
+champion is `FORMER_CHAMPION` in that slot, preserving its deployment history.
+
+`mlops.TR_MODEL_MONITOR_PUBLICATION_RECIPE` rejects new monitoring publications
+that change their baseline's recipe. Existing recorded revisions remain intact.
+The narrower `pricing.V_MODEL_CHALLENGER` remains available for existing queries.
+
+`mlops.TR_MODEL_MONITOR_PUBLICATION_LINEAGE_GUARD` checks the observation and
+candidate on insertion; `mlops.TR_MODEL_MONITOR_PUBLICATION_IMMUTABLE` rejects
+updates and deletions. `pricing.TR_DATASET_MANIFEST_CHALLENGER_IDENTITY` preserves
+the baseline dataset identity once a challenger publication references it.
+
+SQL-only review and promotion need no local fitted model files. The promotion
+transaction checks the package and deployment IDs seen during review.
+
 ## Data and run lineage
 
 ```mermaid
@@ -285,6 +375,10 @@ concurrency backstop:
 | `TR_PRICING_MODEL_DEPLOYMENT_MONITORING_LINEAGE_GUARD` | A deployment referenced by monitoring may be closed normally, but its model, package, slot, start time, and identity cannot be changed or deleted. |
 | `TR_DATASET_MANIFEST_MONITORING_LINEAGE_GUARD` | A dataset manifest referenced by monitoring evidence cannot be changed or deleted. |
 | `TR_MODEL_RUN_MONITORING_LINEAGE_GUARD` | A run referenced by a monitoring fit contract retains its model, package, and successful status. |
+| `TR_MODEL_MONITORING_BASELINE_LINEAGE_GUARD` | A SQL baseline must belong to a successful model run and its published package. |
+| `TR_MODEL_MONITORING_BASELINE_IMMUTABLE` | Captured SQL baseline state and its source lineage cannot change or be deleted. |
+| `TR_MODEL_RUN_BASELINE_IDENTITY` | A run referenced by a SQL baseline retains its source identities and hashes. |
+| `TR_RATE_PACKAGE_BASELINE_IDENTITY` | A package referenced by a SQL baseline retains its ownership, version, export and receipt. |
 | `mlops.TR_MODEL_FIT_CONTRACT_IMMUTABLE` | A baseline fit contract cannot be changed or deleted. |
 | `mlops.TR_MODEL_FIT_CONTRACT_LINEAGE_GUARD` | A contract must identify one successful run and its published package. |
 | `mlops.TR_MODEL_MONITOR_RUN_LINEAGE_GUARD` | Contract, deployed package, model run, and monitoring row must identify one baseline. |
@@ -615,7 +709,7 @@ directories; do not commit copied runnable SQL.
 
 ## Recipe revisions, V047 and V048
 
-Run the existing migration command through V048 before using recipe publication.
+Apply the full migration chain before using recipe publication.
 V047 adds `pricing.MODEL_RECIPE` and recipe linkage/status on `MODEL_RUN`. Old
 runs remain `LEGACY`; their model/package identifiers and dates are unchanged.
 V048 adds recipe revision, SHA-256 and status to the final-model and validation
@@ -654,6 +748,27 @@ skip cross-export equivalence; exact-export retries remain valid.
 The rating fingerprint itself is unchanged.
 Direct SQL writes do not provide the complete publication protocol.
 
+## Compressed recipes, V052
+
+SQL Server stores each recipe in `MODEL_RECIPE.recipe_gzip`, a `VARBINARY(MAX)`
+column. Publication writes `COMPRESS(CAST(:json AS NVARCHAR(MAX)))`. The
+`recipe_json` column decodes those bytes when selected and stores no second
+copy. `save_model_version()` handles this automatically. Existing readers and
+notebooks receive the same JSON and need no compression settings or extra cells.
+SQLite keeps plain text for local workflows.
+
+V052 compresses existing recipes in the administrator migration transaction.
+It checks byte-for-byte restoration before replacing the text column. Recipe
+IDs, revision numbers, hashes, timestamps and run links remain unchanged.
+Apply V052 with the updated package; older writers cannot insert into the
+computed `recipe_json` column. Pause publication jobs during the upgrade.
+
+SQL Server's gzip payload contains UTF-16LE text. The recipe hash continues to
+use canonical UTF-8 JSON. Python clients on Windows and Linux use the same
+publication and loading functions; SQL Server handles compression and decoding.
+
+## SQL Server recipe tests
+
 Live SQL recipe checks require an explicitly designated test database and private
 runtime module. They never create or reset a database and leave committed test
 history for inspection. Run with:
@@ -664,10 +779,13 @@ PRICING_RECIPE_TEST_DATABASE=PricingRecipeTest \
   uv run python -m pytest tests/recipes/test_sqlserver_integration.py -ra
 ```
 
-Use a disposable test destination with the pipeline initialized through V046 to
-exercise the upgrade; a destination already at V048 skips that upgrade scenario.
-The tests validate the database name before writes. They cover migration,
-concurrent allocation, rollback, immutable links and view queries. SQLite and
-T-SQL parser results do not establish live SQL Server behavior. No live runtime
-or test database was available during this implementation, so live checks remain
-outstanding.
+Use a disposable test destination initialized through V046 to V052. Starting
+at V046 also exercises the original recipe upgrade. The compression test creates
+an isolated schema with an existing Unicode recipe over 8 KB, runs V052, checks
+its contents and links, and rolls the schema back. The tests also cover gzip
+interoperability with Python, invalid documents, concurrent allocation, rollback,
+immutable links and view queries. They validate the database name before writes.
+
+SQLite and T-SQL parser results do not establish live SQL Server behavior. No
+live runtime or test database was available during this implementation, so live
+checks remain outstanding.

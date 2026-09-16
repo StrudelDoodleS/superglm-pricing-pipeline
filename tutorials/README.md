@@ -1,5 +1,15 @@
 # Tutorials
 
+Open [SQL monitoring and table extracts](sql_monitoring/demo.ipynb) for an
+executed synthetic Tweedie burn-cost example. It saves the baseline in SQL,
+removes the original publication files, checks a dated SQL source, and saves a
+champion observation plus three challenger packages. It runs the generated
+`monitoring.py` from an unrelated directory, executes notebook 07, verifies that
+retries reuse the saved packages, and exports actual SQL tables and the
+challenger view to Excel. The isolated SQLite demo labels its simulated initial
+deployment and local audit challengers explicitly. Output starts at
+`state/sql_monitoring_demo/sql_tables.xlsx`; reruns use separate directories.
+
 Open [PricingModelSpec prototypes](model_spec_prototypes/comparison.ipynb) to
 review the A and C designs. The approved C layout is now used by the package
 scaffolder: dataset details are saved during ingestion, and training uses a
@@ -35,7 +45,7 @@ PY
 ```
 
 Open `00_basic_sql_etl_schema_walkthrough.ipynb` in Jupyter for a conceptual
-SQL/ETL/schema walkthrough. For an actual pricing model, use the six-notebook
+SQL/ETL/schema walkthrough. For an actual pricing model, use the seven-notebook
 workflow created by `scripts/scaffold_pricing_model.py`, starting with
 `01_data_ingestion.ipynb`, `02_model_exploration.ipynb`, and
 `03_model_training.ipynb`.

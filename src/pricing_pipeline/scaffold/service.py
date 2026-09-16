@@ -1,13 +1,14 @@
-"""Create the model directory and write rendered notebook files.
+"""Create the model directory and write rendered notebooks and monitoring code.
 
-Check output collisions and symlinks, handle the older deployment notebook
-name, and apply the requested overwrite policy.
+Check output collisions and symlinks, preserve older notebook filenames,
+and apply the requested overwrite policy.
 """
 
 from __future__ import annotations
 
 import errno
 import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +16,15 @@ from pathlib import Path
 from pricing_pipeline.resources import scaffold_root
 from pricing_pipeline.scaffold import config
 from pricing_pipeline.scaffold.config import ResolvedScaffoldOptions, ScaffoldOptions
-from pricing_pipeline.scaffold.render import render_notebooks
+from pricing_pipeline.scaffold.render import render_monitoring_module, render_notebooks
 
 _LEGACY_DEPLOYMENT_NOTEBOOK = "04_model_deployment.ipynb"
 _DEPLOYMENT_NOTEBOOK = "06_model_deployment.ipynb"
+_PREVIOUS_NOTEBOOK_NAMES = {
+    "04_optional_model_editor.ipynb": "04_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb": "05_manual_adjustment.ipynb",
+    "07_optional_test_weekly_run.ipynb": "07_model_monitoring.ipynb",
+}
 
 
 @dataclass(frozen=True)
@@ -91,13 +97,37 @@ def _validate_managed_directories(*paths: Path) -> None:
                 "Replace the link with a directory, then rerun the scaffold."
             )
         if path.exists() and not path.is_dir():
-            raise ValueError(f"cannot write scaffold output: managed path {path} must be a directory")
+            raise ValueError(
+                f"cannot write scaffold output: managed path {path} must be a directory"
+            )
+
+
+def _write_scaffold_output_portable(path: Path, source: str) -> None:
+    """Replace a regular output without following its links on any platform."""
+
+    content = {path: source}
+    _reject_output_symlinks(content)
+    _reject_invalid_output_types(content)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(source)
+        _reject_output_symlinks(content)
+        _reject_invalid_output_types(content)
+        # Replacing the directory entry also leaves any external hardlink untouched.
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_scaffold_output(path: Path, source: str) -> None:
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if no_follow is None:
-        raise RuntimeError("scaffold output writes require a no-follow filesystem operation")
+        _write_scaffold_output_portable(path, source)
+        return
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow
     try:
         descriptor = os.open(path, flags, 0o666)
@@ -113,11 +143,11 @@ def _write_scaffold_output(path: Path, source: str) -> None:
 
 
 def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> ScaffoldResult:
-    """Forward validated notebook values to the renderer, then write its output.
+    """Forward validated values to the renderers, then write their output.
 
     Pass the same resolved options record to ``render_notebooks``. Its token
     map reads the fields directly. ``root`` and ``force`` control file creation
-    here; they are not notebook template values. Existing notebooks are skipped
+    here; they are not notebook template values. Existing outputs are skipped
     unless forced.
     """
 
@@ -126,12 +156,24 @@ def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> Scaffol
     sql_dir = package_dir / "sql"
     _validate_managed_directories(pricing_models_dir, package_dir, sql_dir)
     notebooks = render_notebooks(options)
+    notebook_content = {}
+    for filename, source in notebooks.items():
+        path = package_dir / filename
+        previous_name = _PREVIOUS_NOTEBOOK_NAMES.get(filename)
+        if previous_name is not None and not (path.exists() or path.is_symlink()):
+            previous = package_dir / previous_name
+            if previous.exists() or previous.is_symlink():
+                # Use the existing path so normal reruns preserve analyst work
+                # without creating a second notebook for the same operation.
+                path = previous
+        notebook_content[path] = source
     content = {
         package_dir / "__init__.py": f'"""Pricing notebook package for {options.model_name}."""\n',
-        **{package_dir / filename: source for filename, source in notebooks.items()},
-        sql_dir / "README.md": scaffold_root().joinpath("sql", "README.md").read_text(
-            encoding="utf-8"
-        ),
+        **notebook_content,
+        package_dir / "monitoring.py": render_monitoring_module(options),
+        sql_dir / "README.md": scaffold_root()
+        .joinpath("sql", "README.md")
+        .read_text(encoding="utf-8"),
     }
     _reject_output_symlinks(content)
     _reject_invalid_output_types(content)
@@ -149,7 +191,7 @@ def scaffold_resolved_pricing_model(options: ResolvedScaffoldOptions) -> Scaffol
 
 
 def scaffold_pricing_model(options: ScaffoldOptions) -> ScaffoldResult:
-    """Generate notebooks from Python options without loading project TOML.
+    """Generate the model workflow from Python options without loading project TOML.
 
     Validate the supplied ``ScaffoldOptions`` and call the same service used by
     the CLI. CLI/TOML precedence is implemented in ``commands.run_scaffold``.

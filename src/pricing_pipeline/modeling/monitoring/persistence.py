@@ -105,6 +105,16 @@ def _persist_monitoring_fit_once(
     )
 
     with engine.begin() as connection:
+        if "snapshot_sha256" in baseline_identity:
+            from pricing_pipeline.modeling.monitoring.storage import (
+                verify_monitoring_snapshot_identity,
+            )
+
+            verify_monitoring_snapshot_identity(
+                connection,
+                model_run_id=baseline_model_run_id,
+                snapshot_sha256=baseline_identity["snapshot_sha256"],
+            )
         baseline = (
             connection.execute(
                 text(
@@ -205,12 +215,14 @@ def _persist_monitoring_fit_once(
             raise MonitoringError(
                 "verified baseline candidate does not match SQL lineage: split_set_id"
             )
+        # Keep the active deployment fixed until the evidence transaction commits.
+        deployment_lock = " WITH (UPDLOCK, HOLDLOCK)" if engine.dialect.name == "mssql" else ""
         deployment = (
             connection.execute(
                 text(
                     f"""
                     SELECT deployment_id, deployment_slot
-                    FROM {pricing_schema}.PRICING_MODEL_DEPLOYMENT
+                    FROM {pricing_schema}.PRICING_MODEL_DEPLOYMENT{deployment_lock}
                     WHERE deployment_id = :deployment_id
                       AND model_id = :model_id
                       AND rate_package_id = :rate_package_id

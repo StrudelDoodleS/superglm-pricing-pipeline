@@ -15,6 +15,7 @@ import pandas as pd
 from superglm.features.spline import _SplineBase
 
 from pricing_pipeline.modeling.monitoring.contracts import MonitoringVariant
+from pricing_pipeline.modeling.monitoring.domains import OrderedDomain, SplineDomain
 
 
 class SupportIssue(NamedTuple):
@@ -47,8 +48,8 @@ def _ordered_support_message(
     absent: list[Any],
 ) -> str:
     """Show the saved feature definition and the observed support that blocks a refit."""
-    ordered = sorted(spec._smooth_levels, key=spec._level_to_value.__getitem__)
-    groups = spec._grouping.group_to_originals if spec._grouping is not None else {}
+    ordered = sorted(spec.smooth_levels, key=spec.level_to_value.__getitem__)
+    groups = spec.grouping.group_to_originals if spec.grouping is not None else {}
     grouping = (
         "; ".join(
             f"{name!r}: {_level_preview(members)}" for name, members in list(groups.items())[:20]
@@ -64,8 +65,8 @@ def _ordered_support_message(
         [
             f"Cannot refit ordered feature {feature!r}.",
             f"Config: {configured!r}",
-            f"Saved smooth positions (level, value): {_level_preview((level, spec._level_to_value[level]) for level in ordered)}",
-            f"Saved base: {spec._base_level!r}; specials: {_level_preview(spec._special_raw or [])}",
+            f"Saved smooth positions (level, value): {_level_preview((level, spec.level_to_value[level]) for level in ordered)}",
+            f"Saved base: {spec.base_level!r}; specials: {_level_preview(spec.specials)}",
             f"Grouping: {grouping}",
             f"Received raw levels: {_level_preview(raw_levels)}",
             f"Observed levels or groups: {_level_preview(level for level in ordered if level in observed)}",
@@ -98,7 +99,7 @@ def numeric_support_issues(
             f"Feature {feature!r} has fewer than two distinct values with positive fitting weight. "
             "Its coefficient cannot be separated from the intercept; review the snapshot before refitting.",
         )
-    if isinstance(spec, _SplineBase):
+    if isinstance(spec, _SplineBase | SplineDomain):
         yield from _spline_support_issues(feature, spec, configured, values, weights, variant)
 
 
@@ -111,13 +112,14 @@ def ordered_support_issues(
     variant: MonitoringVariant,
 ) -> Iterator[SupportIssue]:
     """Require support for whole smooth groups after mapping original labels once."""
-    if not isinstance(getattr(spec, "_spline", None), _SplineBase):
+    spec = spec if isinstance(spec, OrderedDomain) else OrderedDomain.from_native(spec)
+    if not isinstance(spec.spline, _SplineBase | SplineDomain):
         return
     raw_levels = pd.unique(values).tolist()
-    if spec._grouping is not None:
-        values = pd.Series(values).map(spec._grouping.original_to_group).to_numpy()
+    if spec.grouping is not None:
+        values = pd.Series(values).map(spec.grouping.original_to_group).to_numpy()
     effective = set(_effective(values, weights))
-    absent = [level for level in spec._smooth_levels if level not in effective]
+    absent = [level for level in spec.smooth_levels if level not in effective]
     if absent and variant is not MonitoringVariant.STATIC_SCORE:
         yield SupportIssue(
             "error",
@@ -125,16 +127,14 @@ def ordered_support_issues(
             _ordered_support_message(feature, spec, configured, raw_levels, values, absent),
         )
     # Specials have independent indicators and must not count as spline support.
-    smooth = (
-        ~spec._special_mask(values).any(axis=1) if spec.has_specials else np.ones(len(values), bool)
-    )
-    numeric = spec._map_to_numeric(values[smooth])
+    smooth = spec.smooth_mask(values)
+    numeric = spec.map_to_numeric(values[smooth])
     smooth_weights = None if weights is None else weights[smooth]
     if not numeric.size:
         return
     yield from _spline_support_issues(
         feature,
-        spec._spline,
+        spec.spline,
         configured._spline_obj,
         numeric,
         smooth_weights,
@@ -145,7 +145,7 @@ def ordered_support_issues(
 
 def _spline_support_issues(
     feature: str,
-    spec: _SplineBase,
+    spec: _SplineBase | SplineDomain,
     configured: _SplineBase,
     values: np.ndarray,
     weights: np.ndarray | None,

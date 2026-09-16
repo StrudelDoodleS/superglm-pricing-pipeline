@@ -281,6 +281,10 @@ def _real_prepared_rating_tables(tmp_path):
 
 def _run_remote_draft(monkeypatch, prepared, tables, *, engine=None, lineage=None):
     engine = _DraftEngine() if engine is None else engine
+    monkeypatch.setattr(
+        "pricing_pipeline.modeling.monitoring.storage.save_publication_monitoring_baseline",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(sqlserver, "_resolve_existing_or_equivalent", lambda *args: None)
     monkeypatch.setattr(sqlserver, "_replace_staging_frames", lambda *args: None)
     monkeypatch.setattr(sqlserver, "_insert_rating_tables", lambda *args: None)
@@ -357,6 +361,9 @@ def test_package_writer_reserves_staged_version_for_direct_root_publication(
     }
     assert connection.statements.index(reservation) < connection.statements.index(package)
     package_sql, package_params = package
+    # DBAPI adapters must receive a Python scalar, not NumPy's np.float64(...)
+    # representation, which pymssql sends as an invalid SQL expression.
+    assert type(package_params["base_rate"]) is float
     bind_names = set(re.findall(r":([a-z0-9_]+)", package_sql))
     assert bind_names <= package_params.keys()
     export = tables.export_frame.iloc[0]
@@ -475,7 +482,7 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
     engine = _Engine()
     events = []
     prepared = SimpleNamespace(
-        build=SimpleNamespace(export_id="export-1", model_id=17),
+        build=SimpleNamespace(export_id="export-1", model_id=17, monitor_run_id=None),
         verification=object(),
     )
     tables = object()
@@ -502,6 +509,11 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
     monkeypatch.setattr(sqlserver, "_insert_lineage", stage("lineage", 501))
     monkeypatch.setattr(sqlserver, "_verify_draft", stage("verify"))
     monkeypatch.setattr(sqlserver, "_mark_published", stage("publish"))
+    monkeypatch.setattr(
+        "pricing_pipeline.modeling.monitoring.storage.save_publication_monitoring_baseline",
+        stage("baseline"),
+    )
+    monkeypatch.setattr(sqlserver, "save_monitoring_publication", stage("monitoring_link"))
     monkeypatch.setattr(sqlserver, "_delete_staging_children", stage("cleanup"))
     monkeypatch.setattr(
         sqlserver,
@@ -521,6 +533,8 @@ def test_publish_sqlserver_runs_explicit_stages_inside_one_transaction(monkeypat
         "lineage",
         "verify",
         "publish",
+        "baseline",
+        "monitoring_link",
         "cleanup",
         "result",
         "recipe_result",
@@ -643,7 +657,11 @@ def test_existing_published_package_cleans_retry_payload_but_retains_header(
 ):
     prepared, tables = _real_prepared_rating_tables(tmp_path)
     engine = _DraftEngine()
-    expected = object()
+    expected = SimpleNamespace(model_run_id=501)
+    monkeypatch.setattr(
+        "pricing_pipeline.modeling.monitoring.storage.save_publication_monitoring_baseline",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(
         sqlserver,
         "_resolve_existing_or_equivalent",

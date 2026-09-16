@@ -49,9 +49,9 @@ specified otherwise. Template filenames below use their numeric prefixes.
 | `--model-type` | CLI default `superglm_poisson` | `model_type` | `__MODEL_TYPE__` | Spec `model_type` in 02/03. |
 | `--deployment-slot` | `<model_name>_UAT` | `deployment_slot` | `__DEPLOYMENT_SLOT__` | Spec in 02/03; selection settings in 04/05/06. |
 | `--package-name` | Lowercase model name with repeated underscores collapsed | `package_name` | `__PACKAGE_NAME__` | `MODEL_DIR` in every notebook and the output directory. |
-| `--database-mode` | `notebook_defaults.database_mode` | `database_mode` | `__DATABASE_MODE_LITERAL__` | `DATABASE_MODE` in 01 and 03–06. |
-| `--runtime-module` | `notebook_defaults.runtime_module` | `runtime_module` | `__RUNTIME_MODULE_LITERAL__` | `RUNTIME_MODULE` in 01 and 03–06. |
-| `--expected-remote-database` | `notebook_defaults.expected_remote_database` | `expected_remote_database` | `__EXPECTED_REMOTE_DATABASE_LITERAL__` | `EXPECTED_REMOTE_DATABASE` in 01 and 03–06. |
+| `--database-mode` | `notebook_defaults.database_mode` | `database_mode` | `__DATABASE_MODE_LITERAL__` | `DATABASE_MODE` in 01 and 03–06, and in `monitoring.py`. |
+| `--runtime-module` | `notebook_defaults.runtime_module` | `runtime_module` | `__RUNTIME_MODULE_LITERAL__` | `RUNTIME_MODULE` in 01 and 03–06, and in `monitoring.py`. |
+| `--expected-remote-database` | `notebook_defaults.expected_remote_database` | `expected_remote_database` | `__EXPECTED_REMOTE_DATABASE_LITERAL__` | `EXPECTED_REMOTE_DATABASE` in 01 and 03–06, and in `monitoring.py`. |
 | `--manual-edit-source` | `manual_edit_defaults.source_selector` | `manual_edit_source_selector` | `__MANUAL_SOURCE_SELECTOR_LITERAL__` | `SOURCE_SELECTOR` in 05. |
 | `--manual-edit-carry-forward` / `--no-manual-edit-carry-forward` | `manual_edit_defaults.carry_forward` | `manual_edit_carry_forward` | `__MANUAL_CARRY_FORWARD_LITERAL__` | `CARRY_FORWARD` in 05. |
 | `--root` | Current directory | `root` | None | Select the project and output directory in commands/service. |
@@ -108,3 +108,17 @@ argument. Stop here in a debugger when an option reaches the wrong cell.
 
 See the [package flow guide](package-flows.md) for the same input-to-output
 trace through fitting, saving, editing and reporting.
+
+## Weekly script and notebook 07
+
+`render_monitoring_module(options)` uses the same token encoding as the notebooks
+and reads `resources/scaffold/monitoring.py.template`. The service writes the
+result to `pricing_models/<package>/monitoring.py`. Its `load_dataset()` function
+is where the analyst puts the current source query and enrichment steps.
+
+Notebook 07 imports and calls that module's `run()`, so it shares the same
+connection and dataset configuration as scheduled execution. The module's
+`__main__` block calls `monitoring_runner.run_monitoring_script`, which adds
+logging and process exit codes. Both paths reach `notebook.run_monitoring`,
+`monitoring.batch`, and the existing SQL fit/persistence/publication functions.
+Scaffolding preserves edited modules and notebooks unless `--force` is explicit.

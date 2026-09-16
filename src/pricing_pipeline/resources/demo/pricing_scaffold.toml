@@ -1,0 +1,8 @@
+[notebook_defaults]
+database_mode = "remote"
+runtime_module = "demo_sql_runtime"
+expected_remote_database = "PricingNotebookDemo"
+
+[manual_edit_defaults]
+source_selector = "deployed"
+carry_forward = true

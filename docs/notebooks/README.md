@@ -6,14 +6,20 @@ writes, artifacts, publication, and deployment guards.
 
 ## Workflow boundaries
 
+The standard initial workflow uses 01, 03 and human promotion in 06. Notebook 02
+is optional exploration. Notebooks 04 and 05 are optional pricing edits. Notebook
+07 is an optional test of the weekly runner; it writes real results when run.
+Schedule `monitoring.py` for recurring work. It loads fresh data itself.
+
 | Notebook | Reads | May write | Must not do |
 |---|---|---|---|
 | `01_data_ingestion.ipynb` | Source data | Verified dataset with provenance | Fit or publish a model |
 | `02_model_exploration.ipynb` | Saved dataset from 01 | Selected model configuration as TOML | Publish or deploy |
 | `03_model_training.ipynb` | Saved dataset; selected recipe or Python configuration | Manifest, split evidence, run, metrics, candidate, package | Deploy |
-| `04_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
-| `05_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
-| `06_model_deployment.ipynb` | Published SQL candidate and current champion | Deployment history/current pointer | Fit or edit |
+| `04_optional_model_editor.ipynb` | Published SQL candidate and bundle | `EDITOR_EDIT` child run/package | Open a draft or deploy |
+| `05_optional_manual_adjustment.ipynb` | Deployed or exact published package | Replayable policy plus `MANUAL_EDIT` child; optional explicit deployment | Silently skip missing levels |
+| `06_model_deployment.ipynb` | Published SQL package and current champion | Explicit promotion and deployment history | Fit or edit |
+| `07_optional_test_weekly_run.ipynb` | SQL champion and fresh source data | Four observations and three saved challengers | Automatically promote |
 
 Notebook 01 saves the prepared dataset. Notebook 02 loads all its rows, applies
 your transforms, and fits a local SuperGLM with your feature definitions,
@@ -199,8 +205,9 @@ aggregated using the identical denominator.
 
 ## Baseline epochs and monitoring
 
-Treat the editor as an optional genesis/refresh gate, not a weekly modelling
-step:
+Notebook 07 and the generated `monitoring.py` run the weekly comparisons.
+Notebook 06 reviews and promotes a saved package. The editor is optional when
+defining or revising the model:
 
 ```text
 baseline epoch
@@ -210,20 +217,22 @@ baseline epoch
                                                           |
 monitoring
   ingest a new dated snapshot -> static/frozen/lambda/adaptive comparisons
-                              -> SQL evidence only; never auto-deploy
+                              -> SQL evidence and three challenger packages
+                              -> review in06 -> explicit promotion
 ```
 
 The deployed run starts the epoch. Its exact edited model is authoritative, so
 the contract includes editor-created groupings, categorical levels and bases,
 special levels, monotonic/shape constraints, basis type and dimension, fitted
-knots, and fitted REML lambdas. A proper refresh goes through the baseline lane
-again, is deployed deliberately, and starts a new contract and comparison
-epoch.
+knots, and fitted REML lambdas. Promoting a saved challenger starts a new comparison epoch. Its exact fitted
+state becomes the baseline, with the original declared refit policies preserved.
+A change to feature definitions or groupings goes through the model-building
+notebooks before publication and promotion.
 
-Keep these as two conceptual lanes even if the notebooks remain in one model
-directory. If they are split into physical subdirectories, use `baseline/` and
-`monitoring/`; do not call the second lane `deployment`, because its variants
-are diagnostic observations rather than candidate packages.
+The [weekly workflow guide](weekly_monitoring.md) shows the generated file,
+Windows Task Scheduler and cron setup, SQL review, retries and promotion.
+The low-level `run_monitoring_fit` and `persist_monitoring_fit` calls still
+produce observations only. `run_monitoring` also publishes the three refits.
 
 For the implementation owners and comparison diagram, see
 [From a baseline to monitoring evidence](../package-flows.md#from-a-baseline-to-monitoring-evidence).
@@ -498,7 +507,11 @@ Import these from `pricing_pipeline.notebook`.
 | `deploy_model_version(...)` | Deploy exactly the reviewed model version | Deployment record; stale champion fails |
 | `build_model_fit_contract(...)` | Freeze the deployed model's structural and smoothing evidence | Immutable canonical JSON and SHA-256 |
 | `check_monitoring_data(...)` | Check input compatibility and categorical mix changes before the preset loop | Issues, distributions and drift distances; errors can be raised before fitting |
-| `run_monitoring_fit(...)` | Score or refit one controlled monitoring preset from a verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
+| `load_monitoring_baseline(...)` | Read the current deployment's configuration and fitted state from SQL | `SqlBaseline`; no local model file required |
+| `run_monitoring(...)` | Score the SQL champion and publish three refitted challengers from fresh data | `MonitoringReport` with observations, package IDs, metrics and checks |
+| `list_challengers(...)` | List published SQL packages and the current champion | DataFrame with monitoring origin and dated model/data identities |
+| `review_model_version(...)` | Review an exact package using SQL alone | Immutable selection with `.summary`, `.metrics` and the reviewed champion |
+| `run_monitoring_fit(...)` | Score or refit one controlled preset from a SQL baseline or verified deployed `Candidate` | Terms, lambdas, comparable relativities, explicitly weighted metrics, frame/config/result digests |
 | `persist_monitoring_fit(...)` | Write a completed observation after lineage checks | Deduplicated monitoring-run receipt |
 
 The previous names remain aliases for existing notebooks:
@@ -508,15 +521,64 @@ The previous names remain aliases for existing notebooks:
 Arguments and return types are unchanged. New notebook templates use the new
 names. Saving a version does not deploy it; local saves remain `LOCAL_AUDIT`.
 
-A monitoring notebook can open the champion once, prepare the new manifest's
-feature frame in the same column order, and run the presets explicitly:
+### SQL baselines and existing notebooks
+
+Updating the package does not regenerate existing notebooks. Completed 01, 02 and 03
+notebooks, including feature transforms, groupings, specials and saved recipe
+TOMLs, remain usable. Keep their source in version control or make a backup.
+Rerun your existing scaffold command without `--force` to add notebook 07 and
+`monitoring.py`. Existing notebooks stay intact. See the [weekly workflow](weekly_monitoring.md)
+for the small change that gives an existing 06 notebook SQL-only review.
+
+Apply missing migrations through V052 from the package repository using the
+[schema administration command](../../README.md#database-administration).
+An existing database does not need to be dropped and reseeded for this upgrade.
+The schema command changes SQL; it does not write project notebooks.
+
+To compare updated templates, scaffold into a separate directory with `--root`
+and the same model name, target, package name and deployment slot. Supply your
+existing scaffold TOML with `--config` if you use one. Copy only the cells you
+want into your existing notebooks, preserving connection settings and model code.
+Ordinary scaffolding preserves existing 06 and 07 files too, so it will not update
+their review displays in place. The new Model version and Package labels are display
+changes; existing Python argument names and SQL columns remain supported.
+
+After the administrator applies those migrations, the existing
+`save_model_version` call also captures monitoring state in SQL. The snapshot
+contains explicit configuration, fitted geometry and smoothing settings, exact
+predictions as polynomial/lookup parameters, and aggregate categorical counts.
+It does not store training rows or a serialized Python object. Unsupported
+snapshot configurations record an unavailable reason; loading one reports it.
+
+Use the same SuperGLM version and Python major/minor version for publication and
+monitoring. The loader checks both before reconstructing a model. SQL removes
+the dependency on local model files; it does not remove runtime compatibility checks.
+
+For a model published before this update, capture its state once while its
+verified model artifact is still available:
+
+```python
+from pricing_pipeline.modeling.monitoring import capture_existing_monitoring_baseline
+
+candidate = open_deployed_candidate(pricing, model=model)
+capture_existing_monitoring_baseline(candidate)
+```
+
+This is an explicit SQL write. It does not fit or deploy a model. Subsequent
+monitoring loads use SQL only. If the old model file is already gone, its recipe
+alone cannot recover the old coefficients and learned knots. Publish a complete
+reviewed model to establish a new baseline.
+
+The generated weekly workflow calls `run_monitoring` to fit and publish the
+challengers. For custom observation-only workflows, the lower-level calls below
+load the baseline once and run individual comparisons:
 
 ```python
 from pricing_pipeline.notebook import (
-    MonitoringVariant, check_monitoring_data, run_monitoring_fit,
+    MonitoringVariant, check_monitoring_data, load_monitoring_baseline, run_monitoring_fit,
 )
 
-baseline = open_deployed_candidate(pricing, model=model)
+baseline = load_monitoring_baseline(pricing, model=model)
 check = check_monitoring_data(baseline, X_new, sample_weight=weight_new)
 display(check.issues, check.drift)
 check.raise_for_errors()  # Warnings allow fitting; incompatible inputs stop here.
@@ -537,7 +599,7 @@ results = {
 }
 ```
 
-The check compares against the candidate's reverified training inputs. New raw
+The check compares against reference counts and weights saved in SQL. New raw
 categorical levels, missing feature columns, nulls, invalid numeric values and
 invalid weights block controlled refits. Known levels with no rows or no positive
 weight produce a support warning. Grouped features are checked against their
@@ -592,13 +654,15 @@ that fallback does not permit refitting unknown levels.
 
 Persist only after all requested fits have succeeded. Pass the new snapshot's
 `manifest_id`, `baseline.model_run_id`, and
-`baseline.technical["current_deployment_id"]`. Exact retries deduplicate; a
+`baseline.deployment_id`. Exact retries deduplicate; a
 different data-as-at/manifest creates a new observation.
 
-For persisted evidence, `run_monitoring_fit` accepts the deployed `Candidate`,
-re-queries its current SQL lineage, and reloads the exact artifact from its
-stored path, byte count, runtime metadata, and SHA-256. A raw fitted `SuperGLM`
-is supported only for local simulation and its result cannot be persisted. The
+For persisted evidence, use a baseline returned by `load_monitoring_baseline`.
+Loading verifies its JSON digest and SQL source lineage. Persistence checks the
+baseline state and current deployment again, so a deployment change during the
+fits prevents saving observations against a stale champion. The existing
+`Candidate` path remains available and verifies its local model artifact. A raw
+fitted `SuperGLM` is supported for local simulation; its result cannot be persisted. The
 ordered `model_frame` must hash to the supplied observation manifest at
 persistence time. If the deployed fit contract declares a sample-weight or
 offset input, the new snapshot must supply it; an offset is rejected when the
@@ -643,9 +707,9 @@ cells. The optional deployment cell defaults to off.
 
 `carry_forward = true` means that the relative policy is intended to be
 replayed against a later clean candidate. Apply it to that new base model, not
-to the previous `MANUAL_EDIT`, so an uplift does not compound. Current weekly
-monitoring rows are evidence-only and are not automatically adjusted or
-deployable; policy replay matters only when a new candidate is being prepared.
+to the previous `MANUAL_EDIT`, so an uplift does not compound. Weekly refits do not automatically replay this policy. Applying an adjustment
+to a later fit remains a separate reviewed publication step. Monitoring
+observations retain their unadjusted comparison metrics.
 Set `POLICY_SOURCE_PACKAGE_VERSION` to an earlier `MANUAL_EDIT` package to load
 and verify its policy from SQL rather than typing its rules again. Replay is
 refused when that policy recorded `carry_forward = false`; the trusted publisher
@@ -825,15 +889,18 @@ full fitting. Python overrides affect that snapshot; later changes to Python
 objects or TOML cannot change a completed build's recipe. The saved result exposes
 `recipe_revision`, `recipe_sha256` and `recipe_status`. SQL assigns revisions in
 the publication transaction. Same recipe with new data keeps its revision; a
-previous recipe reused later keeps its original revision. Model and package
-versions keep their existing meanings. Saving never deploys.
+previous recipe reused later keeps its original revision. Weekly monitoring
+refits inherit the champion's declared recipe too. Use `pricing.V_MODEL_REGISTRY`
+to see that `definition_revision` beside the model's champion/challenger role.
+Package and run IDs identify saved fits; `fit_version` is the legacy fit counter.
+Saving never deploys.
 
 Recipe mode skips `.local/routine_groupings.joblib`. Apply any further grouping
 explicitly in Python and fit again. Post-fit editor/manual packages inherit the
 training recipe and retain their separate edit/parent evidence. A training recipe
 alone does not reproduce those coefficient edits. Ordinary recipe loading refits
 declared choices; frozen learned knots, bases, lambdas or coefficients still use
-baseline artifacts and monitoring variants.
+the SQL baseline and monitoring variants.
 
 Supported recipes include Numeric, Polynomial, Categorical, OrderedCategorical,
 one-dimensional spline variants and the existing categorical interactions, plus

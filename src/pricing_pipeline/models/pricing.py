@@ -178,6 +178,7 @@ class PricingModelSpec:
             if self.groups_column is not None:
                 raise ValueError("groups_column requires a splitter in validation")
             if self.validation.method not in {
+                "none",
                 "kfold",
                 "train_test_split",
                 "column_kfold",
@@ -187,7 +188,7 @@ class PricingModelSpec:
                     f"validation method {self.validation.method!r} is not supported by "
                     "the notebook workflow; pass a splitter or use a column-based split"
                 )
-            if not self.validation.materialize:
+            if self.validation.method != "none" and not self.validation.materialize:
                 object.__setattr__(self, "validation", replace(self.validation, materialize=True))
         validation_config = self._validation_config()
 

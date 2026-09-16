@@ -1,4 +1,4 @@
-"""Parse ``pricing-pipeline init`` and ``scaffold`` commands.
+"""Parse ``pricing-pipeline init``, ``scaffold`` and ``demo`` commands.
 
 Dispatch project setup to ``scaffold.commands`` and report command errors.
 Model fitting and publication are exposed through ``notebook.py``.
@@ -32,6 +32,7 @@ class _ArgumentParser(argparse.ArgumentParser):
 _HANDLERS = {
     "init": "pricing_pipeline.scaffold.commands:run_init",
     "scaffold": "pricing_pipeline.scaffold.commands:run_scaffold",
+    "demo": "pricing_pipeline.demo:run_demo",
 }
 
 
@@ -60,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="create pricing_scaffold.toml and GitHub Copilot builder/developer agents",
     )
     init.add_argument("--root", type=Path, default=Path("."))
+    demo = subcommands.add_parser(
+        "demo", help="create the filled burn-cost notebooks and local SQL Server setup"
+    )
+    demo.add_argument("--root", type=Path, default=Path("pricing-demo"))
     scaffold = subcommands.add_parser(
         "scaffold",
         help="create the configured standalone notebook workflow",

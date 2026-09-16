@@ -559,6 +559,71 @@ def test_deploy_rate_package_handles_no_current_champion():
     assert engine.connection.current_rate_package_id == 202
 
 
+@pytest.mark.parametrize("actual_rate_package_id,actual_deployment_id", [(99, 72), (101, 73)])
+def test_deployment_rejects_stale_review_even_if_champion_package_is_unchanged(
+    actual_rate_package_id,
+    actual_deployment_id,
+):
+    engine = FakeEngine(
+        package_row=published_package(),
+        current_row={
+            "rate_package_id": actual_rate_package_id,
+            "deployment_id": actual_deployment_id,
+        },
+    )
+
+    with pytest.raises(StaleChampionError, match="deployment_id"):
+        deploy_rate_package(
+            engine,
+            config(),
+            rate_package_id=101,
+            expected_current_rate_package_id=actual_rate_package_id,
+            expected_current_deployment_id=71,
+            deployment_reason="reviewed before another deployment",
+            deployed_by="analyst",
+            model_id=17,
+        )
+
+    assert "sys.sp_getapplock" in executed_sql(engine)[0]
+    assert not any(sql.lstrip().startswith(("UPDATE", "INSERT")) for sql in executed_sql(engine))
+
+
+def test_deployment_requires_initial_review_to_still_have_no_deployment():
+    engine = FakeEngine(
+        package_row=published_package(),
+        current_row={"rate_package_id": 99, "deployment_id": 72},
+    )
+    with pytest.raises(StaleChampionError):
+        deploy_rate_package(
+            engine,
+            config(),
+            rate_package_id=101,
+            expected_current_rate_package_id=None,
+            expected_current_deployment_id=None,
+            deployment_reason="initial review",
+            deployed_by="analyst",
+            model_id=17,
+        )
+    assert not any(sql.lstrip().startswith(("UPDATE", "INSERT")) for sql in executed_sql(engine))
+
+
+@pytest.mark.parametrize("current", [None, {"rate_package_id": 99, "deployment_id": 71}])
+def test_deployment_accepts_exact_reviewed_deployment_identity(current):
+    engine = FakeEngine(package_row=published_package(), current_row=current)
+    result = deploy_rate_package(
+        engine,
+        config(),
+        rate_package_id=101,
+        expected_current_rate_package_id=None if current is None else 99,
+        expected_current_deployment_id=None if current is None else 71,
+        deployment_reason="reviewed",
+        deployed_by="analyst",
+        model_id=17,
+    )
+    assert result.rate_package_id == 101
+    assert any(sql.lstrip().startswith("INSERT") for sql in executed_sql(engine))
+
+
 def test_deploy_rate_package_retry_requires_refreshed_champion_snapshot():
     engine = StatefulEngine(
         packages=[published_package(rate_package_id=202, package_version=2)],

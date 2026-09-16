@@ -23,9 +23,10 @@ EXPECTED_NOTEBOOKS = (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_optional_test_weekly_run.ipynb",
 )
 
 
@@ -198,7 +199,7 @@ def test_installed_scaffold_with_explicit_config_requires_a_project_root(tmp_pat
     assert {path.name for path in root.iterdir()} == set()
 
 
-def test_installed_scaffold_reuses_the_exact_six_notebook_workflow(tmp_path: Path, capsys):
+def test_installed_scaffold_generates_seven_notebooks_and_monitoring_script(tmp_path: Path, capsys):
     root = tmp_path / "model-repo"
     _project(root)
     assert cli.main(["init", "--root", str(root)]) == 0
@@ -223,10 +224,11 @@ def test_installed_scaffold_reuses_the_exact_six_notebook_workflow(tmp_path: Pat
     expected = (
         package / "__init__.py",
         *(package / name for name in EXPECTED_NOTEBOOKS),
+        package / "monitoring.py",
         package / "sql" / "README.md",
     )
     assert tuple(sorted(path.name for path in package.iterdir())) == tuple(
-        sorted(["__init__.py", *EXPECTED_NOTEBOOKS, "sql"])
+        sorted(["__init__.py", *EXPECTED_NOTEBOOKS, "monitoring.py", "sql"])
     )
     for notebook in package.glob("*.ipynb"):
         _assert_notebook_is_clean_and_compiles(notebook)

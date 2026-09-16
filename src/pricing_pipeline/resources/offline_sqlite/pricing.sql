@@ -357,6 +357,109 @@ BEGIN
     SELECT RAISE(ABORT, 'monitoring variant policy is immutable');
 END;
 
+CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITORING_BASELINE (
+/*
+Purpose: Store the JSON fitted state and reference summaries used by recurring monitoring.
+One row: One immutable publication capture, or an explicit unavailable reason, per successful model run.
+Use: Load the current deployment through SQL. Historical runs can be captured once from verified artifacts without refitting.
+*/
+    model_run_id TEXT NOT NULL PRIMARY KEY REFERENCES MODEL_RUN(model_run_id),
+    model_id INTEGER NOT NULL REFERENCES PRICING_MODEL(model_id),
+    rate_package_id INTEGER NOT NULL REFERENCES PRICING_RATE_PACKAGE(rate_package_id),
+    capture_status TEXT NOT NULL CHECK (capture_status IN ('CAPTURED', 'UNAVAILABLE')),
+    unavailable_reason TEXT,
+    snapshot_schema_version INTEGER,
+    snapshot_json TEXT CHECK (snapshot_json IS NULL OR (json_valid(snapshot_json) AND json_type(snapshot_json)='object')),
+    snapshot_sha256 TEXT CHECK (snapshot_sha256 IS NULL OR (length(snapshot_sha256)=64 AND snapshot_sha256 NOT GLOB '*[^0-9a-f]*')),
+    superglm_version TEXT,
+    source_lineage_json TEXT NOT NULL CHECK (json_valid(source_lineage_json) AND json_type(source_lineage_json)='object'),
+    source_lineage_sha256 TEXT NOT NULL CHECK (length(source_lineage_sha256)=64 AND source_lineage_sha256 NOT GLOB '*[^0-9a-f]*'),
+    created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NOT NULL,
+    CHECK (
+        (capture_status='CAPTURED' AND unavailable_reason IS NULL
+         AND snapshot_schema_version IS NOT NULL AND snapshot_schema_version>=1
+         AND snapshot_json IS NOT NULL AND snapshot_sha256 IS NOT NULL AND superglm_version IS NOT NULL)
+        OR (capture_status='UNAVAILABLE' AND unavailable_reason IS NOT NULL AND length(trim(unavailable_reason))>0
+            AND snapshot_schema_version IS NULL AND snapshot_json IS NULL AND snapshot_sha256 IS NULL AND superglm_version IS NULL)
+    )
+);
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_LINEAGE_INSERT
+BEFORE INSERT ON MODEL_MONITORING_BASELINE
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_RUN AS mr JOIN PRICING_RATE_PACKAGE AS rp
+      ON rp.rate_package_id=mr.rate_package_id AND rp.model_id=mr.model_id
+    WHERE mr.model_run_id=NEW.model_run_id AND mr.model_id=NEW.model_id
+      AND mr.rate_package_id=NEW.rate_package_id AND mr.run_status='SUCCESS'
+      AND rp.package_status IN ('PUBLISHED', 'LOCAL_AUDIT')
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baseline must identify one successful published model run');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_UPDATE
+BEFORE UPDATE ON MODEL_MONITORING_BASELINE
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baselines are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITORING_BASELINE_DELETE
+BEFORE DELETE ON MODEL_MONITORING_BASELINE
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring baselines are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_BASELINE_IDENTITY_UPDATE
+BEFORE UPDATE ON MODEL_RUN
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE model_run_id=OLD.model_run_id)
+AND (
+    NEW.model_run_id IS NOT OLD.model_run_id OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.rate_package_id IS NOT OLD.rate_package_id OR NEW.run_status IS NOT OLD.run_status
+    OR NEW.model_version IS NOT OLD.model_version OR NEW.model_kind IS NOT OLD.model_kind
+    OR NEW.export_id IS NOT OLD.export_id OR NEW.manifest_id IS NOT OLD.manifest_id
+    OR NEW.publication_receipt_sha256 IS NOT OLD.publication_receipt_sha256
+    OR NEW.model_source_sha256 IS NOT OLD.model_source_sha256
+    OR NEW.model_equivalence_sha256 IS NOT OLD.model_equivalence_sha256
+    OR NEW.candidate_artifact_sha256 IS NOT OLD.candidate_artifact_sha256
+    OR NEW.candidate_artifact_format IS NOT OLD.candidate_artifact_format
+    OR NEW.candidate_artifact_size_bytes IS NOT OLD.candidate_artifact_size_bytes
+    OR NEW.candidate_python_version IS NOT OLD.candidate_python_version
+    OR NEW.candidate_superglm_version IS NOT OLD.candidate_superglm_version
+    OR NEW.rating_workbook_sha256 IS NOT OLD.rating_workbook_sha256
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a model run referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_RUN_BASELINE_IDENTITY_DELETE
+BEFORE DELETE ON MODEL_RUN
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE model_run_id=OLD.model_run_id)
+BEGIN
+    SELECT RAISE(ABORT, 'a model run referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_RATE_PACKAGE_BASELINE_IDENTITY_UPDATE
+BEFORE UPDATE ON PRICING_RATE_PACKAGE
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE rate_package_id=OLD.rate_package_id)
+AND (
+    NEW.rate_package_id IS NOT OLD.rate_package_id OR NEW.model_id IS NOT OLD.model_id
+    OR NEW.model_version IS NOT OLD.model_version OR NEW.package_version IS NOT OLD.package_version
+    OR NEW.source_export_id IS NOT OLD.source_export_id
+    OR NEW.publication_receipt_sha256 IS NOT OLD.publication_receipt_sha256
+    OR NEW.publication_receipt_json IS NOT OLD.publication_receipt_json
+)
+BEGIN
+    SELECT RAISE(ABORT, 'a package referenced by a monitoring baseline retains its source identity');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_RATE_PACKAGE_BASELINE_IDENTITY_DELETE
+BEFORE DELETE ON PRICING_RATE_PACKAGE
+WHEN EXISTS (SELECT 1 FROM MODEL_MONITORING_BASELINE WHERE rate_package_id=OLD.rate_package_id)
+BEGIN
+    SELECT RAISE(ABORT, 'a package referenced by a monitoring baseline retains its source identity');
+END;
+
 CREATE TABLE IF NOT EXISTS pricing.MODEL_FIT_CONTRACT (
 /*
 Purpose: Record the model structure and fitted settings frozen for a monitoring baseline.
@@ -1049,4 +1152,116 @@ WHEN NEW.recipe_status NOT IN ('CAPTURED', 'LEGACY', 'UNSUPPORTED')
  OR (NEW.recipe_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM MODEL_RECIPE AS r WHERE r.model_id=NEW.model_id AND r.recipe_id=NEW.recipe_id))
 BEGIN
     SELECT RAISE(ABORT, 'invalid same-model recipe link or recipe status');
+END;
+
+CREATE TABLE IF NOT EXISTS pricing.MODEL_MONITOR_PUBLICATION (
+/* One immutable published challenger per sealed monitoring refit; publication does not deploy. */
+    monitor_run_id TEXT NOT NULL PRIMARY KEY,
+    model_run_id TEXT NOT NULL UNIQUE,
+    created_ts TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by TEXT NOT NULL,
+    FOREIGN KEY (monitor_run_id) REFERENCES MODEL_MONITOR_RUN(monitor_run_id),
+    FOREIGN KEY (model_run_id) REFERENCES MODEL_RUN(model_run_id)
+);
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_PUBLICATION_INSERT
+BEFORE INSERT ON MODEL_MONITOR_PUBLICATION
+WHEN NOT EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN AS observation
+    JOIN MODEL_FIT_CONTRACT AS contract ON contract.fit_contract_id=observation.fit_contract_id
+    JOIN MODEL_RUN AS candidate ON candidate.model_run_id=NEW.model_run_id
+    JOIN PRICING_RATE_PACKAGE AS package ON package.rate_package_id=candidate.rate_package_id
+    JOIN MODEL_MONITORING_BASELINE AS snapshot ON snapshot.model_run_id=candidate.model_run_id
+    WHERE observation.monitor_run_id=NEW.monitor_run_id
+      AND observation.evidence_sealed=1 AND observation.run_status='SUCCESS'
+      AND observation.invariant_status='VERIFIED'
+      AND observation.variant_code IN ('FROZEN_REFIT','REESTIMATE_LAMBDA','FULL_ADAPTIVE')
+      AND candidate.model_id=observation.model_id AND candidate.manifest_id=observation.manifest_id
+      AND candidate.model_run_id<>contract.baseline_model_run_id
+      AND candidate.run_status='SUCCESS' AND package.package_status IN ('LOCAL_AUDIT','PUBLISHED')
+      AND snapshot.capture_status='CAPTURED'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring publication requires a matching sealed refit and captured candidate');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_PUBLICATION_UPDATE
+BEFORE UPDATE ON MODEL_MONITOR_PUBLICATION BEGIN
+    SELECT RAISE(ABORT, 'monitoring publication links are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_PUBLICATION_DELETE
+BEFORE DELETE ON MODEL_MONITOR_PUBLICATION BEGIN
+    SELECT RAISE(ABORT, 'monitoring publication links are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_MODEL_MONITOR_PUBLICATION_RECIPE
+BEFORE INSERT ON MODEL_MONITOR_PUBLICATION
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_MONITOR_RUN AS observation
+    JOIN MODEL_FIT_CONTRACT AS contract ON contract.fit_contract_id=observation.fit_contract_id
+    JOIN MODEL_RUN AS baseline ON baseline.model_run_id=contract.baseline_model_run_id
+    JOIN MODEL_RUN AS candidate ON candidate.model_run_id=NEW.model_run_id
+    WHERE observation.monitor_run_id=NEW.monitor_run_id
+      AND (candidate.recipe_status<>baseline.recipe_status
+           OR candidate.recipe_id IS NOT baseline.recipe_id
+           OR candidate.recipe_unavailable_reason IS NOT baseline.recipe_unavailable_reason)
+)
+BEGIN
+    SELECT RAISE(ABORT, 'monitoring challengers must retain their baseline model definition');
+END;
+
+CREATE VIEW IF NOT EXISTS pricing.V_MODEL_CHALLENGER AS
+/*
+Purpose: Review published monitoring challengers and the current champion.
+One row: One sealed refit's package, source baseline, data dates and deployment identity.
+Use: Compare candidate versions before explicitly promoting a package.
+*/
+SELECT link.monitor_run_id, candidate.model_run_id, candidate.model_id, model.model_name,
+       candidate.model_version, candidate.rate_package_id, package.package_version, package.package_status,
+       observation.variant_code, data.data_as_of_date,
+       baseline_data.data_as_of_date AS baseline_data_as_of_date,
+       contract.baseline_model_run_id, observation.rate_package_id AS baseline_rate_package_id,
+       observation.baseline_deployment_id, baseline_deployment.deployment_slot,
+       current_deployment.deployment_id AS current_deployment_id,
+       current_deployment.rate_package_id AS current_rate_package_id,
+       CASE WHEN current_deployment.rate_package_id=candidate.rate_package_id THEN 1 ELSE 0 END AS is_current_champion,
+       link.created_ts, link.created_by
+FROM MODEL_MONITOR_PUBLICATION AS link
+JOIN MODEL_RUN AS candidate ON candidate.model_run_id=link.model_run_id
+JOIN PRICING_MODEL AS model ON model.model_id=candidate.model_id
+JOIN PRICING_RATE_PACKAGE AS package ON package.rate_package_id=candidate.rate_package_id
+JOIN DATASET_MANIFEST AS data ON data.manifest_id=candidate.manifest_id
+JOIN MODEL_MONITOR_RUN AS observation ON observation.monitor_run_id=link.monitor_run_id
+JOIN MODEL_FIT_CONTRACT AS contract ON contract.fit_contract_id=observation.fit_contract_id
+JOIN MODEL_RUN AS baseline ON baseline.model_run_id=contract.baseline_model_run_id
+JOIN DATASET_MANIFEST AS baseline_data ON baseline_data.manifest_id=baseline.manifest_id
+JOIN PRICING_MODEL_DEPLOYMENT AS baseline_deployment ON baseline_deployment.deployment_id=observation.baseline_deployment_id
+LEFT JOIN PRICING_MODEL_DEPLOYMENT AS current_deployment
+  ON current_deployment.model_id=candidate.model_id
+ AND current_deployment.deployment_slot=baseline_deployment.deployment_slot
+ AND current_deployment.effective_to_ts IS NULL;
+
+CREATE TRIGGER IF NOT EXISTS pricing.TR_DATASET_MANIFEST_CHALLENGER_UPDATE
+BEFORE UPDATE ON DATASET_MANIFEST
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_RUN AS baseline
+    JOIN MODEL_FIT_CONTRACT AS contract ON contract.baseline_model_run_id=baseline.model_run_id
+    JOIN MODEL_MONITOR_RUN AS observation ON observation.fit_contract_id=contract.fit_contract_id
+    JOIN MODEL_MONITOR_PUBLICATION AS publication ON publication.monitor_run_id=observation.monitor_run_id
+    WHERE baseline.manifest_id=OLD.manifest_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'baseline dataset manifest referenced by challengers is immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS pricing.TR_DATASET_MANIFEST_CHALLENGER_DELETE
+BEFORE DELETE ON DATASET_MANIFEST
+WHEN EXISTS (
+    SELECT 1 FROM MODEL_RUN AS baseline
+    JOIN MODEL_FIT_CONTRACT AS contract ON contract.baseline_model_run_id=baseline.model_run_id
+    JOIN MODEL_MONITOR_RUN AS observation ON observation.fit_contract_id=contract.fit_contract_id
+    JOIN MODEL_MONITOR_PUBLICATION AS publication ON publication.monitor_run_id=observation.monitor_run_id
+    WHERE baseline.manifest_id=OLD.manifest_id
+)
+BEGIN
+    SELECT RAISE(ABORT, 'baseline dataset manifest referenced by challengers is immutable');
 END;

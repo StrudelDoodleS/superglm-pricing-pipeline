@@ -19,6 +19,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from pricing_pipeline.infra.config import Settings
 from pricing_pipeline.infra.offline_sqlite import local_publish_lock
+from pricing_pipeline.modeling.monitoring.storage import save_publication_monitoring_baseline
 from pricing_pipeline.models.config import ModelBuildConfig
 from pricing_pipeline.models.spec import ApprovedModelBuild, ApprovedModelBuildError
 from pricing_pipeline.orchestration.publish_completed_build import (
@@ -29,6 +30,11 @@ from pricing_pipeline.publishing.identity import (
     ModelEquivalenceError,
     canonical_revision_metadata,
     immutable_conflicts,
+)
+from pricing_pipeline.publishing.monitoring import (
+    reuse_monitoring_publication,
+    save_monitoring_publication,
+    validate_export_monitoring_link,
 )
 from pricing_pipeline.publishing.publish import (
     CompletedModelPublishResult,
@@ -671,6 +677,8 @@ def _equivalent_local_publication(
                   AND mr.model_kind = :model_kind
                   AND mr.model_equivalence_sha256 = :model_equivalence_sha256
                   AND mr.run_status = 'SUCCESS'
+                  AND NOT EXISTS (SELECT 1 FROM pricing.MODEL_MONITOR_PUBLICATION AS monitor_link
+                                  WHERE monitor_link.model_run_id=mr.model_run_id)
                   {identity_predicate()}
                 """
             ),
@@ -743,12 +751,16 @@ def _resolve_existing_or_equivalent(
     tables: RatingTables,
 ) -> CompletedModelPublishResult | None:
     build = prepared.build
+    monitoring = reuse_monitoring_publication(connection, build)
+    if monitoring is not None:
+        return monitoring
     existing = _existing_local_publication(
         connection,
         model_id=build.model_id,
         export_id=build.export_id,
     )
     if existing is not None:
+        validate_export_monitoring_link(connection, build, existing["model_run_id"])
         conflicts = _local_publication_conflicts(
             existing,
             prepared=prepared,
@@ -771,6 +783,8 @@ def _resolve_existing_or_equivalent(
             )
         return _publication_result(existing, prepared, was_existing=True)
 
+    if build.monitor_run_id is not None:
+        return None
     equivalent = _equivalent_local_publication(connection, prepared)
     if equivalent is None:
         return None
@@ -1196,11 +1210,21 @@ def publish_sqlite(
     with _sqlite_publication_transaction(engine, prepared) as connection:
         existing = _resolve_existing_or_equivalent(connection, prepared, tables)
         if existing is not None:
+            save_publication_monitoring_baseline(
+                connection, model_run_id=existing.model_run_id, prepared=prepared
+            )
+            save_monitoring_publication(
+                connection, build=prepared.build, model_run_id=existing.model_run_id
+            )
             return existing
         _require_reserved_version(connection, prepared)
         package = _insert_local_package(connection, prepared, tables, metadata)
         _insert_local_rating_tables(connection, package, tables)
-        _insert_local_lineage(connection, package, prepared)
+        model_run_id = _insert_local_lineage(connection, package, prepared)
+        save_publication_monitoring_baseline(
+            connection, model_run_id=model_run_id, prepared=prepared
+        )
+        save_monitoring_publication(connection, build=prepared.build, model_run_id=model_run_id)
         created = _existing_local_publication(
             connection,
             model_id=prepared.build.model_id,

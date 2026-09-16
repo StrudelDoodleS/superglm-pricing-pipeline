@@ -22,6 +22,7 @@ import pandas as pd
 from superglm import cross_validate
 
 from pricing_pipeline.data.manifest import (
+    DatasetManifestResult,
     ModelFrameManifestSpec,
     create_model_frame_manifest_with_split,
 )
@@ -112,6 +113,8 @@ def run_standard_superglm_build(
     Validate row alignment, persist manifest/split evidence, run CV and the full
     fit, then write the rating workbook, receipt and fitted-model bundle.
     Notebook callers normally use ``fit_model`` to construct these inputs.
+    An explicit validation method ``none`` skips CV and records only full-fit
+    diagnostics.
     """
 
     recipe_capture = (
@@ -149,29 +152,31 @@ def run_standard_superglm_build(
         ) from exc
     source_sha256 = hash_model_source(model_source_root)
     folds = list(split_indices)
-    evidence = run_cross_validation(
-        cv_model,
-        inputs,
-        split_indices=folds,
-        fit_mode=fit_mode,
-        scoring=scoring,
-        cross_validate_fn=cross_validate_fn,
-    )
+    if model_config.validation_split.method == "none":
+        if folds:
+            raise StandardSuperGLMError("validation method 'none' cannot include validation folds")
+        evidence = None
+    else:
+        evidence = run_cross_validation(
+            cv_model,
+            inputs,
+            split_indices=folds,
+            fit_mode=fit_mode,
+            scoring=scoring,
+            cross_validate_fn=cross_validate_fn,
+        )
     fitted, telemetry = fit_full_model(final_model, inputs, fit_mode=fit_mode)
-    fit_weight_name = _weight_name(
+    _weight_name(
         inputs.sample_weight,
         inputs.sample_weight_name,
         role="sample_weight",
     )
-    export_weight_name = (
+    if inputs.export_weight is not None:
         _weight_name(
             inputs.export_weight,
             inputs.export_weight_name,
             role="export_weight",
         )
-        if inputs.export_weight is not None
-        else None
-    )
     if hash_model_source(model_source_root) != source_sha256:
         raise StandardSuperGLMError(
             "model source changed during training; save the final definition and rebuild"
@@ -183,9 +188,103 @@ def run_standard_superglm_build(
         spec=manifest_spec,
         validation_split=model_config.validation_split,
         validation_split_artifact_root=Path(split_artifact_root),
-        split_indices=list(evidence.fold_indices),
+        split_indices=None if evidence is None else list(evidence.fold_indices),
         created_by=created_by,
     )
+    return export_fitted_superglm_build(
+        frame=frame,
+        inputs=inputs,
+        fitted_model=fitted,
+        telemetry=telemetry,
+        manifest=manifest,
+        manifest_spec=manifest_spec,
+        output_dir=output_dir,
+        model_id=model_id,
+        model_config=model_config,
+        model_kind=resolved_model_kind,
+        model_version=model_version,
+        export_id=export_id,
+        effective_from=effective_from,
+        model_source_sha256=source_sha256,
+        created_by=created_by,
+        fit_mode=fit_mode,
+        scoring=scoring,
+        cv_evidence=evidence,
+        offset_contract=resolved_offset_contract,
+        input_transforms=input_transforms,
+        continuous_kind=continuous_kind,
+        recipe_capture=recipe_capture,
+    )
+
+
+def export_fitted_superglm_build(
+    *,
+    frame: pd.DataFrame,
+    inputs: ModelInputs,
+    fitted_model: Any,
+    telemetry: dict[str, Any],
+    manifest: DatasetManifestResult,
+    manifest_spec: ModelFrameManifestSpec,
+    output_dir: str | Path,
+    model_id: int,
+    model_config: ModelBuildConfig,
+    model_version: str,
+    export_id: str,
+    effective_from: str | None,
+    model_source_sha256: str,
+    created_by: str,
+    model_kind: str = "RAW",
+    fit_mode: str = "fit_reml",
+    scoring: str | Callable | Sequence[str | Callable] = (),
+    cv_evidence: CVEvidence | None = None,
+    offset_contract: OffsetExportContract | None = None,
+    input_transforms: dict[str, dict[str, Any]] | None = None,
+    continuous_kind: str = "ppform",
+    recipe_capture: RecipeCapture | None = None,
+    monitor_run_id: str | None = None,
+) -> ApprovedModelBuild:
+    """Export an existing fitted estimator without fitting or writing a manifest.
+
+    Reuse its native telemetry and the supplied manifest. Ordinary training
+    supplies its completed CV evidence; monitoring leaves ``cv_evidence`` unset
+    and records explicitly that no validation was performed.
+    """
+    _validate_input_lengths(inputs)
+    _validate_canonical_row_ids(frame, inputs, pk_columns=manifest_spec.pk_columns)
+    resolved_offset_contract = _resolved_offset_contract(inputs, offset_contract)
+    offset_source_name = _weight_name(
+        inputs.offset_source, inputs.offset_source_name, role="offset_source"
+    )
+    _validate_manifest_offset_contract(
+        frame,
+        manifest_spec,
+        resolved_offset_contract,
+        offset=inputs.offset,
+        offset_source=inputs.offset_source,
+        offset_source_name=offset_source_name,
+    )
+    fit_weight_name = _weight_name(
+        inputs.sample_weight, inputs.sample_weight_name, role="sample_weight"
+    )
+    export_weight_name = _weight_name(
+        inputs.export_weight, inputs.export_weight_name, role="export_weight"
+    )
+    if cv_evidence is None and manifest.split_set_id is not None:
+        raise StandardSuperGLMError(
+            "an export without CV evidence must not claim a validation split"
+        )
+    recipe_capture = (
+        RecipeCapture()
+        if recipe_capture is None
+        else RecipeCapture.from_payload(recipe_capture.to_payload())
+    )
+    fitted = fitted_model
+    resolved_model_kind = normalise_model_kind(model_kind)
+    source_sha256 = model_source_sha256
+    telemetry = _json_primitive(telemetry)
+    if telemetry.get("fit", telemetry).get("converged") is False:
+        raise StandardSuperGLMError("full training fit did not converge")
+    evidence = cv_evidence
     run_dir = _manifest_attempt_directory(output_dir, manifest.manifest_id)
     try:
         workbook_path = run_dir / "rating.xlsx"
@@ -219,7 +318,15 @@ def run_standard_superglm_build(
         receipt_path = run_dir / "receipt.json"
         receipt_sha256 = write_publication_receipt(receipt, receipt_path)
 
-        cv_report = dict(evidence.report)
+        cv_report = (
+            dict(evidence.report)
+            if evidence is not None
+            else {
+                "schema_version": 1,
+                "scope": "full_fit",
+                "validation_performed": False,
+            }
+        )
         cv_report["full_fit_telemetry"] = telemetry
         cv_report["model_name"] = model_config.model_name
         cv_report["fit_mode"] = fit_mode
@@ -267,9 +374,10 @@ def run_standard_superglm_build(
                 "metric_name": metric.metric_name,
                 "metric_value": metric.metric_value,
             }
-            for metric in evidence.fold_metrics
+            for metric in (() if evidence is None else evidence.fold_metrics)
         )
         fit_metrics = _full_fit_metrics(telemetry)
+        cv_metrics = {} if evidence is None else evidence.metrics
         completed_build = ApprovedModelBuild(
             recipe_capture=recipe_capture,
             model_id=model_id,
@@ -296,12 +404,13 @@ def run_standard_superglm_build(
             model_frame_sha256=manifest.model_frame_sha256,
             publication_receipt_path=str(receipt_path),
             publication_receipt_sha256=receipt_sha256,
-            metrics={**evidence.metrics, **fit_metrics},
+            metrics={**cv_metrics, **fit_metrics},
             metric_scopes={
-                **dict.fromkeys(evidence.metrics, "cv"),
+                **dict.fromkeys(cv_metrics, "cv"),
                 **dict.fromkeys(fit_metrics, "full_fit"),
             },
             fold_metrics=fold_metric_records,
+            monitor_run_id=monitor_run_id,
         )
         return completed_build
     except BaseException:
@@ -425,6 +534,10 @@ _NON_MODEL_SOURCE_NOTEBOOKS = frozenset(
         "04_model_editor.ipynb",
         "05_manual_adjustment.ipynb",
         "06_model_deployment.ipynb",
+        "07_model_monitoring.ipynb",
+        "04_optional_model_editor.ipynb",
+        "05_optional_manual_adjustment.ipynb",
+        "07_optional_test_weekly_run.ipynb",
     }
 )
 
@@ -439,6 +552,7 @@ def hash_model_source(root: str | Path) -> str:
         if path.is_file()
         and path.suffix.lower() in {".ipynb", ".py", ".sql", ".toml"}
         and ".ipynb_checkpoints" not in path.relative_to(source_root).parts
+        and path.relative_to(source_root) != Path("monitoring.py")
         and not (path.suffix.lower() == ".ipynb" and path.name in _NON_MODEL_SOURCE_NOTEBOOKS)
     )
     if not paths:

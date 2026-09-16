@@ -26,7 +26,7 @@ assert (
     == importlib.metadata.version("superglm-pricing-pipeline")
     == "0.2.1"
 )
-assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 48
+assert len(tuple(item for item in migration_root().iterdir() if item.name.startswith("V"))) == 52
 assert tuple(sorted(item.name for item in offline_sqlite_root().iterdir() if item.is_file())) == (
     "mlops.sql",
     "pricing.sql",
@@ -87,10 +87,14 @@ assert tuple(sorted(path.name for path in package.glob("*.ipynb"))) == (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_optional_test_weekly_run.ipynb",
 )
+monitoring_path = package / "monitoring.py"
+assert monitoring_path.is_file()
+compile(monitoring_path.read_text(encoding="utf-8"), str(monitoring_path), "exec")
 
 root = Path(os.environ["SMOKE_DATABASE_ROOT"])
 engine, _paths = open_offline_sqlite(root)
@@ -113,7 +117,13 @@ with engine.connect() as connection:
 import pandas as pd
 from superglm import Numeric, SuperGLM
 
-from pricing_pipeline.notebook import ModelRecipe, PricingDataset, PricingModelSpec
+from pricing_pipeline.notebook import (
+    ModelRecipe,
+    PricingDataset,
+    PricingModelSpec,
+    connect,
+    register_model,
+)
 
 dataset = PricingDataset(
     pd.DataFrame(
@@ -140,3 +150,37 @@ path = recipe.save(consumer / "model.toml")
 loaded_spec, loaded_model = ModelRecipe.load(path).build(dataset=dataset)
 assert ModelRecipe.from_model(loaded_model, spec=loaded_spec).sha256 == recipe.sha256
 assert loaded_spec.dataset is dataset
+
+# Run the generated file with only the installed package, from a scheduler-like cwd.
+pricing = connect(mode="local", local_root=package / ".local")
+try:
+    register_model(
+        pricing,
+        PricingModelSpec(
+            name="CLEAN_WHEEL_MODEL",
+            label="Clean Wheel Model",
+            model_type="superglm_poisson",
+            deployment_slot="CLEAN_WHEEL_MODEL_UAT",
+            target="claim_count",
+            dataset=dataset,
+            features=("x",),
+        ),
+        source_root=package,
+    )
+finally:
+    pricing.engine.dispose()
+scheduled_cwd = consumer.parent / "scheduled-cwd"
+scheduled_cwd.mkdir()
+monitoring_result = subprocess.run(
+    [sys.executable, "-I", str(monitoring_path)],
+    cwd=scheduled_cwd,
+    check=False,
+    capture_output=True,
+    text=True,
+)
+assert monitoring_result.returncode == 1, monitoring_result.stdout + monitoring_result.stderr
+logs = tuple((package / ".local" / "monitoring_logs").glob("*.log"))
+assert len(logs) == 1, monitoring_result.stdout + monitoring_result.stderr
+assert str(logs[0]) in monitoring_result.stdout + monitoring_result.stderr
+assert "Configure load_dataset()" in logs[0].read_text(encoding="utf-8")
+assert not (scheduled_cwd / ".local").exists()

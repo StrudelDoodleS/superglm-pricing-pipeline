@@ -9,7 +9,7 @@ from pricing_pipeline import cli
 
 
 def test_help_is_checkout_independent_and_does_not_import_optional_stacks(monkeypatch, capsys):
-    blocked = {"pyodbc", "IPython", "plotly", "azure.identity"}
+    blocked = {"pyodbc", "pymssql", "IPython", "plotly", "azure.identity"}
     real_import = __import__
 
     def guarded_import(name, *args, **kwargs):

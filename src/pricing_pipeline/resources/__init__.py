@@ -41,9 +41,15 @@ def scaffold_template() -> Traversable:
 
 
 def scaffold_notebook_root() -> Traversable:
-    """Return the six installed notebook templates."""
+    """Return the installed notebook templates."""
 
     return scaffold_root().joinpath("notebooks")
+
+
+def demo_root() -> Traversable:
+    """Return the filled SQL Server demo, including its setup script."""
+
+    return files(_ROOT_PACKAGE).joinpath("demo")
 
 
 @contextmanager

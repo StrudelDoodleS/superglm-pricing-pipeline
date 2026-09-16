@@ -24,9 +24,10 @@ EXPECTED_NOTEBOOKS = (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_optional_test_weekly_run.ipynb",
 )
 
 
@@ -143,7 +144,7 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
     )
 
     for name, source in rendered.items():
-        if name == "02_model_exploration.ipynb":
+        if name in {"02_model_exploration.ipynb", "07_optional_test_weekly_run.ipynb"}:
             assert "connect(" not in source
             assert "RUNTIME_MODULE" not in source
             continue
@@ -157,7 +158,7 @@ def test_scaffold_notebooks_render_connection_and_manual_choices(case, settings)
         assert namespace["RUNTIME_MODULE"] == settings["runtime_module"]
         assert namespace["EXPECTED_REMOTE_DATABASE"] == settings["expected_remote_database"]
         assert namespace["ALLOW_REMOTE_WRITES"] is False
-        if name == "05_manual_adjustment.ipynb":
+        if name == "05_optional_manual_adjustment.ipynb":
             assert namespace["SOURCE_SELECTOR"] == settings["manual_edit_source_selector"]
             assert namespace["CARRY_FORWARD"] is settings["manual_edit_carry_forward"]
 
@@ -214,7 +215,7 @@ def test_scaffold_renderer_preserves_non_ascii_escaping():
     assert 'label="M\\u00fcller"' in code
 
 
-def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
+def test_scaffold_writes_seven_notebook_workflow_and_monitoring_script(tmp_path):
     result = scaffold_pricing_model(
         ScaffoldOptions(
             model_name="MY_MODEL",
@@ -228,6 +229,7 @@ def test_scaffold_writes_six_notebook_workflow_and_no_legacy_factory(tmp_path):
     expected = (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "monitoring.py",
         package_dir / "sql" / "README.md",
     )
     assert result.created_files == expected
@@ -274,7 +276,7 @@ def test_scaffold_rejects_invalid_sql_directory_before_writing(tmp_path, kind):
         assert list(external.iterdir()) == []
 
 
-def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(tmp_path):
+def test_scaffold_notebooks_discover_project_metadata(tmp_path):
     package_dir = _scaffold(tmp_path)
 
     for name in EXPECTED_NOTEBOOKS:
@@ -288,7 +290,8 @@ def test_scaffold_notebooks_discover_project_metadata_without_mutating_sys_path(
         assert '(candidate / "pyproject.toml").is_file()' in setup
         assert '(candidate / "pricing_models").is_dir()' in setup
         assert 'candidate / "pricing_pipeline"' not in setup
-        assert "sys.path.insert" not in setup
+        if name != "07_optional_test_weekly_run.ipynb":
+            assert "sys.path.insert" not in setup
 
 
 def test_scaffold_separates_training_and_exploration(tmp_path):
@@ -301,8 +304,8 @@ def test_scaffold_separates_training_and_exploration(tmp_path):
         "".join(cell.get("source", [])) for cell in exploration_notebook["cells"]
     )
     training = _code(package_dir / "03_model_training.ipynb")
-    editor = _code(package_dir / "04_model_editor.ipynb")
-    manual = _code(package_dir / "05_manual_adjustment.ipynb")
+    editor = _code(package_dir / "04_optional_model_editor.ipynb")
+    manual = _code(package_dir / "05_optional_manual_adjustment.ipynb")
     deployment = _code(package_dir / "06_model_deployment.ipynb")
 
     assert "dataset.save(" in ingestion
@@ -342,9 +345,8 @@ def test_scaffold_separates_training_and_exploration(tmp_path):
     assert "DEPLOY_AFTER_PUBLISH = False" in manual
     assert "POLICY_SOURCE_PACKAGE_VERSION = None" in manual
 
-    assert "list_model_versions(" in deployment
-    assert 'eq("PUBLISHED")' in deployment
-    assert "load_model_version(" in deployment
+    assert "list_challengers(" in deployment
+    assert "review_model_version(" in deployment
     assert "deploy_model_version(" in deployment
 
     assert "save_model_frame(" not in exploration
@@ -562,7 +564,7 @@ def test_scaffold_ingestion_and_training_publish_with_dataset_provenance(
 
 def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "04_model_editor.ipynb")
+    notebook = _notebook(package_dir / "04_optional_model_editor.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -579,7 +581,7 @@ def test_scaffold_keeps_editor_preview_and_publish_as_separate_cells(tmp_path):
 
 def test_scaffold_keeps_manual_preview_publish_and_deploy_separate(tmp_path):
     package_dir = _scaffold(tmp_path)
-    notebook = _notebook(package_dir / "05_manual_adjustment.ipynb")
+    notebook = _notebook(package_dir / "05_optional_manual_adjustment.ipynb")
     cells = [
         "".join(cell.get("source", [])) for cell in notebook["cells"] if cell["cell_type"] == "code"
     ]
@@ -629,19 +631,26 @@ def test_scaffold_preserves_existing_files_and_recreates_only_missing_files(tmp_
     options = ScaffoldOptions(model_name="MY_MODEL", target_name="target", root=tmp_path)
     scaffold_pricing_model(options)
     package_dir = tmp_path / "pricing_models" / "my_model"
-    training_path = package_dir / "03_model_training.ipynb"
     init_path = package_dir / "__init__.py"
-    training_path.write_text(
-        training_path.read_text(encoding="utf-8") + "\n",
-        encoding="utf-8",
-    )
-    training_before = training_path.read_text(encoding="utf-8")
+    completed = {}
+    for name in (
+        "01_data_ingestion.ipynb",
+        "02_model_exploration.ipynb",
+        "03_model_training.ipynb",
+    ):
+        path = package_dir / name
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        notebook["cells"].append(
+            {"cell_type": "markdown", "metadata": {}, "source": [f"Analyst edits in {name}\n"]}
+        )
+        path.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
+        completed[path] = path.read_bytes()
     init_path.unlink()
 
     result = scaffold_pricing_model(options)
 
     assert result.created_files == (init_path,)
-    assert training_path.read_text(encoding="utf-8") == training_before
+    assert all(path.read_bytes() == before for path, before in completed.items())
     assert scaffold_pricing_model(options).created_files == ()
 
 
@@ -664,6 +673,7 @@ def test_scaffold_force_overwrites_all_workflow_files(tmp_path):
     assert result.created_files == (
         package_dir / "__init__.py",
         *(package_dir / name for name in EXPECTED_NOTEBOOKS),
+        package_dir / "monitoring.py",
         package_dir / "sql" / "README.md",
     )
     assert training_path.read_text(encoding="utf-8") != "stale"
@@ -683,7 +693,7 @@ def test_scaffold_migrates_legacy_deployment_before_creating_manual_step(tmp_pat
 
     assert not legacy_path.exists()
     assert (package_dir / "06_model_deployment.ipynb").read_text(encoding="utf-8") == legacy_content
-    _notebook(package_dir / "05_manual_adjustment.ipynb")
+    _notebook(package_dir / "05_optional_manual_adjustment.ipynb")
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
 
 
@@ -731,7 +741,7 @@ def test_scaffold_refuses_legacy_deployment_symlinks_without_touching_targets(
         assert not external_path.exists()
 
 
-@pytest.mark.parametrize("output_name", ("__init__.py", *EXPECTED_NOTEBOOKS))
+@pytest.mark.parametrize("output_name", ("__init__.py", *EXPECTED_NOTEBOOKS, "monitoring.py"))
 def test_scaffold_rejects_output_symlinks_before_writing_any_files(tmp_path, output_name):
     package_dir = tmp_path / "pricing_models" / "my_model"
     output_path = package_dir / output_name
@@ -788,10 +798,14 @@ def test_scaffold_allows_a_symlinked_user_root_after_resolving_it(tmp_path):
     assert sorted(path.name for path in package_dir.glob("*.ipynb")) == sorted(EXPECTED_NOTEBOOKS)
 
 
+@pytest.mark.parametrize("portable", [False, True])
 def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, portable
 ):
     from pricing_pipeline.scaffold import service
+
+    if portable:
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
 
     external_path = tmp_path / "external-init.py"
     external_content = "do not modify this file\n"
@@ -817,6 +831,63 @@ def test_scaffold_force_does_not_follow_a_leaf_symlink_swapped_after_preflight(
     assert external_path.read_text(encoding="utf-8") == external_content
 
 
+def test_scaffold_without_no_follow_support_creates_preserves_and_replaces(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    package = _scaffold(tmp_path)
+    originals = {path: path.read_bytes() for path in package.rglob("*") if path.is_file()}
+    monitoring = package / "monitoring.py"
+    monitoring.write_bytes(b"analyst monitoring edits\n")
+
+    _scaffold(tmp_path)
+
+    assert monitoring.read_bytes() == b"analyst monitoring edits\n"
+    assert all(
+        path.read_bytes() == content for path, content in originals.items() if path != monitoring
+    )
+
+    _scaffold(tmp_path, force=True)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert {path for path in package.rglob("*") if path.is_file()} == set(originals)
+
+
+def test_portable_scaffold_force_replaces_a_hardlink_without_changing_its_target(
+    tmp_path, monkeypatch
+):
+    package = _scaffold(tmp_path)
+    path = package / "monitoring.py"
+    generated = path.read_bytes()
+    external = tmp_path / "external.py"
+    external.write_bytes(b"external code must not change\n")
+    path.unlink()
+    path.hardlink_to(external)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    _scaffold(tmp_path)
+    assert path.samefile(external)
+    _scaffold(tmp_path, force=True)
+
+    assert external.read_bytes() == b"external code must not change\n"
+    assert path.read_bytes() == generated
+    assert not path.samefile(external)
+
+
+def test_portable_scaffold_cleans_temporary_files_after_a_failed_replace(tmp_path, monkeypatch):
+    package = _scaffold(tmp_path)
+    originals = {path: path.read_bytes() for path in package.rglob("*") if path.is_file()}
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    def reject_replace(source, destination):
+        raise OSError("replace denied")
+
+    monkeypatch.setattr(os, "replace", reject_replace)
+    with pytest.raises(OSError, match="replace denied"):
+        _scaffold(tmp_path, force=True)
+
+    assert all(path.read_bytes() == content for path, content in originals.items())
+    assert {path for path in package.rglob("*") if path.is_file()} == set(originals)
+
+
 def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp_path):
     package_dir = tmp_path / "pricing_models" / "my_model"
     legacy_path = package_dir / "04_model_deployment.ipynb"
@@ -840,7 +911,7 @@ def test_scaffold_refuses_legacy_deployment_migration_when_new_target_exists(tmp
 
     assert legacy_path.read_text(encoding="utf-8") == legacy_content
     assert deployment_path.read_text(encoding="utf-8") == deployment_content
-    assert not (package_dir / "05_manual_adjustment.ipynb").exists()
+    assert not (package_dir / "05_optional_manual_adjustment.ipynb").exists()
 
 
 def test_scaffold_accepts_explicit_model_identity(tmp_path):
@@ -872,7 +943,7 @@ def test_scaffold_renders_safe_connection_defaults_where_sql_is_used(tmp_path):
 
     for name in EXPECTED_NOTEBOOKS:
         source = _code(package_dir / name)
-        if name == "02_model_exploration.ipynb":
+        if name in {"02_model_exploration.ipynb", "07_optional_test_weekly_run.ipynb"}:
             assert "RUNTIME_MODULE" not in source
             assert "connect(" not in source
             continue
@@ -889,7 +960,7 @@ def test_scaffold_renders_manual_edit_defaults_into_manual_notebook(tmp_path):
         manual_edit_carry_forward=False,
     )
 
-    source = _code(package_dir / "05_manual_adjustment.ipynb")
+    source = _code(package_dir / "05_optional_manual_adjustment.ipynb")
     assert 'SOURCE_SELECTOR = "latest"' in source
     assert "CARRY_FORWARD = False" in source
 
@@ -1107,7 +1178,7 @@ def test_scaffold_script_reports_all_notebook_paths(tmp_path):
     )
 
     assert result.returncode == 0
-    for name in EXPECTED_NOTEBOOKS:
+    for name in (*EXPECTED_NOTEBOOKS, "monitoring.py"):
         assert f"pricing_models/script_model/{name}" in result.stdout
     assert "model.toml" not in result.stdout
     assert "DAG" not in result.stdout

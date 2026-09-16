@@ -55,7 +55,12 @@ column names, database names or business assumptions.
 
 Use `pricing-pipeline scaffold --help` to check current options. Fill in
 `pricing_scaffold.toml`, then scaffold the new model with its model name and
-target name. Keep the six generated notebooks and their separate steps.
+target name. Keep the seven generated notebooks and their separate steps.
+Keep `monitoring.py` beside notebook 07 as its shared configuration and execution file.
+The standard initial workflow needs 01, 03 and human promotion in 06. Notebook 02
+is optional exploration; 04 and 05 are optional edits. Notebook 07 is an optional
+test of the weekly runner, with real SQL writes. Weekly automation runs monitoring.py, which loads fresh
+data itself; it does not rerun notebooks 01 through 03.
 For an existing model, edit its notebooks in place. Do not use `--force` to
 overwrite analyst work as a shortcut.
 
@@ -80,27 +85,16 @@ Keep `PricingModelSpec` flat and retain the short comments from the template.
 Keep feature definitions together and derive the spec's feature names from
 them. Do not repeat dataset metadata already supplied by `dataset=dataset`.
 
-Declare supported transforms once and apply that same mapping before fitting.
-For example, if the analyst chose log exposure and clipped vehicle age:
+Prefer feature transforms in the upstream SQL query. Use the resulting column
+names in the model and offset configuration; leave `transforms={}` when SQL
+already supplies them. Both the recurring loader and deployed scoring inputs
+must use the same definitions. Do not apply a transform a second time in Python
+or promise original-scale workbook labels for a transformed column.
 
-```python
-transforms = {
-    "log_exposure": Log("exposure"),
-    "clipped_vehicle_age": Clip("vehicle_age", lower=0, upper=30),
-}
-df = apply_transforms(dataset.df, transforms)
-```
-
-Import these helpers from `pricing_pipeline.notebook`. Pass
-`transforms=transforms` to `PricingModelSpec`, use transformed names in the
-feature definitions, and set `offset_column="log_exposure"` for this example.
-Keep the source columns in the data. The saved recipes tell the workbook and
-SQL export how source values map to model inputs. Do not add a special offset
-label contract. `Log` needs positive values. `Log1p` means log of one plus the
-value and needs values greater than minus one. `Clip` limits values to its
-bounds. Check missing and non-finite values before fitting. Do not silently
-drop invalid rows. For other transforms, check export support before promising
-matching workbook or SQL predictions.
+Preserve existing supported Python transforms when maintaining an older recipe.
+Apply its `MODEL.transforms` once with `apply_transforms` before fitting. Do not
+add a special offset label contract. Check missing and non-finite values before
+fitting and do not silently drop invalid rows.
 
 Use `fit_reml` as the normal fit mode and `retain_fit_state=False` in training
 notebooks. Keep exact spline export for supported one-dimensional splines.
@@ -117,6 +111,16 @@ K-fold or overlapping test windows with this contract.
 
 Explain the cells in terms of their results. `fit_model` fits and validates.
 `save_model_version` saves the version and its evidence to the chosen database.
+Use `pricing.V_MODEL_REGISTRY` for the champion, challengers and former champions.
+Keep the registered model name stable. `definition_revision` identifies the declared
+recipe; weekly refits inherit it. Package and run IDs identify saved fits, and
+`fit_version` is the legacy fit counter. Do not call each weekly fit a new model
+definition or promote it automatically. Filter the deployment slot when reviewing.
+Use Model version for `recipe_revision`/`definition_revision` and Package for
+`package_version` in notebook displays. Omit the legacy `model_version`/`fit_version`
+counter from those displays. Keep API arguments and SQL columns unchanged.
+Label references as Current champion package, Compared with package, or Parent
+package. They use the same package numbers, not separate version sequences.
 `deploy_model_version` makes a selected version active. Keep existing keyword
 arguments such as `frame=df` where the installed API requires them.
 
@@ -173,12 +177,134 @@ a partial recipe. Historical builds remain LEGACY.
 
 Never invent or increment version numbers. SQL assigns recipe revisions when a
 successful build is saved. A recipe revision identifies declared modelling
-choices; model_version and package_version retain their existing fitted-build
-and package meanings. New data can produce a new build using the same recipe.
+choices. New data produces another fit with the same definition revision.
+Changing declared features, groupings, transforms or fitting policies through
+an analyst build creates or reuses that definition's recipe revision. Weekly
+freeze controls do not create a new definition. Use package_version to select
+a saved result and fit_version only when its legacy audit identifier is needed.
 Post-fit edits retain their training recipe plus edit lineage. Loading a recipe
-is an ordinary refit; frozen learned structures still require baseline artifacts
-and monitoring variants. Saving a challenger does not deploy it. Keep notebook
-06 and deployment selection separate. SQL stores need V047 and V048 before use.
+is an ordinary refit. For weekly monitoring, use notebook 07 and its generated
+`monitoring.py` module. They read the deployed configuration and fitted settings
+from SQL; do not require a local model file.
+Saving a challenger does not deploy it. Keep notebook 06 and deployment selection
+separate. SQL stores need the current package migrations before use.
+
+Package updates do not rewrite existing 01, 02 or 03 notebooks. Preserve completed
+cells and recipe TOMLs. The existing publication call captures the new SQL state
+automatically. Older publications can use the explicit one-time
+`capture_existing_monitoring_baseline(candidate)` helper while their verified
+artifact is available. Explain that this writes SQL. Never regenerate a filled
+project with `--force` as an upgrade step.
+Apply missing SQL migrations from the package repository; do not reset the
+database for a normal upgrade. Scaffold updated templates into a separate
+directory for comparison and copy only the requested cells into completed files.
+
+## Configure recurring monitoring
+
+To try the filled SQL Server example, use `pricing-pipeline demo --root` with a
+new directory. It ships setup files and synthetic notebooks. The demo extra
+provides the driver and notebook tools; Docker runs the dedicated local server.
+Follow the generated README and preserve existing projects.
+
+An ordinary scaffold rerun adds missing `07_optional_test_weekly_run.ipynb` and
+`monitoring.py` files. If 07 already exists under its older filename, preserve it
+instead of creating a second copy. Use its existing model name, target and package name.
+Preserve completed 01, 02 and 03 cells, the other notebooks, and edited monitoring files.
+
+Publishing a changed feature set in 03 creates a challenger with the new recipe;
+it does not change the champion. 07 and monitoring.py currently use the configured
+slot's current champion. Explain that they do not yet test a selected undeployed
+challenger. Do not propose promoting an unreviewed challenger just to test it.
+New features must be available in both 01's loader and the recurring loader.
+After human promotion in 06, the next run loads the new champion and its SQL
+configuration automatically. Keep the schedule unchanged unless its connection
+or source query needs updating. Running 07 between scheduled runs is allowed;
+it writes the same observations and challengers as a scheduled run.
+
+Keep model identity and connection settings in `monitoring.py`. Notebook 07 imports
+and reloads that module, calls its `run()` function, and displays the resulting runs,
+metrics, warnings and categorical drift. Do not duplicate those settings in the
+notebook. Retain `runtime_module`, the expected destination database check and the
+remote write guard. Credentials belong in the project's private runtime.
+
+Configure the one editable `load_dataset()` function with the analyst's current
+source query and enrichment. The generated error is deliberate until that read is
+configured. Source reads may use a separate runtime and database from monitoring
+storage. Return `PricingDataset` with a dataset name, source name, unique key and
+the source snapshot-date column. Preserve deterministic row order and any source
+columns required by the saved transforms. Do not substitute 01's saved dataset or
+use today's run date as the data's snapshot date.
+
+Explain the four modes before the first run. `STATIC_SCORE` uses the deployed
+coefficients. `FROZEN_REFIT` refits coefficients with the saved basis and penalties.
+`REESTIMATE_LAMBDA` also reestimates smoothing penalties. `FULL_ADAPTIVE` rebuilds
+the basis on current data and reestimates penalties. Each weekly run scores the
+current champion once and publishes the three refits as challenger packages.
+It records four observations and does not promote a challenger. Explicit knots,
+boundaries and fixed lambda policies remain fixed even in FULL_ADAPTIVE.
+Feature definitions, grouping and special levels stay unchanged in all modes.
+
+The report's `role` distinguishes `CHAMPION` from `CHALLENGER`. Its
+`baseline_model_run_id`, `baseline_deployment_id`, `baseline_rate_package_id` and
+`baseline_package_version` identify the champion used for comparison. The three
+challengers also have `model_run_id`, `rate_package_id`, `package_version`,
+`fit_version`, `package_status` and `publication_reused` values.
+All four rows retain the same `definition_revision`. The static score
+does not create a candidate package. Each observation is persisted separately, so
+a later failure can leave earlier observations and publications saved. Exact-evidence
+retries reuse prior results.
+
+For an authorized monitoring run, guide the analyst through one successful manual
+terminal execution before scheduling. Notebook 07 prints the exact command. The
+scheduler must execute the generated file with the project's Python interpreter:
+
+```text
+/absolute/project/.venv/bin/python /absolute/project/pricing_models/model_name/monitoring.py
+```
+
+On Windows, Task Scheduler uses the Python executable as Program/script and the
+quoted absolute `monitoring.py` path as Add arguments. WSL cron uses the same file
+command printed by its project kernel. Keep the interpreter environment and project
+path fixed. The generated module resolves its own directory and imports the project
+runtime even when the scheduler starts elsewhere. Check the terminal's reported log
+under the model's `.local/monitoring_logs` and its exit status. A nonzero status means
+the run failed. The machine, WSL when used, source system and model database must be
+available. Scaffolding does not register an operating-system task.
+
+## Review and promote a challenger
+
+Use `06_model_deployment.ipynb` for review and promotion. Use one compact table
+from `list_challengers(pricing, model=model)` for all published packages in the
+slot, including ordinary training packages, the champion and former champions.
+Display Package, Model version, Role, Fit, Data as of and Saved at. Despite its name,
+`list_challengers` includes the champion and ordinary training packages too.
+Explain which champion a weekly challenger was compared with; a saved challenger
+may predate the current champion.
+
+Place the `PACKAGE_VERSION` selection cell after the published package list and
+before the SQL review cell. Require the analyst to choose a package. Do not choose the newest
+package when it is unset. Call `review_model_version(pricing, model=model,
+package_version=PACKAGE_VERSION)` and display the returned summary and metrics.
+This review reads SQL and needs no local model files. Preserve the returned immutable
+review record for the separate promotion cell.
+Show each metric's package number, readable `comparison` label and
+`is_current_champion` status. The champion used for a saved comparison may have
+been replaced. Keep its scores attached to that package and show the current
+champion's package number separately.
+
+For an authorized promotion, enter `DEPLOYMENT_REASON` in its separate decision
+cell after review. Keep that cell separate from the model and connection settings,
+which invalidate the previous review when changed. Call
+`deploy_model_version(pricing, package=reviewed, reason=DEPLOYMENT_REASON)`. This
+changes the champion in the selected deployment slot. If the package selection
+changes, review it again. If the slot's champion changed since review, the database
+rejects the stale review. Refresh the lists, compare again and obtain a fresh review;
+do not bypass that check. Weekly notebook and scheduler execution never promotes
+the packages it creates.
+
+Scaffold reruns preserve an existing 06. Update its review cells deliberately to
+adopt this SQL workflow, while retaining the analyst's configuration and completed
+work. Do not use `--force` to replace a filled notebook.
 
 `pricing-pipeline init` preserves customized agent files. An existing project's
 agent needs an intentional manual update to adopt these instructions.

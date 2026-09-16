@@ -1,8 +1,8 @@
 """Check monitoring inputs and compare categorical mixes before any model refit.
 
 Compatibility errors block refits. Distribution changes are review warnings, not
-proof of changed SQL definitions. Candidate references come from verified artifacts;
-standalone fitted models need an explicit reference dataframe for drift checks.
+proof of changed SQL definitions. References come from verified Candidate artifacts
+or SQL aggregate profiles. Standalone fitted models need an explicit reference frame.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -23,11 +23,19 @@ from pricing_pipeline.modeling.monitoring.contracts import (
     _canonical_json,
     _categorical_scalar_identity,
 )
+from pricing_pipeline.modeling.monitoring.domains import (
+    CategoricalDomain,
+    OrderedDomain,
+    sql_feature_domains,
+)
 from pricing_pipeline.modeling.monitoring.support_checks import (
     numeric_support_issues,
     ordered_support_issues,
 )
 from pricing_pipeline.workbench.core import Candidate
+
+if TYPE_CHECKING:
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
 
 _ISSUE_COLUMNS = ("feature", "severity", "code", "message", "affected_rows", "affected_weight")
 _DISTRIBUTION_COLUMNS = (
@@ -166,6 +174,8 @@ def _weights(df: pd.DataFrame, values: Any, issues: list[dict[str, Any]]) -> np.
 
 def _categorical_domain(spec: Any, values: np.ndarray) -> tuple[list[Any], np.ndarray]:
     """Use the same raw-level spelling and grouping rules as the fitted feature."""
+    if isinstance(spec, CategoricalDomain | OrderedDomain):
+        return spec.raw_domain(values)
     grouping = getattr(spec, "_grouping", None)
     if isinstance(spec, OrderedCategorical):
         values = spec._canonical(values)
@@ -188,7 +198,7 @@ def _categorical_domain(spec: Any, values: np.ndarray) -> tuple[list[Any], np.nd
 
 
 def _inspect_features(
-    baseline: SuperGLM,
+    baseline: SuperGLM | SqlBaseline,
     df: pd.DataFrame,
     sample_weight: Any,
     *,
@@ -210,14 +220,20 @@ def _inspect_features(
     weights = _weights(df, sample_weight, issues)
     if sample_weight is not None and weights is None:
         return issues, profiles
-    configured = dict(baseline._config.feature_templates)
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
+    if isinstance(baseline, SqlBaseline):
+        feature_order, specs, configured = sql_feature_domains(baseline.payload())
+    else:
+        feature_order, specs = baseline._feature_order, baseline._specs
+        configured = dict(baseline._config.feature_templates)
     weight_total = None if weights is None else float(weights.sum())
-    for feature in baseline._feature_order:
+    for feature in feature_order:
         if feature not in df:
             _issue(issues, feature, "error", "MISSING_FEATURE", f"Feature {feature!r} is missing.")
             continue
         series = df[feature]
-        spec = baseline._specs[feature]
+        spec = specs[feature]
         if (
             variant is not None
             and variant is not MonitoringVariant.STATIC_SCORE
@@ -246,7 +262,9 @@ def _inspect_features(
                 int(missing.sum()),
             )
             continue
-        if not isinstance(spec, (Categorical, OrderedCategorical)):
+        if not isinstance(
+            spec, Categorical | OrderedCategorical | CategoricalDomain | OrderedDomain
+        ):
             try:
                 if (
                     pd.api.types.is_complex_dtype(series.dtype)
@@ -293,9 +311,10 @@ def _inspect_features(
         if unknown.any():
             fallback = (
                 variant is MonitoringVariant.STATIC_SCORE
-                and isinstance(spec, Categorical)
+                and isinstance(spec, Categorical | CategoricalDomain)
                 and spec.unseen == "base"
-                and spec._grouping is None
+                and (spec.grouping if isinstance(spec, CategoricalDomain) else spec._grouping)
+                is None
             )
             examples = list(dict.fromkeys(str(value) for value in values[unknown]))[:10]
             _issue(
@@ -309,7 +328,7 @@ def _inspect_features(
                 None if weights is None else float(weights[unknown].sum()),
             )
             continue
-        if isinstance(spec, OrderedCategorical) and variant is not None:
+        if isinstance(spec, OrderedCategorical | OrderedDomain) and variant is not None:
             for item in ordered_support_issues(
                 feature, spec, feature_config, values, weights, variant
             ):
@@ -358,7 +377,7 @@ def _report(
 
 
 def _require_compatible_monitoring_data(
-    baseline: SuperGLM,
+    baseline: SuperGLM | SqlBaseline,
     df: pd.DataFrame,
     sample_weight: Any,
     *,
@@ -370,7 +389,7 @@ def _require_compatible_monitoring_data(
 
 
 def check_monitoring_data(
-    baseline_model: SuperGLM | Candidate,
+    baseline_model: SuperGLM | Candidate | SqlBaseline,
     df: pd.DataFrame,
     *,
     sample_weight: Any = None,
@@ -389,13 +408,16 @@ def check_monitoring_data(
     prediction compatibility without requiring support to estimate coefficients.
 
     A verified Candidate supplies reference inputs and fitting weights from its
-    saved bundle. For a standalone SuperGLM, supply reference_df for drift checks.
+    saved bundle. A SqlBaseline supplies immutable saved aggregate profiles. For a
+    standalone SuperGLM, supply reference_df for drift checks.
     No reference means drift is explicitly unassessed. Total variation distance
     is half the sum of absolute level-share changes, from 0 to 1. The configurable
     default threshold of 0.2 is a review trigger, not a statistical significance
     test. Weight distances require weights on both sides. This checks categorical
     marginals; matching marginals cannot certify unchanged upstream semantics.
     """
+    from pricing_pipeline.modeling.monitoring.snapshot import SqlBaseline
+
     resolved_variant = MonitoringVariant(variant)
     if (
         isinstance(drift_threshold, bool)
@@ -404,20 +426,29 @@ def check_monitoring_data(
         or not 0 < drift_threshold <= 1
     ):
         raise ValueError("drift_threshold must be finite and in (0, 1].")
-    if isinstance(baseline_model, Candidate) and (
+    if isinstance(baseline_model, Candidate | SqlBaseline) and (
         reference_df is not None or reference_sample_weight is not None
     ):
-        raise ValueError(
-            "Candidate reference inputs come from its verified artifact and cannot be overridden."
+        source = (
+            "SqlBaseline reference profiles come from its saved snapshot"
+            if isinstance(baseline_model, SqlBaseline)
+            else "Candidate reference inputs come from its verified artifact"
         )
-    baseline, _, bundle = _resolve_monitoring_baseline(baseline_model)
+        raise ValueError(source + " and cannot be overridden.")
+    if isinstance(baseline_model, SqlBaseline):
+        baseline, _, _ = _resolve_monitoring_baseline(baseline_model)
+        bundle = None
+        saved = baseline.payload()
+    else:
+        baseline, _, bundle = _resolve_monitoring_baseline(baseline_model)
+        saved = None
     reference_source = "provided" if reference_df is not None else "unavailable"
     if bundle is not None:
         reference_source = "saved_candidate"
         reference_df = bundle.X
         reference_sample_weight = bundle.sample_weight if sample_weight is not None else None
     issues, current = _inspect_features(baseline, df, sample_weight, variant=resolved_variant)
-    if reference_df is None:
+    if reference_df is None and saved is None:
         _issue(
             issues,
             None,
@@ -426,12 +457,25 @@ def check_monitoring_data(
             "Categorical drift was not assessed: supply reference_df or a verified saved Candidate.",
         )
         return _report(issues, [], [], reference_source)
-    reference_issues, reference = _inspect_features(baseline, reference_df, reference_sample_weight)
-    for item in reference_issues:
-        if item["severity"] == "error":
-            issues.append({**item, "message": "Invalid reference data: " + item["message"]})
-    weighted = sample_weight is not None and reference_sample_weight is not None
-    if (sample_weight is None) != (reference_sample_weight is None):
+    if saved is not None:
+        reference_source = "sql_baseline"
+        reference = saved["reference_profiles"]
+        reference_has_weights = saved["reference_has_weights"] and sample_weight is not None
+        if sample_weight is None:
+            # Match Candidate row-only comparisons; payload() owns these fresh dictionaries.
+            for profile in reference.values():
+                for entry in profile.values():
+                    entry["weight"] = entry["weight_share"] = None
+    else:
+        reference_issues, reference = _inspect_features(
+            baseline, reference_df, reference_sample_weight
+        )
+        for item in reference_issues:
+            if item["severity"] == "error":
+                issues.append({**item, "message": "Invalid reference data: " + item["message"]})
+        reference_has_weights = reference_sample_weight is not None
+    weighted = sample_weight is not None and reference_has_weights
+    if (sample_weight is not None) != reference_has_weights:
         _issue(
             issues,
             None,

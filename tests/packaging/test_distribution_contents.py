@@ -84,6 +84,10 @@ MIGRATION_FILES = (
     "V046__full_fit_diagnostics.sql",
     "V047__model_recipes.sql",
     "V048__recipe_revision_views.sql",
+    "V049__sql_monitoring_baselines.sql",
+    "V050__monitoring_challenger_publications.sql",
+    "V051__model_registry.sql",
+    "V052__compressed_model_recipes.sql",
 )
 BASE_REQUIREMENTS = (
     "joblib",
@@ -96,7 +100,7 @@ BASE_REQUIREMENTS = (
     "python-dotenv",
     "scikit-learn",
     "sqlalchemy",
-    "superglm>=0.30",
+    "superglm>=0.33",
     "tomli-w>=1.2.0",
 )
 OPTIONAL_REQUIREMENTS = {
@@ -104,6 +108,7 @@ OPTIONAL_REQUIREMENTS = {
     "azure": ("azure-identity", "pyodbc"),
     "report": ("plotly>=6.9", "scipy"),
     "notebook": ("ipykernel",),
+    "demo": ("ipykernel", "pymssql>=2.3.13", "jupyterlab>=4.4,<5"),
     "scratch": ("catboost", "lightgbm", "matplotlib", "scipy", "xgboost"),
     "mlflow": ("mlflow",),
 }
@@ -115,9 +120,28 @@ SCAFFOLD_NOTEBOOK_FILES = (
     "01_data_ingestion.ipynb",
     "02_model_exploration.ipynb",
     "03_model_training.ipynb",
-    "04_model_editor.ipynb",
-    "05_manual_adjustment.ipynb",
+    "04_optional_model_editor.ipynb",
+    "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
+    "07_optional_test_weekly_run.ipynb",
+)
+DEMO_FILES = (
+    ".gitignore",
+    "README.md",
+    "compose.yaml",
+    "demo_data.py",
+    "demo_sql_runtime.py",
+    "export_sql.py",
+    "pricing_scaffold.toml",
+    "pyproject.toml",
+    "setup_demo.py",
+    "pricing_models/burn_cost_demo/__init__.py",
+    "pricing_models/burn_cost_demo/monitoring.py",
+    "pricing_models/burn_cost_demo/sql/README.md",
+    *(
+        f"pricing_models/burn_cost_demo/{name}"
+        for name in (*SCAFFOLD_NOTEBOOK_FILES, "08_inspect_sql.ipynb")
+    ),
 )
 SCAFFOLD_TEMPLATE = b"""# Connection names only. Keep credentials in the private runtime module or its secret provider.
 
@@ -238,15 +262,17 @@ def _expected_resource_names() -> set[str]:
         f"{SCAFFOLD_PREFIX}pricing_scaffold.toml",
         f"{SCAFFOLD_PREFIX}pricing-builder.agent.md",
         f"{SCAFFOLD_PREFIX}pricing-developer.agent.md",
+        f"{SCAFFOLD_PREFIX}monitoring.py.template",
         f"{SCAFFOLD_PREFIX}sql/README.md",
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
+        *{f"{RESOURCE_PREFIX}demo/{name}" for name in DEMO_FILES},
     }
 
 
 def _assert_resource_inventory(names: set[str]) -> None:
-    assert len(MIGRATION_FILES) == 48
+    assert len(MIGRATION_FILES) == 52
     assert {
         name for name in names if name.startswith(RESOURCE_PREFIX)
     } == _expected_resource_names()

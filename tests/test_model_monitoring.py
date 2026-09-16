@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -1909,6 +1910,71 @@ def persisted_monitoring_case(tmp_path, monitoring_case):
     engine.dispose()
 
 
+@pytest.mark.parametrize("dialect", ["sqlite", "mssql"])
+def test_monitoring_deployment_lock_precedes_evidence_writes_in_same_transaction(
+    persisted_monitoring_case, dialect
+):
+    """Check emitted SQL and transaction scope, without live SQL Server locking."""
+    engine, result, kwargs, _ = persisted_monitoring_case
+    executed = []
+
+    @contextmanager
+    def recording_transaction():
+        with engine.begin() as connection:
+
+            def execute(statement, parameters):
+                sql = str(statement)
+                transaction = connection.get_transaction()
+                assert transaction is not None and transaction.is_active
+                executed.append((sql, parameters, transaction))
+                # SQLite executes the relational work and audit guards. Only the
+                # SQL Server hint and location of monitoring tables need translation.
+                translated = sql.replace("WITH (UPDLOCK, HOLDLOCK)", "")
+                translated = translated.replace("mlops.MODEL_MONITOR_", "pricing.MODEL_MONITOR_")
+                translated = translated.replace(
+                    "mlops.MODEL_FIT_CONTRACT", "pricing.MODEL_FIT_CONTRACT"
+                )
+                return connection.execute(text(translated), parameters)
+
+            yield SimpleNamespace(execute=execute)
+
+    recording_engine = SimpleNamespace(
+        dialect=SimpleNamespace(name=dialect), begin=recording_transaction
+    )
+    receipt = persist_monitoring_fit(
+        recording_engine, result, **{**kwargs, "component_role": "FREQUENCY"}
+    )
+    deployment_reads = [
+        (index, sql, parameters, transaction)
+        for index, (sql, parameters, transaction) in enumerate(executed)
+        if "FROM pricing.PRICING_MODEL_DEPLOYMENT" in sql
+    ]
+    assert len(deployment_reads) == 1
+    read_index, read_sql, parameters, transaction = deployment_reads[0]
+    assert ("WITH (UPDLOCK, HOLDLOCK)" in read_sql) == (dialect == "mssql")
+    assert "effective_to_ts IS NULL" in read_sql
+    assert parameters == {"deployment_id": 93, "model_id": 91, "rate_package_id": 92}
+    writes = [
+        (index, item_transaction)
+        for index, (sql, _, item_transaction) in enumerate(executed)
+        if sql.lstrip().startswith(("INSERT", "UPDATE"))
+    ]
+    assert writes
+    assert all(index > read_index and current is transaction for index, current in writes)
+    assert not transaction.is_active
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                text(
+                    "SELECT evidence_sealed FROM pricing.MODEL_MONITOR_RUN "
+                    "WHERE monitor_run_id = :monitor_run_id"
+                ),
+                {"monitor_run_id": receipt.monitor_run_id},
+            ).scalar_one()
+            == 1
+        )
+
+
 @pytest.mark.parametrize(
     "table, columns, values",
     [
@@ -2032,6 +2098,13 @@ def test_monitoring_child_failure_rolls_back_observation(persisted_monitoring_ca
 def test_offline_upgrade_seals_existing_monitoring_without_certifying_it(persisted_monitoring_case):
     engine, _, _, receipt = persisted_monitoring_case
     with engine.begin() as connection:
+        connection.execute(text("DROP VIEW pricing.V_MODEL_CHALLENGER"))
+        connection.execute(text("DROP VIEW pricing.V_MODEL_REGISTRY"))
+        for operation in ("UPDATE", "DELETE"):
+            connection.execute(
+                text(f"DROP TRIGGER pricing.TR_DATASET_MANIFEST_CHALLENGER_{operation}")
+            )
+        connection.execute(text("DROP TABLE pricing.MODEL_MONITOR_PUBLICATION"))
         for view in ("LAMBDA", "RELATIVITY", "RUN"):
             connection.execute(text(f"DROP VIEW pricing.V_MODEL_MONITORING_{view}"))
         connection.execute(text("DROP TRIGGER pricing.TR_MODEL_MONITOR_RUN_IMMUTABLE_UPDATE"))

@@ -658,3 +658,74 @@ JOIN PRICING_RATE_PACKAGE AS rp ON rp.rate_package_id = s.rate_package_id
 JOIN PRICING_MODEL AS m ON m.model_id = rp.model_id
 LEFT JOIN MODEL_RUN AS mr ON mr.rate_package_id = rp.rate_package_id
 LEFT JOIN DATASET_MANIFEST AS dm ON dm.manifest_id = mr.manifest_id;
+
+
+DROP VIEW IF EXISTS pricing.V_MODEL_REGISTRY;
+CREATE VIEW pricing.V_MODEL_REGISTRY
+/*
+Purpose: Review the champion, challengers and former champions together.
+One row: One saved fit in each known deployment slot; a never-deployed model has a NULL slot.
+Use: definition_revision identifies declared choices. Package/run IDs identify fits.
+Monitoring packages stay in their originating slot. published_at is UTC publication time.
+*/
+AS
+WITH model_slots AS (
+    SELECT DISTINCT model_id, deployment_slot FROM PRICING_MODEL_DEPLOYMENT
+)
+SELECT model.model_name, model.model_label, slots.deployment_slot,
+       CASE WHEN current_deployment.rate_package_id=package.rate_package_id THEN 'CHAMPION'
+            WHEN EXISTS (
+                SELECT 1 FROM PRICING_MODEL_DEPLOYMENT AS history
+                WHERE history.model_id=model.model_id
+                  AND history.rate_package_id=package.rate_package_id
+                  AND history.deployment_slot=slots.deployment_slot
+                  AND history.effective_to_ts IS NOT NULL
+            ) THEN 'FORMER_CHAMPION'
+            ELSE 'CHALLENGER' END AS role,
+       recipe.recipe_revision AS definition_revision,
+       CASE observation.variant_code
+           WHEN 'FROZEN_REFIT' THEN 'Coefficients only'
+           WHEN 'REESTIMATE_LAMBDA' THEN 'Coefficients and smoothing'
+           WHEN 'FULL_ADAPTIVE' THEN 'Full refit'
+           ELSE CASE run.model_kind WHEN 'RAW' THEN 'Analyst fit'
+                                   WHEN 'ROUTINE_EDIT' THEN 'Grouped fit'
+                                   ELSE 'Manual adjustment' END
+       END AS refit_type,
+       manifest.data_as_of_date, package.created_ts AS published_at,
+       package.package_version, package.rate_package_id, run.model_run_id,
+       run.model_version AS fit_version, package.package_status, run.model_kind,
+       model.model_id, model.target_name, model.model_type,
+       run.recipe_status, recipe.recipe_sha256, run.manifest_id,
+       observation.variant_code AS monitoring_variant, observation.monitor_run_id,
+       contract.baseline_model_run_id,
+       observation.rate_package_id AS baseline_rate_package_id,
+       observation.baseline_deployment_id,
+       baseline_manifest.data_as_of_date AS baseline_data_as_of_date,
+       current_deployment.deployment_id AS current_deployment_id,
+       current_deployment.rate_package_id AS current_rate_package_id,
+       CASE WHEN current_deployment.rate_package_id=package.rate_package_id THEN 1 ELSE 0 END AS is_current_champion,
+       run.created_by
+FROM MODEL_RUN AS run
+JOIN PRICING_MODEL AS model ON model.model_id=run.model_id
+JOIN PRICING_RATE_PACKAGE AS package
+  ON package.rate_package_id=run.rate_package_id AND package.model_id=run.model_id
+JOIN DATASET_MANIFEST AS manifest ON manifest.manifest_id=run.manifest_id
+LEFT JOIN MODEL_RECIPE AS recipe
+  ON recipe.recipe_id=run.recipe_id AND recipe.model_id=run.model_id
+LEFT JOIN MODEL_MONITOR_PUBLICATION AS publication ON publication.model_run_id=run.model_run_id
+LEFT JOIN MODEL_MONITOR_RUN AS observation ON observation.monitor_run_id=publication.monitor_run_id
+LEFT JOIN MODEL_FIT_CONTRACT AS contract ON contract.fit_contract_id=observation.fit_contract_id
+LEFT JOIN MODEL_RUN AS baseline ON baseline.model_run_id=contract.baseline_model_run_id
+LEFT JOIN DATASET_MANIFEST AS baseline_manifest ON baseline_manifest.manifest_id=baseline.manifest_id
+LEFT JOIN PRICING_MODEL_DEPLOYMENT AS origin_deployment
+  ON origin_deployment.deployment_id=observation.baseline_deployment_id
+LEFT JOIN model_slots AS slots ON slots.model_id=model.model_id
+  AND (publication.monitor_run_id IS NULL OR slots.deployment_slot=origin_deployment.deployment_slot)
+LEFT JOIN PRICING_MODEL_DEPLOYMENT AS current_deployment
+  ON current_deployment.model_id=model.model_id
+ AND current_deployment.deployment_slot=slots.deployment_slot
+ AND current_deployment.effective_to_ts IS NULL
+WHERE run.run_status='SUCCESS' AND package.package_status IN ('PUBLISHED','LOCAL_AUDIT')
+  AND (publication.monitor_run_id IS NULL OR (
+      observation.run_status='SUCCESS' AND observation.invariant_status='VERIFIED'
+      AND observation.evidence_sealed=1));

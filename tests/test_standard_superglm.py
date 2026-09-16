@@ -1425,8 +1425,8 @@ def test_model_source_hash_tracks_notebook_source_but_ignores_execution_output(t
     exploration_only_change = hash_model_source(tmp_path)
 
     for operational_name in (
-        "04_model_editor.ipynb",
-        "05_manual_adjustment.ipynb",
+        "04_optional_model_editor.ipynb",
+        "05_optional_manual_adjustment.ipynb",
         "06_model_deployment.ipynb",
     ):
         (tmp_path / operational_name).write_text(
