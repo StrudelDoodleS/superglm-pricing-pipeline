@@ -251,9 +251,18 @@ def test_monitoring_notebook_reloads_the_shared_module_and_displays_each_report(
         "import pandas as pd\n"
         "MODEL_DIR = Path(__file__).resolve().parent\n"
         "def run():\n"
-        "    return SimpleNamespace(manifest_id=MANIFEST, **{\n"
+        "    runs = pd.DataFrame({\n"
+        "        'variant': ['STATIC_SCORE', 'FULL_ADAPTIVE'],\n"
+        "        'role': ['CHAMPION', 'CHALLENGER'],\n"
+        "        'definition_revision': [1, 1],\n"
+        "        'package_version': pd.Series([None, 4], dtype=object),\n"
+        "        'baseline_package_version': [1, 1],\n"
+        "        'publication_reused': [None, False],\n"
+        "        'fit_version': [None, 'v5'],\n"
+        "    })\n"
+        "    return SimpleNamespace(manifest_id=MANIFEST, runs=runs, **{\n"
         "        field: pd.DataFrame({'field': [field], 'manifest': [MANIFEST]})\n"
-        "        for field in ('runs', 'metrics', 'issues', 'drift')})\n"
+        "        for field in ('metrics', 'issues', 'drift')})\n"
     )
     script.write_text(report_module + 'MANIFEST = "first"\n', encoding="utf-8")
     monkeypatch.chdir(package)
@@ -285,8 +294,14 @@ def test_monitoring_notebook_reloads_the_shared_module_and_displays_each_report(
             sys.modules.pop(name, None)
 
     tables = [value for value in displayed if isinstance(value, pd.DataFrame)]
-    assert [value.iloc[0]["field"] for value in tables] == ["runs", "metrics", "issues", "drift"]
-    assert all(value.iloc[0]["manifest"] == "second updated run" for value in tables)
+    assert tables[0]["Package"].tolist() == [1, 4]
+    assert tables[0]["Compared with package"].tolist() == [1, 1]
+    assert tables[0]["Model version"].tolist() == [1, 1]
+    assert "fit_version" not in tables[0]
+    assert namespace["report"].runs.loc[0, "package_version"] is None
+    assert namespace["report"].runs.loc[1, "fit_version"] == "v5"
+    assert [value.iloc[0]["field"] for value in tables[1:]] == ["metrics", "issues", "drift"]
+    assert all(value.iloc[0]["manifest"] == "second updated run" for value in tables[1:])
     output = capsys.readouterr().out
     assert str(script) in output
     assert sys.executable in output

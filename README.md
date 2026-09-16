@@ -1,7 +1,6 @@
 # SuperGLM pricing pipeline
 
-This package provides a notebook-first path from model data to a reviewed,
-immutable SQL rating package.
+This package provides a notebook-first path from model data to a reviewed, immutable SQL rating package.
 
 ## Start a model repository
 
@@ -17,27 +16,32 @@ uv add --dev ipykernel
 ```
 
 Use your Git host, team, and repository in the dependency URL.
-The plain-Python fallback, which only works after installation, is:
-
-```bash
-python -m pricing_pipeline init
-# edit pricing_scaffold.toml
-python -m pricing_pipeline scaffold \
-  --model-name CLAIM_FREQUENCY \
-  --target-name claim_count
-```
+The plain-Python fallback only works after installation: `python -m pricing_pipeline init`
+and `python -m pricing_pipeline scaffold` accept the same options.
 
 `init` and a local scaffold do not require uv. The model repository owns `ipykernel`;
 a private runtime package owns SQL driver and authentication dependencies.
 
-The installed command is `pricing-pipeline`, with a hyphen. It exposes
-`init` and `scaffold`. Commands below that use `python scripts/...` require
-a checkout of this package repository; installing the dependency does not add
-those scripts to your model project.
+The installed command is `pricing-pipeline`, with a hyphen. It exposes `init`, `scaffold` and `demo`.
+Commands using `python scripts/...` require a checkout of this package repository;
+installing the dependency does not add those scripts to your model project.
 
 `runtime_module` is the installed private Python module that exposes
 `get_engine(database=None)`. The TOML contains no credentials: keep them in
 that module's secret provider.
+
+To try the filled burn-cost example, install this library with its `demo` extra
+and run:
+
+```bash
+pricing-pipeline demo --root pricing-demo
+```
+
+This creates eight notebooks and prints setup commands for a dedicated local SQL
+Server database. Start Docker with Linux containers and Compose, then follow the
+generated README. Existing directories are never overwritten. The `demo` extra
+provides the SQL driver and notebook tools. From a source checkout, use
+`uv run --extra demo pricing-pipeline demo --root pricing-demo`.
 
 The scaffold creates seven notebooks under `pricing_models/claim_frequency/`:
 
@@ -51,10 +55,9 @@ The scaffold creates seven notebooks under `pricing_models/claim_frequency/`:
 | `06_model_deployment.ipynb` | Review SQL evidence and explicitly promote a champion. |
 | `07_optional_test_weekly_run.ipynb` | Optionally test `monitoring.py`; scheduled runs execute the Python file directly. |
 
-`pricing_scaffold.toml` supplies connection names and safe notebook defaults.
-An explicit `--config` wins, and explicit command-line options win over the
-file. `ALLOW_REMOTE_WRITES` is deliberately not configurable; generated
-notebooks set it to `False`.
+`pricing_scaffold.toml` supplies connection names and notebook defaults. Explicit
+command-line options override the file. Generated notebooks always start with
+`ALLOW_REMOTE_WRITES = False`.
 
 `init` seeds **Pricing builder** and **Pricing developer** under `.github/agents/`.
 Rerunning it adds missing agents and preserves config and agent edits. For package
@@ -81,13 +84,10 @@ The source checkout wrapper `scripts/scaffold_pricing_model.py` invokes the same
 - [Script command index](scripts/README.md)
 - [Developer guide: package flows, module owners and argument-to-notebook mapping](docs/MAINTAINERS.md)
 
-To compare already-scored models, run `scripts/build_underwriter_report.py`
-from a source checkout with `docs/notebooks/underwriter_report.example.toml`.
-It creates one offline HTML file and does not write to SQL.
+For an offline HTML comparison, run `scripts/build_underwriter_report.py` with
+`docs/notebooks/underwriter_report.example.toml` from a source checkout.
 
-The packaged `pricing_pipeline.resources.migrations` chain is the authoritative
-SQL Server schema; inspect it with `pricing_pipeline.resources.migration_root()`
-and do not copy runnable DDL.
+The authoritative SQL Server schema is the packaged `pricing_pipeline.resources.migrations` chain.
 
 ## Database administration
 
@@ -114,11 +114,11 @@ uv run --locked --all-extras python -m pytest -p no:cacheprovider -q
 uv build --force-pep517 --sdist --wheel --out-dir dist
 ```
 
-Apply migrations through V052 before publishing with this version.
+Apply migrations through V052 before publishing. Schedule `monitoring.py` with
+the project interpreter: see [weekly runs and champion promotion](docs/notebooks/weekly_monitoring.md)
+and [SQL baseline upgrades](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).
 
-Schedule the generated `monitoring.py` with the project interpreter.
-See [weekly runs and champion promotion](docs/notebooks/weekly_monitoring.md) and [SQL baseline upgrades](docs/notebooks/README.md#sql-baselines-and-existing-notebooks).
-
-Package updates preserve your completed 01 and 02 notebooks and recipe TOMLs.
-New publications capture the SQL baseline automatically. Do not regenerate an
-existing project with `scaffold --force`; that option overwrites its files.
+Package updates preserve completed notebooks and recipe TOMLs. New publications
+capture the SQL baseline automatically. Avoid `scaffold --force`: it overwrites existing files.
+See [model versions and package numbers](docs/notebooks/weekly_monitoring.md#model-versions-and-package-numbers)
+for notebook and SQL identifiers.

@@ -523,14 +523,27 @@ names. Saving a version does not deploy it; local saves remain `LOCAL_AUDIT`.
 
 ### SQL baselines and existing notebooks
 
-Updating the package does not regenerate existing notebooks. Completed 01 and 02
+Updating the package does not regenerate existing notebooks. Completed 01, 02 and 03
 notebooks, including feature transforms, groupings, specials and saved recipe
 TOMLs, remain usable. Keep their source in version control or make a backup.
 Rerun your existing scaffold command without `--force` to add notebook 07 and
 `monitoring.py`. Existing notebooks stay intact. See the [weekly workflow](weekly_monitoring.md)
 for the small change that gives an existing 06 notebook SQL-only review.
 
-After the database administrator applies migrations through V052, the existing
+Apply missing migrations through V052 from the package repository using the
+[schema administration command](../../README.md#database-administration).
+An existing database does not need to be dropped and reseeded for this upgrade.
+The schema command changes SQL; it does not write project notebooks.
+
+To compare updated templates, scaffold into a separate directory with `--root`
+and the same model name, target, package name and deployment slot. Supply your
+existing scaffold TOML with `--config` if you use one. Copy only the cells you
+want into your existing notebooks, preserving connection settings and model code.
+Ordinary scaffolding preserves existing 06 and 07 files too, so it will not update
+their review displays in place. The new Model version and Package labels are display
+changes; existing Python argument names and SQL columns remain supported.
+
+After the administrator applies those migrations, the existing
 `save_model_version` call also captures monitoring state in SQL. The snapshot
 contains explicit configuration, fitted geometry and smoothing settings, exact
 predictions as polynomial/lookup parameters, and aggregate categorical counts.

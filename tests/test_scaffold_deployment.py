@@ -64,11 +64,31 @@ class _SqlReview:
 def test_deployment_records_a_reason_after_sql_review_then_promotes(tmp_path):
     code = _deployment_code_cells(tmp_path)
     settings = code[0]
+    selection_cell = next(cell for cell in code if "PACKAGE_VERSION = None" in cell)
     reason_cell = next(cell for cell in code if 'DEPLOYMENT_REASON = ""' in cell)
     review_cell = next(cell for cell in code if "reviewed =" in cell and "package_version=" in cell)
     promote_cell = next(cell for cell in code if "deployment = deploy_model_version(" in cell)
-    summary = pd.DataFrame({"package_version": [4], "current_rate_package_id": [11]})
-    metrics = pd.DataFrame({"metric_name": ["deviance"], "metric_value": [0.8]})
+    summary = pd.DataFrame(
+        {
+            "package_version": [4],
+            "role": ["CHALLENGER"],
+            "definition_revision": [1],
+            "refit_type": ["Full refit"],
+            "data_as_of_date": ["2026-09-15"],
+            "current_package_version": [1],
+        }
+    )
+    metrics = pd.DataFrame(
+        {
+            "comparison": ["Selected challenger"],
+            "package_version": [4],
+            "is_current_champion": [False],
+            "data_as_of_date": ["2026-09-15"],
+            "metric_name": ["deviance"],
+            "metric_value": [0.8],
+            "metric_scope": ["monitoring_snapshot"],
+        }
+    )
     reviewed = _SqlReview(package_version=4, summary=summary, metrics=metrics)
     pricing = SimpleNamespace(engine=create_engine("sqlite://"))
     model = object()
@@ -98,10 +118,11 @@ def test_deployment_records_a_reason_after_sql_review_then_promotes(tmp_path):
         "display": displayed.append,
     }
     try:
-        exec(  # noqa: S102 - apply the analyst's package choice in the real settings cell
+        exec(compile(settings, "06:settings", "exec"), namespace)  # noqa: S102
+        exec(  # noqa: S102 - choose from the packages displayed above the selection cell
             compile(
-                settings.replace("PACKAGE_VERSION = None", "PACKAGE_VERSION = 4"),
-                "06:settings",
+                selection_cell.replace("PACKAGE_VERSION = None", "PACKAGE_VERSION = 4"),
+                "06:selection",
                 "exec",
             ),
             namespace,
@@ -109,8 +130,33 @@ def test_deployment_records_a_reason_after_sql_review_then_promotes(tmp_path):
         exec(compile(review_cell, "06:review", "exec"), namespace)  # noqa: S102
         assert namespace["reviewed"] is reviewed
         assert len(displayed) == 2
-        pd.testing.assert_frame_equal(displayed[0], summary)
-        pd.testing.assert_frame_equal(displayed[1], metrics)
+        pd.testing.assert_frame_equal(
+            displayed[0],
+            summary.rename(
+                columns={
+                    "package_version": "Package",
+                    "role": "Role",
+                    "definition_revision": "Model version",
+                    "refit_type": "Fit",
+                    "data_as_of_date": "Data as of",
+                    "current_package_version": "Current champion package",
+                }
+            ),
+        )
+        pd.testing.assert_frame_equal(
+            displayed[1],
+            metrics.rename(
+                columns={
+                    "comparison": "Comparison",
+                    "package_version": "Package",
+                    "is_current_champion": "Current champion?",
+                    "data_as_of_date": "Data as of",
+                    "metric_name": "Metric",
+                    "metric_value": "Value",
+                    "metric_scope": "Scope",
+                }
+            ),
+        )
         assert promoted == []
 
         exec(  # noqa: S102 - apply a decision after review without rerunning model settings
@@ -134,9 +180,11 @@ def test_deployment_records_a_reason_after_sql_review_then_promotes(tmp_path):
     assert promoted == [(reviewed, "Approved after comparison with the current champion")]
     assert namespace["deployment"] == {"rate_package_id": 14}
 
-    exec(  # noqa: S102 - changing package settings must invalidate the previous review
+    exec(  # noqa: S102 - changing the selection must invalidate the previous review
         compile(
-            settings.replace("PACKAGE_VERSION = None", "PACKAGE_VERSION = 9"), "06:settings", "exec"
+            selection_cell.replace("PACKAGE_VERSION = None", "PACKAGE_VERSION = 9"),
+            "06:selection",
+            "exec",
         ),
         namespace,
     )

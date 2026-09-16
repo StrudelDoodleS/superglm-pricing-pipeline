@@ -20,11 +20,41 @@ deployment stays in place until you explicitly promote a package in notebook 06.
 Explicit knots and boundaries remain fixed. All four preserve the feature
 definitions, groupings and special levels of the baseline.
 
+## Model versions and package numbers
+
+Use these two numbers when reviewing a model:
+
+| Notebook label | What it identifies | SQL/API field |
+|---|---|---|
+| Model version | Declared model configuration, including features, groupings, special levels and fit settings. Weekly refits retain it. | `recipe_revision`, also exposed as `definition_revision` |
+| Package | One saved rating result to inspect or promote. Multiple packages can share a definition. | `package_version` |
+
+For example, model version 1 can have package 1 as champion and packages 2, 3 and 4
+as weekly challengers. Promoting package 4 makes it champion, still under
+model version 1. Saving a changed feature set creates a new model version, or
+reuses the number of an identical definition saved earlier. Exact publication retries
+can reuse an existing package. Both numbers belong to the registered model;
+include its name when comparing different models.
+
+`Role` is the deployment status, not another version. `Current champion package`,
+`Compared with package` and `Parent package` refer to packages from that same
+numbering system. The comparison package can be a former champion by review time.
+
+The older `model_version`, exposed as `fit_version` in registry and monitoring
+results, is an internal fit counter such as `v5`. It can have gaps after failed
+attempts and does not identify a model definition. The notebook tables omit it.
+It remains available in the full API results and SQL for existing consumers.
+
+Other versions describe different things: a manual adjustment's policy version,
+the recipe or snapshot format, database migrations, and installed Python libraries.
+They do not select a champion. The optional adjustment notebook labels its policy
+version explicitly; the normal review tables show Model version and Package.
+
 ## Configure once
 
 After installing the package update, rerun your original `pricing-pipeline
 scaffold` command without `--force`. It adds missing notebooks and monitoring.py and preserves
-your existing files, including completed 01/02 notebooks. Existing 04, 05 and 07
+your existing files, including completed 01, 02 and 03 notebooks. Existing 04, 05 and 07
 notebooks keep their previous filenames; the scaffold does not add duplicate copies. For example:
 
 ```bash
@@ -55,6 +85,21 @@ Automatic challenger publication supports the notebook's exported offset factor
 and models without an offset. The legacy `ALREADY_APPLIED_SQL_EXPOSURE` contract
 is checked before fitting and stops this workflow with an explanation. Its
 observation-only monitoring calls remain available.
+
+## A changed feature set stays a challenger
+
+01 reads the new source column. In 02, configure that feature and save the recipe.
+03 fits and publishes it as a challenger with the corresponding model version.
+It stays a challenger until someone explicitly promotes it in 06.
+
+07 and `monitoring.py` currently load the champion in their configured deployment
+slot. Running 07 after publishing a new recipe does not test that challenger;
+it continues to use the existing champion. There is not yet a notebook option
+for testing the four variants against a selected, undeployed package.
+
+Add a new feature to both 01's source query and the recurring loader when you
+prepare the model for monitoring. The recurring runner reads fresh data
+independently of 01's saved dataset.
 
 ## Test the file before scheduling
 
@@ -145,11 +190,19 @@ No task is registered with the operating system by scaffolding or running 07.
 The champion is the package in the current deployment slot. There is one champion
 per model and slot. A challenger becomes champion only through explicit deployment.
 
-Notebook 06 lists saved fits by role and definition revision. Set
-`PACKAGE_VERSION` to the package you want to review. It identifies a saved result,
-not a new model definition. Its SQL-only review shows
-the selected version, dated dataset, fit metrics and current champion. The next
-cell promotes that reviewed version with your deployment reason.
+Notebook 06 lists published packages in one table with their Model version, Role,
+fit type and dates. Set `PACKAGE_VERSION` from the Package column after reading
+the list. Its SQL-only review shows the selected package, dated dataset, fit
+metrics and current champion. The promotion cell uses that reviewed package and
+your deployment reason.
+
+Each metric row shows its package number and `Current champion?` status for
+the selected slot at review time. For a weekly challenger, "Champion used for
+this comparison" identifies the champion it was built against. That package
+may have been replaced since then; its recorded scores remain attached to it.
+The summary shows the current champion's package number separately. The full
+`reviewed.summary` and `reviewed.metrics` results retain their SQL field names,
+including `is_current_champion`.
 
 The equivalent Python calls are:
 

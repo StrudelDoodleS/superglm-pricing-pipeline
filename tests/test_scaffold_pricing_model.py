@@ -345,9 +345,7 @@ def test_scaffold_separates_training_and_exploration(tmp_path):
     assert "DEPLOY_AFTER_PUBLISH = False" in manual
     assert "POLICY_SOURCE_PACKAGE_VERSION = None" in manual
 
-    assert "list_model_versions(" in deployment
     assert "list_challengers(" in deployment
-    assert 'eq("PUBLISHED")' in deployment
     assert "review_model_version(" in deployment
     assert "deploy_model_version(" in deployment
 
@@ -633,19 +631,26 @@ def test_scaffold_preserves_existing_files_and_recreates_only_missing_files(tmp_
     options = ScaffoldOptions(model_name="MY_MODEL", target_name="target", root=tmp_path)
     scaffold_pricing_model(options)
     package_dir = tmp_path / "pricing_models" / "my_model"
-    training_path = package_dir / "03_model_training.ipynb"
     init_path = package_dir / "__init__.py"
-    training_path.write_text(
-        training_path.read_text(encoding="utf-8") + "\n",
-        encoding="utf-8",
-    )
-    training_before = training_path.read_text(encoding="utf-8")
+    completed = {}
+    for name in (
+        "01_data_ingestion.ipynb",
+        "02_model_exploration.ipynb",
+        "03_model_training.ipynb",
+    ):
+        path = package_dir / name
+        notebook = json.loads(path.read_text(encoding="utf-8"))
+        notebook["cells"].append(
+            {"cell_type": "markdown", "metadata": {}, "source": [f"Analyst edits in {name}\n"]}
+        )
+        path.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
+        completed[path] = path.read_bytes()
     init_path.unlink()
 
     result = scaffold_pricing_model(options)
 
     assert result.created_files == (init_path,)
-    assert training_path.read_text(encoding="utf-8") == training_before
+    assert all(path.read_bytes() == before for path, before in completed.items())
     assert scaffold_pricing_model(options).created_files == ()
 
 

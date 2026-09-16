@@ -55,6 +55,7 @@ Useful starting points under `src/pricing_pipeline/`:
 | Notebook cells or default code | `resources/scaffold/notebooks/*.ipynb`; weekly file in `resources/scaffold/monitoring.py.template` |
 | Values inserted into notebook cells | `scaffold/config.py`, `scaffold/render.py`, `scaffold/service.py` |
 | CLI flags or init files | `cli.py`, `scaffold/commands.py` |
+| Filled SQL Server demo | `demo.py`, `resources/demo/`; generation tests in `tests/cli/test_demo.py`, setup tests in `tests/cli/test_demo_setup.py` |
 | Analyst operations or model choices | `notebook.py`, `models/pricing.py` |
 | Reusable model configuration | `modeling/recipes/`; SQL revision allocation and inheritance in `publishing/recipes.py`; gzip storage and the decoded `recipe_json` column in `resources/migrations/V052__compressed_model_recipes.sql` |
 | Champion and challenger registry | `workbench/champion.py`; `resources/migrations/V051__model_registry.sql` and the SQLite view mirror |
@@ -80,6 +81,19 @@ Weekly monitoring loads explicit baseline state from SQL. The generated
 adds logs and exit codes. It saves one champion score and three exact fitted
 challengers. Notebook 06 uses `workbench/champion.py` for SQL-only review and
 explicit promotion. See `docs/notebooks/weekly_monitoring.md`.
+Each run selects the current champion in its configured slot. Promotion does
+not require changing the schedule or copying the new recipe into the runner.
+The runner does not yet test a selected undeployed challenger.
+
+Notebook displays use Model version for `definition_revision` and Package for
+`package_version`. Preserve API and SQL field names. Review metrics identify
+the selected package, the champion used for comparison and the current champion;
+these can be different packages.
+
+The demo command copies eight filled notebooks into a new directory and prints
+setup commands for the same interpreter. Generation must not start Docker or
+write SQL. Its explicit setup script owns only the dedicated demo database.
+Keep demo assets in the wheel/sdist inventory and preserve blank deployment choices.
 
 Weekly challengers inherit the baseline's verified SQL recipe. Do not recapture
 that definition from the refitted estimator, whose temporary frozen knots,

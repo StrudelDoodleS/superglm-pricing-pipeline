@@ -77,6 +77,7 @@ def test_dependency_contract_is_exact():
         "azure": ["azure-identity", "pyodbc"],
         "report": ["plotly>=6.9", "scipy"],
         "notebook": ["ipykernel"],
+        "demo": ["ipykernel", "pymssql>=2.3.13", "jupyterlab>=4.4,<5"],
         "scratch": ["catboost", "lightgbm", "matplotlib", "scipy", "xgboost"],
         "mlflow": ["mlflow"],
     }

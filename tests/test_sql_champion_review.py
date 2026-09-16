@@ -127,6 +127,8 @@ def test_review_is_sql_only_with_no_files_or_fitting_and_does_not_deploy(
     assert reviewed.current_deployment_id is None
     assert not reviewed.summary.empty
     assert reviewed.metrics.metric_value.tolist() == [8.0]
+    assert reviewed.metrics.package_version.tolist() == [2]
+    assert reviewed.metrics.is_current_champion.tolist() == [False]
     assert not any(
         statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
         for statement in statements
@@ -163,6 +165,12 @@ def test_review_captures_champion_identity_and_date_for_configured_slot(sql_revi
     assert str(reviewed.current_data_as_of_date) == "2026-08-31"
     assert set(reviewed.metrics.role) == {"selected", "current_champion"}
     assert set(reviewed.metrics.metric_scope) == {"full_fit"}
+    metrics = reviewed.metrics.set_index("role")
+    assert metrics.package_version.to_dict() == {"selected": 2, "current_champion": 1}
+    assert metrics.is_current_champion.to_dict() == {
+        "selected": False,
+        "current_champion": True,
+    }
 
 
 def test_listing_returns_sql_challengers_and_marks_current_champion(sql_review_case):
@@ -331,6 +339,17 @@ def test_monitoring_review_compares_static_and_refit_on_the_same_dataset(sql_rev
         "baseline_at_fit": 12.0,
     }
     assert set(metrics.metric_scope) == {"monitoring_snapshot"}
+    comparison = metrics.set_index("role")
+    assert comparison.package_version.to_dict() == {"selected": 2, "baseline_at_fit": 1}
+    assert comparison.rate_package_id.to_dict() == {"selected": 102, "baseline_at_fit": 101}
+    assert comparison.is_current_champion.to_dict() == {
+        "selected": False,
+        "baseline_at_fit": True,
+    }
+    assert comparison.comparison.to_dict() == {
+        "selected": "Selected challenger",
+        "baseline_at_fit": "Champion used for this comparison",
+    }
 
 
 def test_monitoring_baseline_metrics_do_not_claim_to_score_a_new_champion(sql_review_case):
@@ -345,6 +364,35 @@ def test_monitoring_baseline_metrics_do_not_claim_to_score_a_new_champion(sql_re
     assert reviewed.current_rate_package_id == 102
     assert "current_champion" not in set(reviewed.metrics.role)
     assert str(reviewed.metrics.set_index("role").loc["baseline_at_fit", "model_run_id"]) == "1"
+    comparison = reviewed.metrics.set_index("role")
+    assert comparison.package_version.to_dict() == {"selected": 2, "baseline_at_fit": 1}
+    assert comparison.is_current_champion.to_dict() == {
+        "selected": True,
+        "baseline_at_fit": False,
+    }
+    assert comparison.loc["selected", "comparison"] == "Selected champion"
+
+
+@pytest.mark.parametrize("redeploy_baseline", [False, True])
+def test_comparison_champion_status_tracks_the_package_not_its_old_deployment(
+    sql_review_case, redeploy_baseline
+):
+    engine, config = sql_review_case
+    _monitoring_publication(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE pricing.PRICING_MODEL_DEPLOYMENT SET effective_to_ts='2099-01-01'")
+        )
+    if redeploy_baseline:
+        _deploy_fixture(engine, package=101)
+
+    comparison = _review(engine, config).metrics.set_index("role")
+
+    assert comparison.package_version.to_dict() == {"selected": 2, "baseline_at_fit": 1}
+    assert comparison.is_current_champion.to_dict() == {
+        "selected": False,
+        "baseline_at_fit": redeploy_baseline,
+    }
 
 
 def test_monitoring_challenger_is_bound_to_its_origin_deployment_slot(sql_review_case):

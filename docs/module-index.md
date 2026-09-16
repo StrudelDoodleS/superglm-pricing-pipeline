@@ -14,7 +14,8 @@ they are not a list of additional public APIs.
 |---|---|
 | [__init__.py](../src/pricing_pipeline/__init__.py) | Fit pricing models, save their evidence and rating tables, and deploy to SQL. |
 | [__main__.py](../src/pricing_pipeline/__main__.py) | Run the installed CLI through `python -m pricing_pipeline`. |
-| [cli.py](../src/pricing_pipeline/cli.py) | Parse `pricing-pipeline init` and `scaffold` commands. |
+| [cli.py](../src/pricing_pipeline/cli.py) | Parse `pricing-pipeline init`, `scaffold` and `demo` commands. |
+| [demo.py](../src/pricing_pipeline/demo.py) | Copy the filled notebooks and local SQL Server setup from installed demo resources. |
 | [notebook.py](../src/pricing_pipeline/notebook.py) | Public Python entry points for the pricing-model workflow. |
 
 ## Data and validation

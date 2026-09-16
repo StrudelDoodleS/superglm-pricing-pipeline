@@ -108,6 +108,7 @@ OPTIONAL_REQUIREMENTS = {
     "azure": ("azure-identity", "pyodbc"),
     "report": ("plotly>=6.9", "scipy"),
     "notebook": ("ipykernel",),
+    "demo": ("ipykernel", "pymssql>=2.3.13", "jupyterlab>=4.4,<5"),
     "scratch": ("catboost", "lightgbm", "matplotlib", "scipy", "xgboost"),
     "mlflow": ("mlflow",),
 }
@@ -123,6 +124,24 @@ SCAFFOLD_NOTEBOOK_FILES = (
     "05_optional_manual_adjustment.ipynb",
     "06_model_deployment.ipynb",
     "07_optional_test_weekly_run.ipynb",
+)
+DEMO_FILES = (
+    ".gitignore",
+    "README.md",
+    "compose.yaml",
+    "demo_data.py",
+    "demo_sql_runtime.py",
+    "export_sql.py",
+    "pricing_scaffold.toml",
+    "pyproject.toml",
+    "setup_demo.py",
+    "pricing_models/burn_cost_demo/__init__.py",
+    "pricing_models/burn_cost_demo/monitoring.py",
+    "pricing_models/burn_cost_demo/sql/README.md",
+    *(
+        f"pricing_models/burn_cost_demo/{name}"
+        for name in (*SCAFFOLD_NOTEBOOK_FILES, "08_inspect_sql.ipynb")
+    ),
 )
 SCAFFOLD_TEMPLATE = b"""# Connection names only. Keep credentials in the private runtime module or its secret provider.
 
@@ -248,6 +267,7 @@ def _expected_resource_names() -> set[str]:
         *{f"{SCAFFOLD_PREFIX}notebooks/{name}" for name in SCAFFOLD_NOTEBOOK_FILES},
         *{f"{OFFLINE_SQLITE_PREFIX}{name}" for name in OFFLINE_SQLITE_FILES},
         *{f"{MIGRATIONS_PREFIX}{name}" for name in MIGRATION_FILES},
+        *{f"{RESOURCE_PREFIX}demo/{name}" for name in DEMO_FILES},
     }
 
 

@@ -28,6 +28,9 @@ class ModelVersionReviewError(DeploymentError):
 
 _METRIC_COLUMNS = (
     "role",
+    "package_version",
+    "rate_package_id",
+    "is_current_champion",
     "model_run_id",
     "monitor_run_id",
     "manifest_id",
@@ -112,13 +115,35 @@ class ReviewedModelVersion:
 
     @property
     def metrics(self) -> pd.DataFrame:
-        """Recorded metrics with explicit roles, dataset identities, and scopes.
+        """Recorded metrics with package numbers and champion status at review time.
 
         Monitoring reviews compare the refit with its original baseline scored on
         the same new dataset. That baseline may differ from today's champion.
         Ordinary publication metrics retain their original training/CV scopes.
+        ``comparison`` labels the rows for display; ``role`` retains its stable code.
         """
-        return pd.DataFrame(self._metric_rows, columns=_METRIC_COLUMNS)
+        metrics = pd.DataFrame(self._metric_rows, columns=_METRIC_COLUMNS)
+        metrics.insert(
+            0,
+            "comparison",
+            metrics["role"].map(
+                {
+                    "selected": f"Selected {self.role.lower().replace('_', ' ')}",
+                    "baseline_at_fit": "Champion used for this comparison",
+                    "current_champion": "Current champion",
+                }
+            ),
+        )
+        first = [
+            "comparison",
+            "package_version",
+            "is_current_champion",
+            "data_as_of_date",
+            "metric_name",
+            "metric_value",
+            "metric_scope",
+        ]
+        return metrics.loc[:, first + [name for name in metrics.columns if name not in first]]
 
 
 def _positive_integer(value: Any, name: str) -> int:
@@ -304,6 +329,8 @@ def _review_metrics(connection, engine, row):
                 text(f"""
             SELECT observation.monitor_run_id, observation.manifest_id,
                    manifest.data_as_of_date, contract.baseline_model_run_id,
+                   baseline_package.package_version AS baseline_package_version,
+                   baseline_package.rate_package_id AS baseline_rate_package_id,
                    metric.metric_name, metric.metric_value
             FROM {monitor}.MODEL_MONITOR_RUN AS selected
             JOIN {monitor}.MODEL_MONITOR_RUN AS observation
@@ -317,6 +344,9 @@ def _review_metrics(connection, engine, row):
               ON metric.monitor_run_id=observation.monitor_run_id
             JOIN {monitor}.MODEL_FIT_CONTRACT AS contract
               ON contract.fit_contract_id=observation.fit_contract_id
+            JOIN {schemas.pricing}.PRICING_RATE_PACKAGE AS baseline_package
+              ON baseline_package.rate_package_id=observation.rate_package_id
+             AND baseline_package.model_id=observation.model_id
             JOIN {schemas.pricing}.DATASET_MANIFEST AS manifest
               ON manifest.manifest_id=observation.manifest_id
             WHERE selected.monitor_run_id=:monitor_run_id
@@ -329,23 +359,29 @@ def _review_metrics(connection, engine, row):
             .mappings()
             .all()
         )
-        return [
-            (
-                "selected"
-                if item["monitor_run_id"] == row["monitor_run_id"]
-                else "baseline_at_fit",
-                row["model_run_id"]
-                if item["monitor_run_id"] == row["monitor_run_id"]
-                else item["baseline_model_run_id"],
-                item["monitor_run_id"],
-                item["manifest_id"],
-                item["data_as_of_date"],
-                item["metric_name"],
-                item["metric_value"],
-                "monitoring_snapshot",
+        metrics = []
+        for item in values:
+            selected = item["monitor_run_id"] == row["monitor_run_id"]
+            package_version = (
+                row["package_version"] if selected else item["baseline_package_version"]
             )
-            for item in values
-        ]
+            package_id = row["rate_package_id"] if selected else item["baseline_rate_package_id"]
+            metrics.append(
+                (
+                    "selected" if selected else "baseline_at_fit",
+                    package_version,
+                    package_id,
+                    package_id == row["current_rate_package_id"],
+                    row["model_run_id"] if selected else item["baseline_model_run_id"],
+                    item["monitor_run_id"],
+                    item["manifest_id"],
+                    item["data_as_of_date"],
+                    item["metric_name"],
+                    item["metric_value"],
+                    "monitoring_snapshot",
+                )
+            )
+        return metrics
     metrics = []
     for role, prefix in (("selected", ""), ("current_champion", "current_")):
         run_id = row[f"{prefix}model_run_id"]
@@ -366,6 +402,9 @@ def _review_metrics(connection, engine, row):
         metrics.extend(
             (
                 role,
+                row[f"{prefix}package_version"],
+                row[f"{prefix}rate_package_id"],
+                row[f"{prefix}rate_package_id"] == row["current_rate_package_id"],
                 run_id,
                 None,
                 row[f"{prefix}manifest_id"],

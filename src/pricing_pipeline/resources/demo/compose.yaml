@@ -1,0 +1,15 @@
+name: pricing-demo-__PROJECT_ID__
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Run setup_demo.py first}
+      MSSQL_MEMORY_LIMIT_MB: "2048"
+    ports:
+      - "127.0.0.1:${DEMO_SQL_PORT:-14339}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+volumes:
+  sqlserver-data:
